@@ -7,3 +7,5 @@ alias t="cargo test"
 
 # f for full
 alias f="cargo build --release && my_todo"
+
+alias g="git add -A && git commit -m '.' && git push"
