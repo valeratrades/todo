@@ -6,15 +6,18 @@ use std::io::{Read, Write};
 use std::process::Command;
 
 mod _static {
-	pub static CATEGORIES: [&str; 9] = [
+	pub static CATEGORIES: [&str; 12] = [
 		"",
 		"d:data-collection",
 		"h:home-chore",
 		"w:workout",
-		"i:close-git-issue",
+		"ci:close-git-issue",
 		"t:tooling",
 		"l:work-on-library",
 		"s:trading-systems",
+		"pi:implement-python",
+		"ri:implement-rust",
+		"gi:implement-go",
 		"ev:day's-ev-calculation",
 	];
 	pub static HARD_STOP_COEFF: f32 = 1.5;
