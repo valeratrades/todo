@@ -6,7 +6,16 @@ use std::io::{Read, Write};
 use std::process::Command;
 
 mod _static {
-	pub static CATEGORIES: [&str; 7] = ["", "d:data-collection", "h:home-chore", "w:workout", "i:close-git-issue", "t:tooling", "ev:day's-ev-calculation"];
+	pub static CATEGORIES: [&str; 8] = [
+		"",
+		"d:data-collection",
+		"h:home-chore",
+		"w:workout",
+		"i:close-git-issue",
+		"t:tooling",
+		"ev:day's-ev-calculation",
+		"l:work-on-library",
+	];
 	pub static HARD_STOP_COEFF: f32 = 1.5;
 	pub static STATE_PATH: &str = "/home/v/tmp/my_todo/ongoing.json";
 	pub static SAVE_PATH: &str = "/home/v/data/my_todo/results.json";
