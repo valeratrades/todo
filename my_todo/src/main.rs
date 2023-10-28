@@ -18,7 +18,7 @@ mod _static {
 		"pi:implement-python",
 		"ri:implement-rust",
 		"gi:implement-go",
-		"ev:day's-ev-calculation",
+		"c:calculation",
 	];
 	pub static HARD_STOP_COEFF: f32 = 1.5;
 	pub static STATE_PATH: &str = "/home/v/tmp/my_todo/ongoing.json";

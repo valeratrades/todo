@@ -6,16 +6,16 @@ todo() {
 }
 
 tadd() {
-  mkp "${HOME}/Todo/${1}.md"
+  mkfile "${HOME}/Todo/${1}.md"
 }
 
 taddo() {
-  mkp "${HOME}/Todo/${1}.md"
+  mkfile "${HOME}/Todo/${1}.md"
   e "${HOME}/Todo/${1}.md"
 }
 
 tder() {
-  mkp "${HOME}/Todo/${1}/main.md"
+  mkfile "${HOME}/Todo/${1}/main.md"
   e "${HOME}/Todo/${1}/main.md"
 }
 
