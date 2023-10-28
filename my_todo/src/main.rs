@@ -22,7 +22,7 @@ mod _static {
 	];
 	pub static HARD_STOP_COEFF: f32 = 1.5;
 	pub static STATE_PATH: &str = "/home/v/tmp/my_todo/ongoing.json";
-	pub static SAVE_PATH: &str = "/home/v/data/my_todo/results.json";
+	pub static SAVE_PATH: &str = "/home/v/data/personal/todo.json";
 }
 
 #[derive(Debug, Serialize, Deserialize)]

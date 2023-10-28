@@ -1,5 +1,5 @@
 #!/bin/sh
-# Note that we're using some shortcuts from .bashrc. However, no env needs to be imported, as it happens automatically when we are sorced from .bashrc
+# Note that we're using some shortcuts from .bashrc. However, no env needs to be imported, as it happens automatically when we are sorced from .zshrc
 
 todo() {
   e ~/Todo
@@ -31,5 +31,12 @@ tfailed() {
 }
 tkill() {
 	pkill -f my_todo
+}
+tev() {
+	if [ -z "$1" ]; then
+		tstart 15 c daliy-ev-calculation
+	else
+		tdone && ${HOME}/s/todo/daily_ev/target/release/daily_ev $1
+	fi
 }
 #
