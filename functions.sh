@@ -36,7 +36,8 @@ tev() {
 	if [ -z "$1" ]; then
 		tstart 15 c daliy-ev-calculation
 	else
-		tdone && ${HOME}/s/todo/daily_ev/target/release/daily_ev $1
+		tdone
+		${HOME}/s/todo/daily_ev/target/release/daily_ev "$1"
 	fi
 }
 #
