@@ -1,6 +1,3 @@
-#!/bin/sh
-# Note that we're using some shortcuts from .bashrc. However, no env needs to be imported, as it happens automatically when we are sorced from .zshrc
-
 todo() {
   e ~/Todo
 }
@@ -31,6 +28,9 @@ tfailed() {
 }
 tkill() {
 	pkill -f my_todo
+}
+tedit() {
+	e ${HOME}/data/personal/todo.json
 }
 tev() {
 	if [ -z "$1" ]; then
