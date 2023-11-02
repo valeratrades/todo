@@ -1,4 +1,5 @@
 use chrono::prelude::*;
+use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;
@@ -17,7 +18,11 @@ struct Day {
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
 	let ev: i32 = args[1].parse().unwrap();
-	let time = Utc::now().format("%Y/%m/%d").to_string();
+	// let time = Utc::now().format("%Y/%m/%d").to_string();
+	let time: String = match args.get(2).map(String::as_str) {
+		Some("-y") => (Utc::now() - Duration::days(1)).format("%Y/%m/%d").to_string(),
+		_ => Utc::now().format("%Y/%m/%d").to_string(),
+	};
 	let record = Day { time: time.clone(), ev };
 
 	let parent_dir = std::path::Path::new(&_static::SAVE_PATH).parent().unwrap();
