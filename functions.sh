@@ -13,6 +13,7 @@ taddo() {
 
 tder() {
   mkfile "${HOME}/Todo/${1}/main.md"
+	mkfile "${HOME}/Todo/${1}/quickfix.md" # idea is to have this as a place for the my_todo tool to be used upon (Am I hearing 'automate this too?). So in the future will likely automatically schedule the next task from here after the previous is done/failed; but for now just promising to exclude the ones I'm not able to finish immediately || not include them in the first place
   e "${HOME}/Todo/${1}/main.md"
 }
 
