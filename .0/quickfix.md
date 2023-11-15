@@ -1,1 +1,1 @@
-something changed
+- [ ] take pass off Yandex or use nyxt/duck, whatever is fast and doesn't think it's smart like chrome
