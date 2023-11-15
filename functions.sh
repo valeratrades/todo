@@ -4,10 +4,13 @@ TODO_PATH="${HOME}/s/todo/.0"
 local pull() {
 	( git -C "$TODO_PATH" pull > /dev/null 2>&1 & ) & disown
 }
+local push() {
+	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) > /dev/null 2>&1 & disown
+}
 todo() {
 	pull
 	e "$TODO_PATH"
-	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) & disown
+	push
 }
 
 tq() {
