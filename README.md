@@ -1,3 +1,1 @@
-This is NOT an another note-taking app. This is a template of how you could organize notes; trying to follow linux philosophy.
-
-Or... rather how I myself go about it. But seems modular enough to be easily readapted to another person's needs.
+Trying to organize notes with markdown, nvim and nothing else
