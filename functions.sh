@@ -1,4 +1,4 @@
-TODO_PATH="${HOME}/s/todo/_"
+TODO_PATH="${HOME}/s/todo/.0"
 
 todo() {
 	git -C "$TODO_PATH" pull &
