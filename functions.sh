@@ -14,9 +14,9 @@ todo() {
 }
 
 tq() {
-	( git -C "$TODO_PATH" pull > /dev/null 2>&1 & ) & disown
+	pull
 	e "${TODO_PATH}/quickfix.md"
-	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) & disown
+	push
 }
 
 tadd() {
@@ -25,17 +25,17 @@ tadd() {
 
 taddo() {
   mkfile "${TODO_PATH}/${1}.md"
-	( git -C "$TODO_PATH" pull > /dev/null 2>&1 & ) & disown
+	pull
   e "${TODO_PATH}/${1}.md"
-	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) & disown
+	push
 }
 
 tder() {
   mkfile "${TODO_PATH}/${1}/main.md"
 	mkfile "${TODO_PATH}/${1}/quickfix.md" # idea is to have this as a place for the my_todo tool to be used upon (Am I hearing 'automate this too?). So in the future will likely automatically schedule the next task from here after the previous is done/failed; but for now just promising to exclude the ones I'm not able to finish immediately || not include them in the first place
-	( git -C "$TODO_PATH" pull > /dev/null 2>&1 & ) & disown
+	pull
   e "${TODO_PATH}/${1}/main.md"
-	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) & disown
+	push
 }
 
 ## `my_todo` stuff
