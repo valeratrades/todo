@@ -1,20 +1,30 @@
+TODO_PATH="${HOME}/s/todo/_"
+
 todo() {
-  e ~/Todo
+	git -C "$TODO_PATH" pull &
+	${EDITOR} "$TODO_PATH"
+}
+
+tq() {
+	git -C "$TODO_PATH" pull &
+	e "${TODO_PATH}/quickfix.md"
 }
 
 tadd() {
-  mkfile "${HOME}/Todo/${1}.md"
+  mkfile "${TODO_PATH}/${1}.md"
 }
 
 taddo() {
-  mkfile "${HOME}/Todo/${1}.md"
-  e "${HOME}/Todo/${1}.md"
+  mkfile "${TODO_PATH}/${1}.md"
+	git -C "$TODO_PATH" pull &
+  e "${TODO_PATH}/${1}.md"
 }
 
 tder() {
-  mkfile "${HOME}/Todo/${1}/main.md"
-	mkfile "${HOME}/Todo/${1}/quickfix.md" # idea is to have this as a place for the my_todo tool to be used upon (Am I hearing 'automate this too?). So in the future will likely automatically schedule the next task from here after the previous is done/failed; but for now just promising to exclude the ones I'm not able to finish immediately || not include them in the first place
-  e "${HOME}/Todo/${1}/main.md"
+  mkfile "${TODO_PATH}/${1}/main.md"
+	mkfile "${TODO_PATH}/${1}/quickfix.md" # idea is to have this as a place for the my_todo tool to be used upon (Am I hearing 'automate this too?). So in the future will likely automatically schedule the next task from here after the previous is done/failed; but for now just promising to exclude the ones I'm not able to finish immediately || not include them in the first place
+	git -C "$TODO_PATH" pull &
+  e "${TODO_PATH}/${1}/main.md"
 }
 
 ## `my_todo` stuff
