@@ -1,7 +1,11 @@
+# NOT posix
 TODO_PATH="${HOME}/s/todo/.0"
 
-todo() {
+local pull() {
 	( git -C "$TODO_PATH" pull > /dev/null 2>&1 & ) & disown
+}
+todo() {
+	pull
 	e "$TODO_PATH"
 	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) & disown
 }
