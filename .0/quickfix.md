@@ -1,1 +1,2 @@
-
+- [ ] add z2 and so forth, that does 'u' and then same as z1 but for i-th suggestion
+- [ ] plan for today is to make a request then plot it for the data in parquet file. Include as amny generalizations as possible, but at the end of the day be ready to sacrifice everything for getting a working request. If it means hardcoded functions - so be it
