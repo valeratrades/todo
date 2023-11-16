@@ -4,6 +4,29 @@ To make generalized request circle for both klines and trades aggTrades collecti
 ## Providers
 Should somehow add a field for storing endpoint-specific details, like `weight` and `extract_fields`
 
+The following should be a part of the general request-handling framework with provider-specific things:
+```rust
+if let serde_json::Value::Object(map) = &json {
+    if map.contains_key("code") {
+        return Err(anyhow!("{}$Unsuccessful:\n{:#?}", &s, map));
+    }
+}
+let array_res = json.as_array().unwrap().to_vec(); // still cointains `serde_json::Value` objects. And as such, we don't care which exactly
+// This should somehow be joined with:
+Box::new(|current_used: i32, r: &reqwest::Response| -> i32 {
+    let header_value = r.headers().get("x-mbx-used-weight-1m").unwrap();
+    match header_value.to_str() {
+        Ok(used_str) => used_str.parse::<i32>().unwrap_or(current_used),
+        Err(_) => {
+            eprintln!("Error: failed to extract new used from reqwest::Response");
+            current_used
+        }
+    }
+})
+```
+Would it be unreasonable to assume for now that Errors are handled and just provider a specific closure for Query to extract fields from request to aggTrades?
+
+
 ### Centralised average rt
 Let's keep a centralised average `rt` on each Provider, updating every minute.
 
