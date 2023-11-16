@@ -15,6 +15,7 @@ todo() {
 
 tq() {
 	git -C "$TODO_PATH" pull > /dev/null 2>&1
+	sleep 0.1
 	e "${TODO_PATH}/quickfix.md"
 	push
 }
