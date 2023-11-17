@@ -24,8 +24,6 @@ Box::new(|current_used: i32, r: &reqwest::Response| -> i32 {
     }
 })
 ```
-Would it be unreasonable to assume for now that Errors are handled and just provider a specific closure for Query to extract fields from request to aggTrades?
-
 
 ### Centralised average rt
 Let's keep a centralised average `rt` on each Provider, updating every minute.
@@ -55,3 +53,10 @@ The only thing client does is starting a runtime for it, where we continuously 1
   // last step is present for collecting from klines endpoints too, in the name of generalisation.
 
 It is queries who hold the method for extracting the fields from each request
+
+# Path
+## Current
+TradesParams // struct with String and Timestamp
+ ||
+ \/
+A func in `api` that constructs the final payloads, then circles with them
