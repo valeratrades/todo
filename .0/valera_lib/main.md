@@ -54,6 +54,9 @@ The only thing client does is starting a runtime for it, where we continuously 1
 
 It is queries who hold the method for extracting the fields from each request
 
+### Progress Bar
+Will have tracking of the progress of every query (in its initial form) eventually; but the output will be thrown into a tui, exactly the same as pacman does it.
+
 # Path
 ## Current
 TradesParams // struct with String and Timestamp
