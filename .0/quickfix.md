@@ -1,0 +1,1 @@
+So give &Arc<Mutex<Vec<Result<Whatever>>>> to every SubQuery. And then provide SubQueries to the manager, defined on the provider. And they all can be handled the same way now, as every query is a self-contained runtime and some additional args to wrap it in rate-limit-aware matter
