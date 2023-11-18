@@ -13,7 +13,9 @@ To implement query, let's:
 
 - [ ] Create a Query to it, and pass it to the end of the conveyor, assuming we don't have to split anything.
 
-<!--%s------------------------------------------------------------------------------
-- [ ] `Client.assign_query()`
+always can expect having either Option<String> or exactly `start_time` and `end_time` in every single scope they are used.
 
+<!--%s------------------------------------------------------------------------------
+- [ ] implement submit on the provider
+- [ ] `Client.assign_query()`
 - [ ] `Client.start_runtime()`
