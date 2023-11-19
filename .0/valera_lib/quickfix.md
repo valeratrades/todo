@@ -15,6 +15,8 @@ To implement query, let's:
 
 always can expect having either Option<String> or exactly `start_time` and `end_time` in every single scope they are used.
 
+- add `do` function on the SubQuery object. Then have it take the closure. And then I can have the needed items in the closure, without doing self-referencing stuff.
+
 <!--%s------------------------------------------------------------------------------
 - [ ] implement submit on the provider
 - [ ] `Client.assign_query()`
