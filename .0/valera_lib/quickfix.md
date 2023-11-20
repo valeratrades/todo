@@ -21,9 +21,19 @@ always can expect having either Option<String> or exactly `start_time` and `end_
 Seems like we don't even need the `QueryGridId`. Do I just slap `GridPosition` on everything internally and that's it?
 // notice that now id is the responsibility of the client. None of the apis take in id, as queries are never mixed internally.
 
-No matter how I'm doing this, assigning function to the client would always 
+### SubQuery
+- So give &Arc<Mutex<Vec<Result<Whatever>>>> to every SubQuery, (and now this is what's called Query). And then provide SubQueries to the manager, defined on the provider. And they all can be handled the same way now, as every query is a self-contained runtime and some additional args to wrap it in rate-limit-aware matter
+- SubQuery now has `percent_completed` field that has to be updated by the query's runtime. (when singular, update from 0 to 1). SubQuery has `estimated_time_left_s` also. It could be first set by the scheduler function of the provider. But mainly it is updated by the manager of the provider, which checks Option<timestamp_ms: u64>, (changed from None, when query's runtime is started), field on the SubQuery, with %completed in mind, time to time.
+- SubQueries are immediately attached to the least busy Client on the Provider by .add_sub_query. Moved later if needed by the Manager.The only physical place where they are ever stored is according Vecs on Clients
+
+- I'm assuming SubQueries are actually `tokio::task` or `tokio::handler`. And then clients have one runtime on them, where we start them.
+
+- Crate with macros for generating self-referential structs: https://docs.rs/rental/latest/rental/
+
+- Dude solved with Rc and RefCell https://github.com/UberLambda/ttspico-rs/commit/5bdb506cd84bfe87ef50cd2433563f31883a3118
 
 <!--%s------------------------------------------------------------------------------
-- [ ] implement submit on the provider
+- [ ] implement manager on the provider
 - [ ] `Client.assign_query()`
+clients should be having their own threads, so just storing the query in their struct is enough.
 - [ ] `Client.start_runtime()`
