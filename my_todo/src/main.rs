@@ -15,10 +15,10 @@ mod _static {
 		"t:tooling",
 		"l:work-on-library",
 		"s:trading-systems",
-		"pi:implement-python",
-		"ri:implement-rust",
-		"gi:implement-go",
-		"c:calculation",
+		"cp:code-python",
+		"cr:code-rust",
+		"cg:code-go",
+		"pd:personal-data-collection",
 	];
 	pub static HARD_STOP_COEFF: f32 = 1.5;
 	pub static STATE_PATH: &str = "/home/v/tmp/my_todo/ongoing.json";
