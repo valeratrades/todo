@@ -25,6 +25,8 @@ Box::new(|current_used: i32, r: &reqwest::Response| -> i32 {
 })
 ```
 
+The `LoadManager` on the Provider will also be calling a func on clients that blindly starts the next SubQuery on the Client
+
 ### Centralised average rt
 Let's keep a centralised average `rt` on each Provider, updating every minute.
 
@@ -53,6 +55,18 @@ The only thing client does is starting a runtime for it, where we continuously 1
   // last step is present for collecting from klines endpoints too, in the name of generalisation.
 
 It is queries who hold the method for extracting the fields from each request
+
+This thing will be a channel. Have to watch John to implement
+
+Seems like the most straighforward option is to make a
+```rust
+enum AnySender {
+    SenderType1(mpsc::Sender<Type1>),
+    SenderType2(mpsc::Sender<Type2>),
+    // ... add more as needed
+}
+```
+To attach any senders to a SubQuery
 
 ### Progress Bar
 Will have tracking of the progress of every query (in its initial form) eventually; but the output will be thrown into a tui, exactly the same as pacman does it.

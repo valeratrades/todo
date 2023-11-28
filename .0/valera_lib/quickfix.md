@@ -1,3 +1,7 @@
+1) The `requests` module is optimised for huge request queries
+2) As such, every new query will have to be extensively configured
+3) Given I don't want to do this every time, I make a decision to sacrifice some ease of configurability in favor of reusability. Meaning, we're favoring storage of all options inside `Templates` above all other ways of doing it.
+
 make it `start_time: Option<Timestamp>, end_time: Option<Timestamp`
 If either is not provided, assume the request is singular
 
