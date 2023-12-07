@@ -33,3 +33,4 @@ root /home/valera/s/site
 - [ ] юридический аккаунт на бинансе
 
 can have a state for the rm system, that it would watch and manage ALL the new trades according to the management sytle set
+
