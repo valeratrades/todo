@@ -1,7 +1,7 @@
 #!/bin/sh
 # Following is a standard set of rust run shortcuts
 
-alias b="cargo build --release"
+alias b="cargo build --release --manifest-path=./daily_stats/Cargo.toml && cargo build --release --manifest-path=./my_todo/Cargo.toml"
 alias r="cargo run"
 alias t="cargo test"
 

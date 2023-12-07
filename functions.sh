@@ -58,16 +58,20 @@ tedit() {
 tev() {
 	if [ -z "$1" ]; then
 		tstart 15 c daliy-ev-calculation
-	elif [ "$1" = "-y" ]; then
-		shift
-		${HOME}/s/todo/daily_ev/target/release/daily_ev "$1" "-y"
-		# easier than making a perfect error-throwing mechanism for my_todo
-		return 0
 	else
-		${HOME}/s/todo/daily_ev/target/release/daily_ev "$1"
-		tdone > /dev/null 2>&1
+		if [ "$1" = "-y" ]; then
+			shift
+			${HOME}/s/todo/daily_stats/target/release/daily_stats "$1" "-y"
+		else
+			${HOME}/s/todo/daily_stats/target/release/daily_stats "$1"
+			tdone > /dev/null 2>&1
+		fi
 		# easier than making a perfect error-throwing mechanism for my_todo
 		return 0
 	fi
+}
+tevo() {
+	tev "$@"
+	nvim ${HOME}/data/personal/daily_stats.json
 }
 #
