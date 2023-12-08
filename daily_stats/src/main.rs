@@ -23,6 +23,13 @@ macro_rules! create_stats_class {
 }
 
 create_stats_class! {
+	Sleep {
+		to_bed_t_plus,
+		from_bed_t_plus,
+	}
+}
+
+create_stats_class! {
 	Eating {
 		making_breakfast,
 		eating_breakfast,
@@ -35,8 +42,8 @@ create_stats_class! {
 
 create_stats_class! {
 	Masturbation {
-	times,
-	visuals__full_1__no_2__work_3,
+		times,
+		visuals__full_1__no_2__work_3,
 	}
 }
 
