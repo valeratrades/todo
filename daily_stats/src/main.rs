@@ -49,8 +49,9 @@ create_stats_class! {
 
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct Stats {
-	masturbation: Masturbation,
 	time_on_eating: Eating,
+	masturbation: Masturbation,
+	sleep: Sleep,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
