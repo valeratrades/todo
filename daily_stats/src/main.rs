@@ -24,8 +24,10 @@ macro_rules! create_stats_class {
 
 create_stats_class! {
 	Sleep {
-		to_bed_t_plus_min,
+		yd_to_bed_t_plus_min,
 		from_bed_t_plus_min,
+		// not sure this is the best word though. It's difference, but I want to accent that it is |distance|
+		to_bed_distance_yd_from_day_before_min,
 	}
 }
 
@@ -43,7 +45,7 @@ create_stats_class! {
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Masturbation {
 	times: i32,
-	visuals__full_no_work: String,
+	visuals__full_no_work: Option<String>,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -60,6 +62,7 @@ struct Day {
 	stats: Stats,
 }
 
+//TODO!!!!!: when reading, if a field is missing, init it in none
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
 	let ev: i32 = args[1].parse().unwrap();
