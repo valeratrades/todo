@@ -23,7 +23,11 @@ Box::new(|current_used: i32, r: &reqwest::Response| -> i32 {
         }
     }
 })
+
 ```
+### API key
+// dummy for now
+should be stored as a part universally appendable to request headers
 
 The `LoadManager` on the Provider will also be calling a func on clients that blindly starts the next SubQuery on the Client
 

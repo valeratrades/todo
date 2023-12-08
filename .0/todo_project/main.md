@@ -25,3 +25,4 @@ How about making a buffer, opened in nvim for this, akin to the `shell_harpoon`.
 And then no need to have a separate thing for timing this - just connect `my_todo start ev 10` and then `my_todo done` onto its close and open.
 // Note that I will never retire the option of setting day's tev from the command line.
 
+Need to have a `get_today` function, that would either load the existing `Day` object, either create new if none. So now everything will first call `get_today`. So tev would first get the object with `get_today`, then change its `ev` field before writing it back. 

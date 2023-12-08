@@ -1,3 +1,7 @@
+- [ ] find type-less channel implementation (start searching with tokio)
+
+      - [ ] immediately implement the simplest test case of it for `*_dump_trades`
+
 - [ ] nvim: can I limit number of cmp suggestions to 10 max?
 
 - [ ] copy primeagen's code over for displaying history with htmx

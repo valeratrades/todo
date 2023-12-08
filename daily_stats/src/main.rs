@@ -60,6 +60,7 @@ struct Day {
 	time: String,
 	ev: i32,
 	stats: Stats,
+	//? tasks? And then merge with my_todo, and record all tasks right here.
 }
 
 //TODO!!!!!: when reading, if a field is missing, init it in none
