@@ -24,8 +24,8 @@ macro_rules! create_stats_class {
 
 create_stats_class! {
 	Sleep {
-		to_bed_t_plus,
-		from_bed_t_plus,
+		to_bed_t_plus_min,
+		from_bed_t_plus_min,
 	}
 }
 
