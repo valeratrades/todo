@@ -40,11 +40,10 @@ create_stats_class! {
 	}
 }
 
-create_stats_class! {
-	Masturbation {
-		times,
-		visuals__full_1__no_2__work_3,
-	}
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct Masturbation {
+	times: i32,
+	visuals__full_no_work: String,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
