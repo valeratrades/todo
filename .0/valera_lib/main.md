@@ -23,8 +23,21 @@ Box::new(|current_used: i32, r: &reqwest::Response| -> i32 {
         }
     }
 })
-
 ```
+
+### Manager
+1. recounts the approximate free capacities of every client
+1. now just reshuffle queries between clients if needed
+
+- is activated on completion of every query.
+
+### Query submission
+assuming capacities on clients are marked fairly, we pull them and assign new queries in accordance
+
+- note that we rely on Manager working properly
+
+NB! note that the logic is sufficiently simple, so it is _inlined_! There will be no centralised function for finding underloaded clients, used by both `.submit()` and `.mananage()`
+
 ### API key
 // dummy for now
 should be stored as a part universally appendable to request headers
@@ -62,7 +75,7 @@ It is queries who hold the method for extracting the fields from each request
 
 This thing will be a channel. Have to watch John to implement
 
-Seems like the most straighforward option is to make a
+Seems like the most straightforward option is to make a
 ```rust
 enum AnySender {
     SenderType1(mpsc::Sender<Type1>),
@@ -74,10 +87,3 @@ To attach any senders to a SubQuery
 
 ### Progress Bar
 Will have tracking of the progress of every query (in its initial form) eventually; but the output will be thrown into a tui, exactly the same as pacman does it.
-
-# Path
-## Current
-TradesParams // struct with String and Timestamp
- ||
- \/
-A func in `api` that constructs the final payloads, then circles with them
