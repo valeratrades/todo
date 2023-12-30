@@ -1,5 +1,3 @@
-- [ ] fix the auto-anchoring of workspaces on monitor connection (in todos)
-
 - [ ] ws usage stats (in todos)
 
 - [ ] reconfigure nginx. Just put the following into `sites-available`
