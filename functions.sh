@@ -1,4 +1,7 @@
 # NOT posix
+
+#NB all of this will be moved into rust itself, using clap.
+
 TODO_PATH="${HOME}/s/todo/.0"
 
 local pull() {
