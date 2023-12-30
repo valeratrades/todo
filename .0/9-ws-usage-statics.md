@@ -6,6 +6,3 @@
 1. connect the data stream to the app
 1. make a youtube video to share it with everybody.
 1. once sure the technology is stable, share it on twitter too, append the short version of the backstory. (do you want to have your self-esteem intact or will you burn the bridges?)
-
-# Evening
-- [ ] add copilot to neovim
