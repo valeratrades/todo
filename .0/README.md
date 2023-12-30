@@ -2,8 +2,8 @@
 - to express a blocking or non-blocking nature of a step, I shall use the following apprehension:
 ```md
 1. this is blocking
-2.1 this is non-blocking
-2.2 neither is this
+2.a this is non-blocking
+2.b neither is this
 3. this is blocking && requires both of the previous steps to have been finished.
 ```
 
