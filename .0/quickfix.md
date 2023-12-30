@@ -1,10 +1,12 @@
-- [ ] find type-less channel implementation (start searching with tokio)
+- [ ] finish video on not helping friends
 
-      - [ ] immediately implement the simplest test case of it for `*_dump_trades`
+- [ ] lock the phone downstairs
 
-- [ ] nvim: can I limit number of cmp suggestions to 10 max?
+- [ ] dress into the suit
 
-- [ ] copy primeagen's code over for displaying history with htmx
+- [ ] fix the auto-anchoring of workspaces on monitor connection (in todos)
+
+- [ ] ws usage stats (in todos)
 
 - [ ] reconfigure nginx. Just put the following into `sites-available`
 server {
@@ -29,10 +31,8 @@ and then add also
 ```
 root /home/valera/s/site
 ```
-- [ ] go through both Algebar and Polynomals chapters, pvoving all lemmas in lean4
-
-- [ ] юридический аккаунт на бинансе
 
 can have a state for the rm system, that it would watch and manage ALL the new trades according to the management sytle set
 
 - [ ] implement correctly flags for todo  so it's not `taddo` but `tadd -o`, and not `tevo -y` but ` tev -oy`
+// I say fuck bash, let's move what is possible into rust; using clap.
