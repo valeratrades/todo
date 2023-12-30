@@ -1,3 +1,7 @@
+- [ ] eww on primary monitor
+
+- [ ] t and T in vim
+
 - [ ] ws usage stats (in todos)
 
 - [ ] reconfigure nginx. Just put the following into `sites-available`
