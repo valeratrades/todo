@@ -1,9 +1,3 @@
-- [ ] finish video on not helping friends
-
-- [ ] lock the phone downstairs
-
-- [ ] dress into the suit
-
 - [ ] fix the auto-anchoring of workspaces on monitor connection (in todos)
 
 - [ ] ws usage stats (in todos)
