@@ -14,6 +14,10 @@ We will also automatically pull the first letter of each folder, and any command
 Also, what the fuck, let's sync the groups across the board. (Which currently means folders in ~/Todo and in my_todo cli tool // make a unifying config)
 And if any are too specific to be synced, they \(should be subgroups / shouldn't exist\) in the first place.
 
+- [ ] implement correctly flags for todo  so it's not `taddo` but `tadd -o`, and not `tevo -y` but ` tev -oy`
+
+// I say fuck bash, let's move what is possible into rust; using clap.
+
 # MyTodo
 ## TODO:
 - add `-add` and `-sub` flags to the `tev`
