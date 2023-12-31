@@ -2,7 +2,7 @@
 
 #NB all of this will be moved into rust itself, using clap.
 
-TODO_PATH="${HOME}/s/todo/.0"
+TODO_PATH="${HOME}/Todo"
 
 local pull() {
 	( git -C "$TODO_PATH" pull > /dev/null 2>&1 & ) & disown
