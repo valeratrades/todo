@@ -1,3 +1,13 @@
+# Format
+Every entry has the following format:
+`{importance}_{difficulty}_{name}`,
+where:
+- importance: 0->9, the higher the more important
+- difficulty: 0->9, the higher the more difficult
+- day_section is provided as argument. "w:work", "e:evening", and default is "evening"
+// we assume morning is meant for more physical things, so that and its brevity make it so that no tasks are assigned to the morning section. 
+- name: name of the task, with spaces substituted by '-', not '_'
+
 # Style
 - to express a blocking or non-blocking nature of a step, I shall use the following apprehension:
 ```md
