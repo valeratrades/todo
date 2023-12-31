@@ -9,6 +9,7 @@ use std::{
 	process::{Command, Output},
 };
 
+//TODO!!: move to config file \\
 const DELIMITOR: &'static str = " - ";
 const SAVE_DIR: &'static str = "/home/v/data/personal/activity_monitor/";
 
@@ -52,6 +53,7 @@ fn get_activity() -> String {
 		Ok(1) => "Neovim".to_owned(),
 		Ok(3) => "Editing todos/notes".to_owned(),
 		Ok(5) => "Reading a book".to_owned(),
+		Ok(0) => "Reading runtime exceptions".to_owned(),
 		Ok(num) => format!("Workspace {}", num),
 		Err(_) => unreachable!(),
 	};
@@ -92,10 +94,11 @@ fn record_activity(name: String, start_s: i64, end_s: i64) {
 	let save_dir = std::path::Path::new(SAVE_DIR);
 	let _ = std::fs::create_dir_all(save_dir);
 
-	let date = Utc::now().format("%Y-%m-%d").to_string();
-	let today_file = [SAVE_DIR, &date].concat();
+	let record = Record { name, start_s, end_s };
 
-	let mut records: VecDeque<Record> = match File::open(today_file) {
+	let date = Utc::now().format("%Y-%m-%d").to_string();
+	let target_path = [SAVE_DIR, &date].concat();
+	let mut records: VecDeque<Record> = match File::open(&target_path) {
 		Ok(mut file) => {
 			let mut contents = String::new();
 			file.read_to_string(&mut contents).unwrap();
@@ -103,4 +106,9 @@ fn record_activity(name: String, start_s: i64, end_s: i64) {
 		}
 		Err(_) => VecDeque::new(),
 	};
+	records.push_back(record);
+
+	let mut file = File::create(&target_path).unwrap();
+	let json = serde_json::to_string(&records).unwrap();
+	file.write_all(json.as_bytes()).unwrap();
 }
