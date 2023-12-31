@@ -6,9 +6,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
 
-mod _static {
-	pub static SAVE_PATH: &str = "/home/v/data/personal/daily_stats.json";
-}
+const SAVE_PATH: &'static str = "/home/v/data/personal/daily_stats.json";
 
 macro_rules! create_stats_class {
 	($name:ident { $($field:ident),* $(,)? }) => {
@@ -77,9 +75,9 @@ fn main() {
 		stats: Stats::default(),
 	};
 
-	let parent_dir = std::path::Path::new(&_static::SAVE_PATH).parent().unwrap();
+	let parent_dir = std::path::Path::new(SAVE_PATH).parent().unwrap();
 	let _ = std::fs::create_dir_all(parent_dir);
-	let mut records: VecDeque<Day> = match File::open(&_static::SAVE_PATH) {
+	let mut records: VecDeque<Day> = match File::open(SAVE_PATH) {
 		Ok(mut file) => {
 			let mut contents = String::new();
 			file.read_to_string(&mut contents).unwrap();
@@ -91,7 +89,7 @@ fn main() {
 	records.retain(|day| day.time != time);
 	records.push_back(record);
 
-	let mut file = File::create(&_static::SAVE_PATH).unwrap();
+	let mut file = File::create(SAVE_PATH).unwrap();
 	let formatted_json = serde_json::to_string_pretty(&records).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 }
