@@ -18,6 +18,8 @@ And if any are too specific to be synced, they \(should be subgroups / shouldn't
 
 // I say fuck bash, let's move what is possible into rust; using clap.
 
+- [ ] move the todos back into ~/Todo, git sync it separately. With this, make the todo project itself be public.
+
 # MyTodo
 ## TODO:
 - add `-add` and `-sub` flags to the `tev`
