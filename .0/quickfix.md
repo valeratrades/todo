@@ -31,8 +31,6 @@ can have a state for the rm system, that it would watch and manage ALL the new t
 // I say fuck bash, let's move what is possible into rust; using clap.
 
 # Evening
-- [ ] need to scale position in sway?
-
 - [ ] add copilot to neovim
 
 - [ ] think through compiling quickfix
