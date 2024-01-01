@@ -21,19 +21,17 @@ enum Commands {
 
 #[derive(Args)]
 struct OpenArgs {
-	#[arg(long, short)]
-	morning: bool,
-	#[arg(long, short)]
-	work: bool,
-	#[arg(long, short)]
-	evening: bool,
-	#[arg(long, short)]
-	open: bool,
+	#[clap(flatten)]
+	shared: TodosFlags,
 }
 #[derive(Args)]
 struct AddArgs {
 	name: String,
-
+	#[clap(flatten)]
+	shared: TodosFlags,
+}
+#[derive(Args)]
+struct TodosFlags {
 	#[arg(long, short)]
 	morning: bool,
 	#[arg(long, short)]
@@ -42,89 +40,44 @@ struct AddArgs {
 	evening: bool,
 	#[arg(long, short)]
 	open: bool,
-}
-trait Todos {
-	fn dir(&self) -> PathBuf;
-	fn add(&self, path: PathBuf) -> PathBuf;
-	fn open(&self, path: PathBuf);
-}
-impl Todos for OpenArgs {
-	fn dir(&self) -> PathBuf {
-		let mut path = PathBuf::from(TODO_DIR);
-
-		if self.morning {
-			path.push(".morning/");
-		} else if self.work {
-			path.push(".work/");
-		} else {
-			path.push(".evening/");
-		}
-		path
-	}
-
-	fn add(&self, path: PathBuf) -> PathBuf {
-		path
-	}
-
-	fn open(&self, path: PathBuf) {
-		if self.open == true {
-			Command::new("sh")
-				.arg("-c")
-				.arg(format!("$EDITOR {}", path.display()))
-				.status()
-				.expect("$EDITOR env variable is not defined");
-		}
-	}
-}
-impl Todos for AddArgs {
-	fn dir(&self) -> PathBuf {
-		let mut path = PathBuf::from(TODO_DIR);
-
-		if self.morning {
-			path.push(".morning/");
-		} else if self.work {
-			path.push(".work/");
-		} else {
-			path.push(".evening/");
-		}
-		path
-	}
-
-	fn add(&self, mut path: PathBuf) -> PathBuf {
-		path.push([&self.name, ".md"].concat());
-		let _ = std::fs::File::create(&path).unwrap();
-		path
-	}
-
-	fn open(&self, path: PathBuf) {
-		if self.open == true {
-			Command::new("sh")
-				.arg("-c")
-				.arg(format!("$EDITOR {}", path.display()))
-				.status()
-				.expect("$EDITOR env variable is not defined");
-		}
-	}
 }
 
 fn main() {
 	let cli = Cli::parse();
 
 	match cli.command {
-		Commands::Open(mut open_args) => {
-			open_args.open = true;
-			action_todos(open_args);
+		Commands::Open(open_args) => {
+			let mut todos_flags = open_args.shared;
+			todos_flags.open = true;
+			action_todos(todos_flags, None);
 		}
 		Commands::Add(add_args) => {
-			action_todos(add_args);
+			action_todos(add_args.shared, Some(add_args.name));
 		}
 	}
 }
 
-fn action_todos<T: Todos>(args: T) {
-	let mut path = args.dir();
+fn action_todos(flags: TodosFlags, name: Option<String>) {
+	let mut path = PathBuf::from(TODO_DIR);
 
-	path = args.add(path);
+	if flags.morning {
+		path.push(".morning/");
+	} else if flags.work {
+		path.push(".work/");
+	} else {
+		path.push(".evening/");
+	}
 
-	args.open(path);
+	if let Some(name) = name {
+		path.push([&name, ".md"].concat());
+		let _ = std::fs::File::create(&path).unwrap();
+	}
+
+	if flags.open == true {
+		Command::new("sh")
+			.arg("-c")
+			.arg(format!("$EDITOR {}", path.display()))
+			.status()
+			.expect("$EDITOR env variable is not defined");
+	}
 }
