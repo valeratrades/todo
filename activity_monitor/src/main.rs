@@ -90,6 +90,7 @@ fn get_activity() -> String {
 	"PC".to_owned() + DELIMITOR + &activity
 }
 
+/// Incredibly inefficient way of recording a new entry, because we load all the existing ones first.
 fn record_activity(name: String, start_s: i64, end_s: i64) {
 	let save_dir = std::path::Path::new(SAVE_DIR);
 	let _ = std::fs::create_dir_all(save_dir);

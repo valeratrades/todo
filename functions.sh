@@ -10,11 +10,11 @@ local pull() {
 local push() {
 	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) > /dev/null 2>&1 & disown
 }
-todo() {
-	pull
-	e "$TODO_PATH"
-	push
-}
+#todo() {
+#	pull
+#	e "$TODO_PATH"
+#	push
+#}
 
 tq() {
 	git -C "$TODO_PATH" pull > /dev/null 2>&1
@@ -31,14 +31,6 @@ taddo() {
   mkfile "${TODO_PATH}/${1}.md"
 	pull
   e "${TODO_PATH}/${1}.md"
-	push
-}
-
-tder() {
-  mkfile "${TODO_PATH}/${1}/main.md"
-	mkfile "${TODO_PATH}/${1}/quickfix.md" # idea is to have this as a place for the my_todo tool to be used upon (Am I hearing 'automate this too?). So in the future will likely automatically schedule the next task from here after the previous is done/failed; but for now just promising to exclude the ones I'm not able to finish immediately || not include them in the first place
-	pull
-  e "${TODO_PATH}/${1}/main.md"
 	push
 }
 
