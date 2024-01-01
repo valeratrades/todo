@@ -1,6 +1,7 @@
+pub mod utils;
+
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
-use std::process::Command;
 
 const TODO_DIR: &'static str = "/home/v/Todo/";
 
@@ -17,6 +18,7 @@ enum Commands {
 	/// opens the target path
 	Open(OpenArgs),
 	Add(AddArgs),
+	Quickfix(QuickfixArgs),
 }
 
 #[derive(Args)]
@@ -42,6 +44,9 @@ struct TodosFlags {
 	open: bool,
 }
 
+#[derive(Args)]
+struct QuickfixArgs {}
+
 fn main() {
 	let cli = Cli::parse();
 
@@ -53,6 +58,11 @@ fn main() {
 		}
 		Commands::Add(add_args) => {
 			action_todos(add_args.shared, Some(add_args.name));
+		}
+		Commands::Quickfix(_) => {
+			// concat with description of the section
+
+			// compile String to md with pandoc or something and open with zathura
 		}
 	}
 }
@@ -74,10 +84,6 @@ fn action_todos(flags: TodosFlags, name: Option<String>) {
 	}
 
 	if flags.open == true {
-		Command::new("sh")
-			.arg("-c")
-			.arg(format!("$EDITOR {}", path.display()))
-			.status()
-			.expect("$EDITOR env variable is not defined");
+		utils::open(path);
 	}
 }

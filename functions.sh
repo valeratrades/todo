@@ -10,22 +10,7 @@ local pull() {
 local push() {
 	( git -C "$TODO_PATH" add -A && git -C "$TODO_PATH" commit -m "." && git -C "$TODO_PATH" push ) > /dev/null 2>&1 & disown
 }
-#todo() {
-#	pull
-#	e "$TODO_PATH"
-#	push
-#}
 
-tq() {
-	git -C "$TODO_PATH" pull > /dev/null 2>&1
-	sleep 0.1
-	e "${TODO_PATH}/quickfix.md"
-	push
-}
-
-tadd() {
-  mkfile "${TODO_PATH}/${1}.md"
-}
 
 taddo() {
   mkfile "${TODO_PATH}/${1}.md"
@@ -50,6 +35,7 @@ tkill() {
 tedit() {
 	e ${HOME}/data/personal/todo.json
 }
+
 tev() {
 	if [ -z "$1" ]; then
 		tstart 15 c daliy-ev-calculation

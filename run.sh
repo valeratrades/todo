@@ -3,7 +3,6 @@
 
 alias b="cargo build --release --manifest-path=./daily_stats/Cargo.toml && cargo build --release --manifest-path=./my_todo/Cargo.toml"
 alias r="cargo run"
-alias t="cargo test"
 
 # f for full
 alias f="cargo build --release && my_todo"
