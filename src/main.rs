@@ -5,7 +5,7 @@ pub mod config;
 use config::Config;
 use utils::ExpandedPath;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 //use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -39,17 +39,26 @@ fn main() {
 		}
 	};
 
-	match cli.command {
+	// All the functions here can rely on config being correct.
+	let success = match cli.command {
 		Commands::Open(open_args) => {
 			let mut todos_flags = open_args.shared;
 			todos_flags.open = true;
-			todos::open_or_add(config, todos_flags, None);
+			todos::open_or_add(config, todos_flags, None)
 		}
 		Commands::Add(add_args) => {
-			todos::open_or_add(config, add_args.shared, Some(add_args.name));
+			todos::open_or_add(config, add_args.shared, Some(add_args.name))
 		}
 		Commands::Quickfix(_) => {
-			todos::compile(config);
+			todos::compile_quickfix(config)
+		}
+	};
+
+	match success {
+		Ok(_) => std::process::exit(0),
+		Err(e) => {
+			eprintln!("Error: {}", e);
+			std::process::exit(1);
 		}
 	}
 }

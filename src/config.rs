@@ -11,6 +11,7 @@ pub struct Config {
 #[derive(Deserialize)]
 pub struct Todos {
 	pub path: ExpandedPath,
+	pub n_tasks_to_show: u8,
 }
 
 impl TryFrom<ExpandedPath> for Config {
