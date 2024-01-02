@@ -1,12 +1,11 @@
 pub mod quickfix;
 pub mod utils;
+pub mod config;
+use config::Config;
+use utils::ExpandedPath;
 
 use clap::{Args, Parser, Subcommand};
-use std::path::PathBuf;
-
-//TODO!!!: move consts to config file
-const TODO_DIR: &'static str = "/home/v/Todo/";
-const WAKETIME: &'static str = "7:00";
+//use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -14,13 +13,17 @@ const WAKETIME: &'static str = "7:00";
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
+	#[arg(long, default_value = "~/.config/todo.toml")]
+	config: ExpandedPath,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-	/// opens the target path
+	/// Opens the target path
 	Open(OpenArgs),
+	/// Add a new task
 	Add(AddArgs),
+	/// Compile list of first priority tasks based on time of day
 	Quickfix(QuickfixArgs),
 }
 
@@ -53,23 +56,31 @@ struct QuickfixArgs {}
 fn main() {
 	let cli = Cli::parse();
 
+	let config = match Config::try_from(cli.config) {
+		Ok(cfg) => cfg,
+		Err(e) => {
+			eprintln!("Error: {}", e);
+			std::process::exit(1);
+		}
+	};
+
 	match cli.command {
 		Commands::Open(open_args) => {
 			let mut todos_flags = open_args.shared;
 			todos_flags.open = true;
-			action_todos(todos_flags, None);
+			action_todos(config, todos_flags, None);
 		}
 		Commands::Add(add_args) => {
-			action_todos(add_args.shared, Some(add_args.name));
+			action_todos(config, add_args.shared, Some(add_args.name));
 		}
 		Commands::Quickfix(_) => {
-			quickfix::compile();
+			quickfix::compile(config);
 		}
 	}
 }
 
-fn action_todos(flags: TodosFlags, name: Option<String>) {
-	let mut path = PathBuf::from(TODO_DIR);
+fn action_todos(config: Config, flags: TodosFlags, name: Option<String>) {
+	let mut path = config.todos.path.0.clone();
 
 	if flags.morning {
 		path.push(".morning/");
@@ -81,6 +92,7 @@ fn action_todos(flags: TodosFlags, name: Option<String>) {
 
 	if let Some(name) = name {
 		path.push([&name, ".md"].concat());
+		dbg!(&path);
 		let _ = std::fs::File::create(&path).unwrap();
 	}
 
