@@ -12,13 +12,6 @@ local push() {
 }
 
 
-taddo() {
-  mkfile "${TODO_PATH}/${1}.md"
-	pull
-  e "${TODO_PATH}/${1}.md"
-	push
-}
-
 ## `my_todo` stuff
 tstart() {
 	my_todo start "$@" &

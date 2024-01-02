@@ -1,9 +1,12 @@
+pub mod quickfix;
 pub mod utils;
 
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+//TODO!!!: move consts to config file
 const TODO_DIR: &'static str = "/home/v/Todo/";
+const WAKETIME: &'static str = "7:00";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -60,9 +63,7 @@ fn main() {
 			action_todos(add_args.shared, Some(add_args.name));
 		}
 		Commands::Quickfix(_) => {
-			// concat with description of the section
-
-			// compile String to md with pandoc or something and open with zathura
+			quickfix::compile();
 		}
 	}
 }
