@@ -5,9 +5,3 @@ It's just dumb. I'm trying to make it "simpler" by adding extensions to some of 
 
 ## Notes
 Only the notes on the projects without a dedicated git repo should appear here.
-
-# Config
-toml
-
-[todos]
-path = ""

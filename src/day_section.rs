@@ -1,23 +1,5 @@
-use crate::config::Config;
-
+use anyhow::Result;
 use chrono::prelude::*;
-use std::path::PathBuf;
-
-pub fn compile(config: Config) {
-	let waketime_env = std::env::var("WAKETIME").unwrap();
-	let waketime = Waketime::from(waketime_env);
-
-	let day_section_borders_env = std::env::var("DAY_SECTION_BORDERS").unwrap();
-	let day_section_borders = DaySectionBorders::from(day_section_borders_env);
-	let day_section = day_section_borders.now_in(waketime);
-	let todos_dir = config.todos.path.clone();
-
-	// apply formula to get the priority task according to time of day.
-
-	// concat with description of the section
-
-	// compile String to md with pandoc or something and pipe into zathura
-}
 
 #[derive(Debug)]
 struct Waketime {
@@ -34,12 +16,24 @@ impl From<String> for Waketime {
 	}
 }
 
-enum DaySection {
+pub enum DaySection {
 	Morning,
 	Work,
 	Evening,
 	Night,
 }
+impl DaySection {
+	pub fn build() -> Result<Self> {
+		let waketime_env = std::env::var("WAKETIME")?;
+		let waketime = Waketime::from(waketime_env);
+
+		let day_section_borders_env = std::env::var("DAY_SECTION_BORDERS")?;
+		let day_section_borders = DaySectionBorders::from(day_section_borders_env);
+		let day_section = day_section_borders.now_in(waketime);
+		Ok(day_section)
+	}
+}
+
 #[derive(Debug)]
 struct DaySectionBorders {
 	morning_end: i32,
