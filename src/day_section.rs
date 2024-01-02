@@ -35,10 +35,10 @@ impl DaySection {
 
 	pub fn description(&self) -> &'static str {
 		match self {
-			DaySection::Morning => "morning",
-			DaySection::Work => "work",
-			DaySection::Evening => "this is evening",
-			DaySection::Night => "aenrdtiaeser",
+			DaySection::Morning => "morning is for physical things",
+			DaySection::Work => "work is for necessary things",
+			DaySection::Evening => "evening for fun and reflection",
+			DaySection::Night => "SLEEP",
 		}
 	}
 }
