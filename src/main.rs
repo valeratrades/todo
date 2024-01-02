@@ -1,12 +1,12 @@
-pub mod quickfix;
+pub mod todos;
+pub mod day_section;
 pub mod utils;
+pub mod config;
+use config::Config;
+use utils::ExpandedPath;
 
-use clap::{Args, Parser, Subcommand};
-use std::path::PathBuf;
-
-//TODO!!!: move consts to config file
-const TODO_DIR: &'static str = "/home/v/Todo/";
-const WAKETIME: &'static str = "7:00";
+use clap::{Parser, Subcommand};
+//use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -14,77 +14,51 @@ const WAKETIME: &'static str = "7:00";
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
+	#[arg(long, default_value = "~/.config/todo.toml")]
+	config: ExpandedPath,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-	/// opens the target path
-	Open(OpenArgs),
-	Add(AddArgs),
-	Quickfix(QuickfixArgs),
+	/// Opens the target path
+	Open(todos::OpenArgs),
+	/// Add a new task
+	Add(todos::AddArgs),
+	/// Compile list of first priority tasks based on time of day
+	Quickfix(todos::QuickfixArgs),
 }
-
-#[derive(Args)]
-struct OpenArgs {
-	#[clap(flatten)]
-	shared: TodosFlags,
-}
-#[derive(Args)]
-struct AddArgs {
-	name: String,
-	#[clap(flatten)]
-	shared: TodosFlags,
-}
-#[derive(Args)]
-struct TodosFlags {
-	#[arg(long, short)]
-	morning: bool,
-	#[arg(long, short)]
-	work: bool,
-	#[arg(long, short)]
-	evening: bool,
-	#[arg(long, short)]
-	open: bool,
-}
-
-#[derive(Args)]
-struct QuickfixArgs {}
 
 fn main() {
 	let cli = Cli::parse();
 
-	match cli.command {
+	let config = match Config::try_from(cli.config) {
+		Ok(cfg) => cfg,
+		Err(e) => {
+			eprintln!("Error: {}", e);
+			std::process::exit(1);
+		}
+	};
+
+	// All the functions here can rely on config being correct.
+	let success = match cli.command {
 		Commands::Open(open_args) => {
 			let mut todos_flags = open_args.shared;
 			todos_flags.open = true;
-			action_todos(todos_flags, None);
+			todos::open_or_add(config, todos_flags, None)
 		}
 		Commands::Add(add_args) => {
-			action_todos(add_args.shared, Some(add_args.name));
+			todos::open_or_add(config, add_args.shared, Some(add_args.name))
 		}
 		Commands::Quickfix(_) => {
-			quickfix::compile();
+			todos::compile_quickfix(config)
 		}
-	}
-}
+	};
 
-fn action_todos(flags: TodosFlags, name: Option<String>) {
-	let mut path = PathBuf::from(TODO_DIR);
-
-	if flags.morning {
-		path.push(".morning/");
-	} else if flags.work {
-		path.push(".work/");
-	} else {
-		path.push(".evening/");
-	}
-
-	if let Some(name) = name {
-		path.push([&name, ".md"].concat());
-		let _ = std::fs::File::create(&path).unwrap();
-	}
-
-	if flags.open == true {
-		utils::open(path);
+	match success {
+		Ok(_) => std::process::exit(0),
+		Err(e) => {
+			eprintln!("Error: {}", e);
+			std::process::exit(1);
+		}
 	}
 }

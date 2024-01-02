@@ -1,30 +1,5 @@
+use anyhow::Result;
 use chrono::prelude::*;
-use std::path::PathBuf;
-
-//TODO!!!: move consts to config file or env variables.
-const TODO_DIR: &'static str = "/home/v/Todo/";
-//TODO!!!!: const for section splits
-
-pub fn compile() {
-	let waketime_env_output = std::process::Command::new("sh").arg("-c").arg("echo $WAKETIME").output().unwrap();
-	let waketime_env = String::from_utf8_lossy(&waketime_env_output.stdout).to_string();
-	let waketime = Waketime::from(waketime_env);
-
-	let day_section_borders_env_output = std::process::Command::new("sh")
-		.arg("-c")
-		.arg("echo $DAY_SECTION_BORDERS")
-		.output()
-		.unwrap();
-	let day_section_borders_env = String::from_utf8_lossy(&day_section_borders_env_output.stdout).to_string();
-	let day_section_borders = DaySectionBorders::from(day_section_borders_env);
-	let day_section = day_section_borders.now_in(waketime);
-
-	// apply formula to get the priority task according to time of day.
-
-	// concat with description of the section
-
-	// compile String to md with pandoc or something and pipe into zathura
-}
 
 #[derive(Debug)]
 struct Waketime {
@@ -34,19 +9,40 @@ struct Waketime {
 impl From<String> for Waketime {
 	fn from(s: String) -> Self {
 		let split: Vec<_> = s.split(':').collect();
-		assert!(split.len() == 2, "ERROR: waketime should be supplied in the format: \"%H:%M\"");
+		assert!(split.len() == 2, "ERROR: waketime should be in the format: \"%H:%M\"");
 		let hours: u32 = split[0].parse().unwrap();
 		let minutes: u32 = split[1].parse().unwrap();
 		Waketime { hours, minutes }
 	}
 }
 
-enum DaySection {
+pub enum DaySection {
 	Morning,
 	Work,
 	Evening,
 	Night,
 }
+impl DaySection {
+	pub fn build() -> Result<Self> {
+		let waketime_env = std::env::var("WAKETIME")?;
+		let waketime = Waketime::from(waketime_env);
+
+		let day_section_borders_env = std::env::var("DAY_SECTION_BORDERS")?;
+		let day_section_borders = DaySectionBorders::from(day_section_borders_env);
+		let day_section = day_section_borders.now_in(waketime);
+		Ok(day_section)
+	}
+
+	pub fn description(&self) -> &'static str {
+		match self {
+			DaySection::Morning => "morning",
+			DaySection::Work => "work",
+			DaySection::Evening => "this is evening",
+			DaySection::Night => "aenrdtiaeser",
+		}
+	}
+}
+
 #[derive(Debug)]
 struct DaySectionBorders {
 	morning_end: i32,
