@@ -5,7 +5,7 @@ use crate::utils;
 use anyhow::{Context, Result};
 
 use clap::Args;
-use tempfile::{NamedTempFile, Builder};
+use tempfile::Builder;
 use std::path::PathBuf;
 
 pub fn compile_quickfix(config: Config) -> Result<()>{
@@ -33,11 +33,14 @@ pub fn compile_quickfix(config: Config) -> Result<()>{
 
 
 	let mut quickfix_str = String::new();
-	for task in to_show_tasks {
-		quickfix_str.push_str(&format!("{}", task));
-		quickfix_str.push_str("\n\n");
+	let len = to_show_tasks.len();
+	for i in 0..len {
+		quickfix_str.push_str(&format!("{}", to_show_tasks[i]));
+		if i < len-1 {
+			quickfix_str.push_str("# -----------------------------------------------------------------------------\n");
+		}
 	}
-	quickfix_str.push_str("\n=============================================================================\n");
+	quickfix_str.push_str("\n\n# =============================================================================\n\n");
 	quickfix_str.push_str(day_section.description());
 
 	let tmp_file = Builder::new().suffix(".pdf").tempfile()?;
@@ -125,8 +128,8 @@ fn day_section_path<'a>(config: &'a Config, day_section: &'a DaySection) -> Path
 
 #[derive(Debug, Clone)]
 struct TaskSplit {
-	importance: u8,
-	difficulty: u8,
+	_importance: u8,
+	_difficulty: u8,
 	name: String,
 }
 #[derive(Debug, Clone)]
@@ -155,7 +158,7 @@ impl TryFrom<PathBuf> for Task {
 		let difficulty: u8 = split[1].parse().with_context(|| formatting_error.clone())?;
 		let name: String = split[2..split.len()].concat().trim_end_matches(".md").to_string();	
 
-		let split = TaskSplit{ importance, difficulty, name };
+		let split = TaskSplit{ _importance: importance, _difficulty: difficulty, name };
 
 		let priority = importance * (10-difficulty);
 
@@ -195,10 +198,14 @@ fn partition_tasks(arr: &mut [Task], low: isize, high: isize) -> isize {
 
 impl Display for Task {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		write!(f,r#"\
-# [{}]({})
-//TODO!!!!!: fill with full contents of the file
+		let inner_contents = std::fs::read_to_string(&self.path).unwrap().replace("\n#", "\n##"); // add extra header so when compiled contents are always subsections.
+
+		write!(f,r#"# {}
+
+{}
+
+{}
 "#
-		, self.split.name, self.path.display())
+		, self.split.name, self.path.display(), inner_contents)
 	}
 }
