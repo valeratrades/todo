@@ -1,7 +1,7 @@
-pub mod todos;
-pub mod day_section;
-pub mod utils;
 pub mod config;
+pub mod day_section;
+pub mod todos;
+pub mod utils;
 use config::Config;
 use utils::ExpandedPath;
 
@@ -22,7 +22,12 @@ struct Cli {
 enum Commands {
 	/// Opens the target path
 	Open(todos::OpenArgs),
-	/// Add a new task
+	/// Add a new task.
+	/// Every entry has the following format:
+	/// `{importance}-{difficulty}-{name}`,
+	///where:
+	///- importance: 0->9, the higher the more important
+	///- difficulty: 0->9, the higher the more difficult
 	Add(todos::AddArgs),
 	/// Compile list of first priority tasks based on time of day
 	Quickfix(todos::QuickfixArgs),
@@ -46,12 +51,8 @@ fn main() {
 			todos_flags.open = true;
 			todos::open_or_add(config, todos_flags, None)
 		}
-		Commands::Add(add_args) => {
-			todos::open_or_add(config, add_args.shared, Some(add_args.name))
-		}
-		Commands::Quickfix(_) => {
-			todos::compile_quickfix(config)
-		}
+		Commands::Add(add_args) => todos::open_or_add(config, add_args.shared, Some(add_args.name)),
+		Commands::Quickfix(_) => todos::compile_quickfix(config),
 	};
 
 	match success {
