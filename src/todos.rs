@@ -1,9 +1,11 @@
+use std::fmt::{self, Display};
 use crate::config::Config;
 use crate::day_section::DaySection;
 use crate::utils;
 use anyhow::{Context, Result};
 
 use clap::Args;
+use tempfile::{NamedTempFile, Builder};
 use std::path::PathBuf;
 
 pub fn compile_quickfix(config: Config) -> Result<()>{
@@ -22,24 +24,30 @@ pub fn compile_quickfix(config: Config) -> Result<()>{
 		}
 	}
 
-	//let len = tasks.len();
-	//for _ in 0..len {
-	//	for j in 0..=len {
-	//		if tasks[j].priority > tasks[j+1].priority {
-	//			tasks.swap(j, j+1);
-	//		}
-	//	}
-	//}
-
 	let len = tasks.len() as isize;
-	quick_sort(&mut tasks, 0, len - 1);
+	quick_sort_tasks(&mut tasks, 0, len - 1);
 
-	dbg!(&tasks);
+	let n = config.todos.n_tasks_to_show; 
+	let _cut_index = if tasks.len() > n { tasks.len() - n } else { 0 };
+	let to_show_tasks: Vec<_> = tasks[_cut_index..].iter().rev().cloned().collect();
 
 
-	// concat with description of the section
+	let mut quickfix_str = String::new();
+	for task in to_show_tasks {
+		quickfix_str.push_str(&format!("{}", task));
+		quickfix_str.push_str("\n\n");
+	}
+	quickfix_str.push_str("\n=============================================================================\n");
+	quickfix_str.push_str(day_section.description());
 
-	// compile String to md with pandoc or something and pipe into zathura
+	let tmp_file = Builder::new().suffix(".pdf").tempfile()?;
+	let tmp_path = tmp_file.path().to_path_buf();
+	let mut p = pandoc::new();
+	p.set_input(pandoc::InputKind::Pipe(quickfix_str));
+	p.set_output(pandoc::OutputKind::File(tmp_path.clone()));
+	p.execute()?;
+
+	let _status = std::process::Command::new("sh").arg("-c").arg(format!("zathura {}", tmp_path.display())).status()?;
 
 	Ok(())
 }
@@ -115,10 +123,17 @@ fn day_section_path<'a>(config: &'a Config, day_section: &'a DaySection) -> Path
 	todos_dir.join(path_appendix)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+struct TaskSplit {
+	importance: u8,
+	difficulty: u8,
+	name: String,
+}
+#[derive(Debug, Clone)]
 struct Task {
 	priority: f32,
 	path: PathBuf,
+	split: TaskSplit,
 }
 impl TryFrom<PathBuf> for Task {
 	type Error = anyhow::Error;
@@ -138,22 +153,23 @@ impl TryFrom<PathBuf> for Task {
 	
 		let importance: u8 = split[0].parse().with_context(|| formatting_error.clone())?;
 		let difficulty: u8 = split[1].parse().with_context(|| formatting_error.clone())?;
-		let _name: String = split[2..split.len()].concat().trim_end_matches(".md").to_string();	
+		let name: String = split[2..split.len()].concat().trim_end_matches(".md").to_string();	
+
+		let split = TaskSplit{ importance, difficulty, name };
 
 		let priority = importance * (10-difficulty);
 
-		Ok(Task{ priority: priority.into(), path })
+		Ok(Task{ priority: priority.into(), path, split })
 	}
 }
-
-fn quick_sort(arr: &mut [Task], low: isize, high: isize) {
+fn quick_sort_tasks(arr: &mut [Task], low: isize, high: isize) {
 	if low < high {
-		let p = partition(arr, low, high);
-		quick_sort(arr, low, p - 1);
-		quick_sort(arr, p + 1, high);
+		let p = partition_tasks(arr, low, high);
+		quick_sort_tasks(arr, low, p - 1);
+		quick_sort_tasks(arr, p + 1, high);
 	}
 }
-fn partition(arr: &mut [Task], low: isize, high: isize) -> isize {
+fn partition_tasks(arr: &mut [Task], low: isize, high: isize) -> isize {
 	let pivot = high as usize;
 	let mut store_index = low - 1;
 	let mut last_index = high;
@@ -175,4 +191,14 @@ fn partition(arr: &mut [Task], low: isize, high: isize) -> isize {
 	}
 	arr.swap(store_index as usize, pivot as usize);
 	store_index
+}
+
+impl Display for Task {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f,r#"\
+# [{}]({})
+//TODO!!!!!: fill with full contents of the file
+"#
+		, self.split.name, self.path.display())
+	}
 }

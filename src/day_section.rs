@@ -32,6 +32,15 @@ impl DaySection {
 		let day_section = day_section_borders.now_in(waketime);
 		Ok(day_section)
 	}
+
+	pub fn description(&self) -> &'static str {
+		match self {
+			DaySection::Morning => "morning",
+			DaySection::Work => "work",
+			DaySection::Evening => "this is evening",
+			DaySection::Night => "aenrdtiaeser",
+		}
+	}
 }
 
 #[derive(Debug)]
