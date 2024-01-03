@@ -43,3 +43,7 @@ tevo() {
 	nvim ${HOME}/data/personal/daily_stats.json
 }
 #
+
+#==============================================================================
+
+alias tev="todo manual --ev="
