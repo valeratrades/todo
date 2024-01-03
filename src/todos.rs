@@ -1,14 +1,14 @@
-use std::fmt::{self, Display};
 use crate::config::Config;
 use crate::day_section::DaySection;
 use crate::utils;
 use anyhow::{Context, Result};
+use std::fmt::{self, Display};
 
 use clap::Args;
-use tempfile::Builder;
 use std::path::PathBuf;
+use tempfile::Builder;
 
-pub fn compile_quickfix(config: Config) -> Result<()>{
+pub fn compile_quickfix(config: Config) -> Result<()> {
 	let day_section = DaySection::build().unwrap();
 	let path: PathBuf = day_section_path(&config, &day_section);
 
@@ -27,20 +27,19 @@ pub fn compile_quickfix(config: Config) -> Result<()>{
 	let len = tasks.len() as isize;
 	quick_sort_tasks(&mut tasks, 0, len - 1);
 
-	let n = config.todos.n_tasks_to_show; 
+	let n = config.todos.n_tasks_to_show;
 	let _cut_index = if tasks.len() > n { tasks.len() - n } else { 0 };
 	let to_show_tasks: Vec<_> = tasks[_cut_index..].iter().rev().cloned().collect();
-
 
 	let mut quickfix_str = String::new();
 	let len = to_show_tasks.len();
 	for i in 0..len {
 		quickfix_str.push_str(&format!("{}", to_show_tasks[i]));
-		if i < len-1 {
+		if i < len - 1 {
 			quickfix_str.push_str("# -----------------------------------------------------------------------------\n");
 		}
 	}
-	quickfix_str.push_str("\n\n# =============================================================================\n\n");
+	quickfix_str.push_str("\n\n\n\n# =============================================================================\n\n");
 	quickfix_str.push_str(day_section.description());
 
 	let tmp_file = Builder::new().suffix(".pdf").tempfile()?;
@@ -50,7 +49,10 @@ pub fn compile_quickfix(config: Config) -> Result<()>{
 	p.set_output(pandoc::OutputKind::File(tmp_path.clone()));
 	p.execute()?;
 
-	let _status = std::process::Command::new("sh").arg("-c").arg(format!("zathura {}", tmp_path.display())).status()?;
+	let _status = std::process::Command::new("sh")
+		.arg("-c")
+		.arg(format!("zathura {}", tmp_path.display()))
+		.status()?;
 
 	Ok(())
 }
@@ -104,10 +106,10 @@ pub struct QuickfixArgs {}
 impl TodosFlags {
 	fn extract_day_section(&self) -> DaySection {
 		match self {
-		Self { morning: true, .. } => DaySection::Morning,
-		Self { work: true, .. } => DaySection::Work,
-		Self { evening: true, .. } => DaySection::Evening,
-		Self { night: true, .. } => DaySection::Night,
+			Self { morning: true, .. } => DaySection::Morning,
+			Self { work: true, .. } => DaySection::Work,
+			Self { evening: true, .. } => DaySection::Evening,
+			Self { night: true, .. } => DaySection::Night,
 			_ => DaySection::Evening,
 		}
 	}
@@ -142,7 +144,8 @@ impl TryFrom<PathBuf> for Task {
 	type Error = anyhow::Error;
 
 	fn try_from(path: PathBuf) -> Result<Self> {
-		let filename = path.file_name()
+		let filename = path
+			.file_name()
 			.ok_or_else(|| anyhow::anyhow!("Filename not found in path"))?
 			.to_str()
 			.ok_or_else(|| anyhow::anyhow!("Filename is not valid UTF-8"))?;
@@ -153,16 +156,24 @@ impl TryFrom<PathBuf> for Task {
 		if split.len() < 3 || split[0].len() != 1 || split[1].len() != 1 {
 			return Err(anyhow::anyhow!(formatting_error.clone()));
 		}
-	
+
 		let importance: u8 = split[0].parse().with_context(|| formatting_error.clone())?;
 		let difficulty: u8 = split[1].parse().with_context(|| formatting_error.clone())?;
-		let name: String = split[2..split.len()].concat().trim_end_matches(".md").to_string();	
+		let name: String = split[2..split.len()].join(" ").trim_end_matches(".md").to_string();
 
-		let split = TaskSplit{ _importance: importance, _difficulty: difficulty, name };
+		let split = TaskSplit {
+			_importance: importance,
+			_difficulty: difficulty,
+			name,
+		};
 
-		let priority = importance * (10-difficulty);
+		let priority = importance * (10 - difficulty);
 
-		Ok(Task{ priority: priority.into(), path, split })
+		Ok(Task {
+			priority: priority.into(),
+			path,
+			split,
+		})
 	}
 }
 fn quick_sort_tasks(arr: &mut [Task], low: isize, high: isize) {
@@ -200,12 +211,17 @@ impl Display for Task {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		let inner_contents = std::fs::read_to_string(&self.path).unwrap().replace("\n#", "\n##"); // add extra header so when compiled contents are always subsections.
 
-		write!(f,r#"# {}
+		write!(
+			f,
+			r#"# {}
 
 {}
 
 {}
-"#
-		, self.split.name, self.path.display(), inner_contents)
+"#,
+			self.split.name,
+			self.path.display(),
+			inner_contents
+		)
 	}
 }
