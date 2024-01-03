@@ -14,6 +14,12 @@ pub struct Todos {
 	pub n_tasks_to_show: usize,
 }
 
+#[derive(Deserialize)]
+pub struct ManualStats {
+	pub path: ExpandedPath,
+	pub n_tasks_to_show: usize,
+}
+
 impl TryFrom<ExpandedPath> for Config {
 	type Error = anyhow::Error;
 

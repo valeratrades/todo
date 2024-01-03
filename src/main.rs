@@ -2,6 +2,7 @@ pub mod config;
 pub mod day_section;
 pub mod todos;
 pub mod utils;
+pub mod manual_stats;
 use config::Config;
 use utils::ExpandedPath;
 
@@ -43,6 +44,11 @@ enum Commands {
 	///todo quickfix
 	///```
 	Quickfix(todos::QuickfixArgs),
+	/// Record day's ev and other stats
+	///```rust
+	///todo manual --ev 420 -o
+	///```
+	Manual(manual_stats::ManualArgs),
 }
 
 fn main() {
