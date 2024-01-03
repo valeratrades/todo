@@ -43,7 +43,7 @@ create_stats_class! {
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Masturbation {
 	times: i32,
-	visuals__full_no_work: Option<String>,
+	visuals__full_none_work: Option<String>,
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
