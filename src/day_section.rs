@@ -35,10 +35,31 @@ impl DaySection {
 
 	pub fn description(&self) -> &'static str {
 		match self {
-			DaySection::Morning => "morning is for physical things",
-			DaySection::Work => "work is for necessary things",
-			DaySection::Evening => "evening for fun and reflection",
-			DaySection::Night => "SLEEP",
+			DaySection::Morning => r#"
+# Morning
+for physical things
+
+## Talking
+On constructive topics. No unprompted monologues, but can be interacted with to schedule plans or answer a question.
+"#,
+			DaySection::Work => r#"
+# Work
+for necessary things
+
+## Talking
+Absolutely none, except for strictly work-related reasons, in which case the conversation is immediately to the point, and to be cut down for time.
+"#,
+			DaySection::Evening => r#"
+# Evening
+fun and reflection
+
+## Talking
+Whatever you feel like, no limits whatsoever.
+"#,
+			DaySection::Night => r#"
+# Night
+## SLEEP
+"#,
 		}
 	}
 }
