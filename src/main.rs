@@ -21,6 +21,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
 	/// Opens the target path
+	///Ex
+	///```rust
+	///todo open -w
+	///```
 	Open(todos::OpenArgs),
 	/// Add a new task.
 	/// Every entry has the following format:
@@ -28,6 +32,10 @@ enum Commands {
 	///where:
 	///- importance: 0->9, the higher the more important
 	///- difficulty: 0->9, the higher the more difficult
+	///Ex:
+	///```rust
+	///todo add 2-3-test -n
+	//i/```
 	Add(todos::AddArgs),
 	/// Compile list of first priority tasks based on time of day
 	Quickfix(todos::QuickfixArgs),
