@@ -35,9 +35,13 @@ enum Commands {
 	///Ex:
 	///```rust
 	///todo add 2-3-test -n
-	//i/```
+	///```
 	Add(todos::AddArgs),
 	/// Compile list of first priority tasks based on time of day
+	///Ex:
+	///```rust
+	///todo quickfix
+	///```
 	Quickfix(todos::QuickfixArgs),
 }
 
