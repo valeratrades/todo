@@ -156,7 +156,7 @@ fn save_result(mut completed: bool) {
 		estimated_minutes: ongoing.estimated_minutes,
 		description: ongoing.description,
 		completed,
-		realised_minutes: realised_minutes,
+		realised_minutes,
 	};
 
 	let parent_dir = std::path::Path::new(&_static::SAVE_PATH).parent().unwrap();
@@ -222,6 +222,7 @@ fn help() {
 
 // ----------------------------------------------------------------------------
 
+//TODO!!!!: return Result \
 fn run() {
 	let task: Ongoing = {
 		if std::path::Path::new(&_static::STATE_PATH).exists() {
@@ -262,8 +263,11 @@ fn run() {
 			format!("{:02}:{:02}{}", e_diff / 60, e_diff % 60, description)
 		};
 
-		//NB: will break if the passed String has spaces in it.
-		let _ = Command::new("sh").arg("-c").arg(format!("eww update todo_timer={}", value)).output().unwrap();
+		let _ = Command::new("sh")
+			.arg("-c")
+			.arg(format!("eww update todo_timer={}", value.replace(" ", "_").unwrap()))
+			.output()
+			.unwrap();
 		if value.starts_with("Out") {
 			save_result(false);
 			std::process::exit(0);

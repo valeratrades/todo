@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use dirs;
 use serde::{Deserialize, Deserializer};
 use std::convert::AsRef;
@@ -48,10 +49,12 @@ impl AsRef<Path> for ExpandedPath {
 	}
 }
 
-pub fn open(path: PathBuf) {
+pub fn open(path: &PathBuf) -> Result<()> {
 	Command::new("sh")
 		.arg("-c")
 		.arg(format!("$EDITOR {}", path.display()))
 		.status()
-		.expect("$EDITOR env variable is not defined");
+		.map_err(|_| anyhow!("$EDITOR env variable is not defined or command failed"))?;
+
+	Ok(())
 }

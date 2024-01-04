@@ -7,6 +7,7 @@ use std::convert::TryFrom;
 pub struct Config {
 	pub todos: Todos,
 	pub manual_stats: ManualStats,
+	pub timer: Timer,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +19,13 @@ pub struct Todos {
 #[derive(Deserialize)]
 pub struct ManualStats {
 	pub path: ExpandedPath,
+}
+
+#[derive(Deserialize)]
+pub struct Timer {
+	pub state_path: ExpandedPath,
+	pub save_path: ExpandedPath,
+	pub hard_stop_coeff: f32,
 }
 
 impl TryFrom<ExpandedPath> for Config {

@@ -104,7 +104,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
 	if args.open == true {
-		utils::open(data_file_path);
+		utils::open(&data_file_path)?;
 	}
 
 	Ok(())

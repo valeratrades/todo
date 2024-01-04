@@ -1,17 +1,16 @@
 pub mod config;
 pub mod day_section;
+pub mod timer;
+pub mod manual_stats;
 pub mod todos;
 pub mod utils;
-pub mod manual_stats;
 use config::Config;
 use utils::ExpandedPath;
 
 use clap::{Parser, Subcommand};
-//use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
-#[command(propagate_version = true)]
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
@@ -49,6 +48,14 @@ enum Commands {
 	///todo manual --ev 420 -oy
 	///```
 	Manual(manual_stats::ManualArgs),
+	/// Start a task with timer, then store error (to track improvement of your estimations of time spent on different task categories)
+	///Example Usage:
+	///'''rust
+	///todo do start -t=15 -w --description==do-da-work
+	///. . . // start doing the task, then:
+	///todo do done
+	///'''
+	Timer(timer::TimerArgs),
 }
 
 fn main() {
@@ -72,6 +79,7 @@ fn main() {
 		Commands::Add(add_args) => todos::open_or_add(config, add_args.shared, Some(add_args.name)),
 		Commands::Quickfix(_) => todos::compile_quickfix(config),
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
+		Commands::Timer(timer_args) => timer::timing_the_task(config, timer_args),
 	};
 
 	match success {
