@@ -237,7 +237,8 @@ impl Display for Task {
 
 # General
 
-Clear separation between tasks below 5m, and those above. Those below can be done whenever, those not only in assigned time intervals.
+Clear separation between tasks below 5m and above. Those below can be done whenever, those not only in assigned time intervals.
+
 "#,
 			self.split.name,
 			self.path.display(),
