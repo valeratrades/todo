@@ -59,6 +59,9 @@ On constructive topics. No unprompted monologues, but can be interacted with to 
 
 ### Clothes
 Running outfit. Even after running I just change the underwear, and remain in it, until I transition to the `Work`.
+
+### Payed work
+Can be asked, but not requested.
 "#
 			}
 			DaySection::Work => {
@@ -75,6 +78,9 @@ Absolutely none, except for strictly work-related reasons, in which case the con
 
 ### Clothes
 Full suit, or just shirt, costum trousers and tie if it's hot.
+
+### Payed work
+First priority
 "#
 			}
 			DaySection::Evening => {
@@ -91,6 +97,9 @@ Whatever you feel like, no limits whatsoever.
 
 ### Clothes
 Any clothes I want, that are not taken up by the previous day sections.
+
+### Payed work
+Can be asked, but not requested.
 "#
 			}
 			DaySection::Night => {
