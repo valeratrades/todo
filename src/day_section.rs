@@ -40,9 +40,25 @@ impl DaySection {
 # Morning
 for physical things
 
+## Do every time
+- run
+- shower
+- 3-4 egg omelet
+
+### check
+- dishwasher
+- vacuum
+- any verifications
+
+### suggestions
+- typing practice
+
 ## Actions:
 ### Talking
 On constructive topics. No unprompted monologues, but can be interacted with to schedule plans or answer a question.
+
+### Clothes
+Running outfit. Even after running I just change the underwear, and remain in it, until I transition to the `Work`.
 "#
 			}
 			DaySection::Work => {
@@ -56,6 +72,9 @@ The only day section permitting cafein intake.
 
 ### Talking
 Absolutely none, except for strictly work-related reasons, in which case the conversation is immediately to the point, and to be cut down for time.
+
+### Clothes
+Full suit, or just shirt, costum trousers and tie if it's hot.
 "#
 			}
 			DaySection::Evening => {
@@ -63,9 +82,15 @@ Absolutely none, except for strictly work-related reasons, in which case the con
 # Evening
 fun and reflection
 
+## Do every time
+- go through the telegram entries made during the work session.
+
 ## Actions
 ### Talking
 Whatever you feel like, no limits whatsoever.
+
+### Clothes
+Any clothes I want, that are not taken up by the previous day sections.
 "#
 			}
 			DaySection::Night => {
