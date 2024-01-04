@@ -81,6 +81,9 @@ Full suit, or just shirt, costum trousers and tie if it's hot.
 
 ### Payed work
 First priority
+
+### Phone
+Turned off fully, and placed inside a mailbox if any urges arise.
 "#
 			}
 			DaySection::Evening => {
