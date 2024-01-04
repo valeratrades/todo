@@ -1,17 +1,16 @@
 pub mod config;
 pub mod day_section;
+pub mod do_it;
+pub mod manual_stats;
 pub mod todos;
 pub mod utils;
-pub mod manual_stats;
 use config::Config;
 use utils::ExpandedPath;
 
 use clap::{Parser, Subcommand};
-//use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
-#[command(propagate_version = true)]
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
@@ -49,6 +48,11 @@ enum Commands {
 	///todo manual --ev 420 -oy
 	///```
 	Manual(manual_stats::ManualArgs),
+	/// Time execution of a task
+	///'''rust
+	///todo do -t=15 -w --description==do-da-work
+	///'''
+	Do(do_it::DoArgs),
 }
 
 fn main() {
@@ -72,6 +76,7 @@ fn main() {
 		Commands::Add(add_args) => todos::open_or_add(config, add_args.shared, Some(add_args.name)),
 		Commands::Quickfix(_) => todos::compile_quickfix(config),
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
+		Commands::Do(do_args) => do_it::timing_the_task(config, do_args),
 	};
 
 	match success {

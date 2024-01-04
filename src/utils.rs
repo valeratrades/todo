@@ -48,7 +48,7 @@ impl AsRef<Path> for ExpandedPath {
 	}
 }
 
-pub fn open(path: PathBuf) {
+pub fn open(path: &PathBuf) {
 	Command::new("sh")
 		.arg("-c")
 		.arg(format!("$EDITOR {}", path.display()))

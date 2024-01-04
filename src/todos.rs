@@ -68,7 +68,7 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 	}
 
 	if flags.open == true {
-		utils::open(path);
+		utils::open(&path);
 	}
 
 	Ok(())
