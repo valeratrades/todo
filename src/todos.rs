@@ -68,9 +68,11 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 	}
 
 	if flags.open == true {
+		//TODO!!!: git -c pull here
 		utils::open(&path)?;
 	}
 
+	//TODO!!!: git -c push here
 	Ok(())
 }
 
