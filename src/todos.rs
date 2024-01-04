@@ -68,11 +68,25 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 	}
 
 	if flags.open == true {
-		//TODO!!!: git -c pull here
+		let _ = std::process::Command::new("sh")
+			.arg("-c")
+			.arg(format!("git -C \"{}\" pull", config.todos.path.0.display()))
+			.spawn()
+			.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
+
 		utils::open(&path)?;
 	}
 
-	//TODO!!!: git -c push here
+	let _t = &config.todos.path.0.display();
+	let _ = std::process::Command::new("sh")
+		.arg("-c")
+		.arg(format!(
+			"git -C \"{}\" add -A && git -C \"{}\" commit -m \".\" && git -C \"{}\" push",
+			_t, _t, _t
+		))
+		.spawn()
+		.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
+
 	Ok(())
 }
 
