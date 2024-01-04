@@ -1,13 +1,14 @@
+pub mod activity_monitor;
 pub mod config;
 pub mod day_section;
-pub mod timer;
 pub mod manual_stats;
+pub mod timer;
 pub mod todos;
 pub mod utils;
 use config::Config;
 use utils::ExpandedPath;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -42,7 +43,7 @@ enum Commands {
 	///```rust
 	///todo quickfix
 	///```
-	Quickfix(todos::QuickfixArgs),
+	Quickfix(NoArgs),
 	/// Record day's ev and other stats
 	///```rust
 	///todo manual --ev 420 -oy
@@ -56,7 +57,11 @@ enum Commands {
 	///todo do done
 	///'''
 	Timer(timer::TimerArgs),
+	/// Start monitoring user activities
+	Monitor(NoArgs),
 }
+#[derive(Args)]
+struct NoArgs {}
 
 fn main() {
 	let cli = Cli::parse();
@@ -80,6 +85,7 @@ fn main() {
 		Commands::Quickfix(_) => todos::compile_quickfix(config),
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
 		Commands::Timer(timer_args) => timer::timing_the_task(config, timer_args),
+		Commands::Monitor(_) => activity_monitor::start(config),
 	};
 
 	match success {

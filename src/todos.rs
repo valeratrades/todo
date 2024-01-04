@@ -100,8 +100,6 @@ pub struct TodosFlags {
 	#[arg(long, short)]
 	pub open: bool,
 }
-#[derive(Args)]
-pub struct QuickfixArgs {}
 
 impl TodosFlags {
 	fn extract_day_section(&self) -> DaySection {

@@ -8,6 +8,7 @@ pub struct Config {
 	pub todos: Todos,
 	pub manual_stats: ManualStats,
 	pub timer: Timer,
+	pub activity_monitor: ActivityMonitor,
 }
 
 #[derive(Deserialize)]
@@ -26,6 +27,12 @@ pub struct Timer {
 	pub state_path: ExpandedPath,
 	pub save_path: ExpandedPath,
 	pub hard_stop_coeff: f32,
+}
+
+#[derive(Deserialize)]
+pub struct ActivityMonitor {
+	pub save_dir: ExpandedPath,
+	pub delimitor: String,
 }
 
 impl TryFrom<ExpandedPath> for Config {
