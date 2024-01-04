@@ -77,25 +77,6 @@ struct TimerStartArgs {
 	category: CategoryFlags,
 }
 
-//NB: `t` and `d` are taken
-#[derive(Args)]
-struct CategoryFlags {
-	#[arg(long)]
-	home: bool,
-	#[arg(long)]
-	rust: bool,
-	#[arg(long)]
-	go: bool,
-	#[arg(long)]
-	python: bool,
-	#[arg(long)]
-	workout: bool,
-	#[arg(long)]
-	library: bool,
-	#[arg(long)]
-	git_issue: bool,
-}
-
 #[derive(Args)]
 struct TimerDoneArgs {}
 #[derive(Args)]
@@ -105,40 +86,31 @@ struct TimerOpenArgs {}
 #[derive(Args)]
 struct TimerContinueArgs {}
 
-//-----------------------------------------------------------------------------
+macro_rules! category_flags {
+	($($name:ident),*) => {
 
-
-impl CategoryFlags {
-	fn extract_category_name(&self) -> String {
-		match self {
-			Self { rust: true, .. } => "rust".to_owned(),
-			Self { go: true, .. } => "go".to_owned(),
-			Self { python: true, .. } => "python".to_owned(),
-			Self { home: true, .. } => "home chore".to_owned(),
-			Self { workout: true, .. } => "workout".to_owned(),
-			Self { library: true, .. } => "library".to_owned(),
-			Self { git_issue: true, .. } => "issue git".to_owned(),
-			_ => "".to_owned(),
+	#[derive(Args)]
+	struct CategoryFlags {
+		$(
+		#[arg(long)]
+		$name: bool,
+		)*
+	}
+	
+	impl CategoryFlags {
+		fn extract_category_name(&self) -> String {
+			match self {
+				$(
+				Self { $name: true, .. } => stringify!($name).replace("_", " ").to_owned(),
+				)*
+				_ => "".to_owned(),
+			}
 		}
 	}
+	};
 }
-
-//TODO!: impl macro rules to define the struct of Catergoryflags from array of their names, and also impl the extract after.
-//macro_rules! create_extract_category {
-//	(struct $name:ident { $($field:ident : bool,)* }) => {
-//		impl $name {
-//		fn extract_category(&self) -> String {
-//		match self {
-//		$(
-//		Self { $field: true, .. } => stringify!($field).replace("_", " ").to_owned(),
-//		)*
-//		_ => "".to_owned(),
-//		}
-//		}
-//		}
-//	};
-//}
-
+category_flags!(rust, go, python, home, workout, library, git_issue);
+//-----------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Ongoing {
