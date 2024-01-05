@@ -5,8 +5,9 @@ use std::convert::TryFrom;
 
 #[derive(Deserialize)]
 pub struct Config {
+	pub data_dir: ExpandedPath,
+	pub date_format: String,
 	pub todos: Todos,
-	pub manual_stats: ManualStats,
 	pub timer: Timer,
 	pub activity_monitor: ActivityMonitor,
 }
@@ -18,21 +19,12 @@ pub struct Todos {
 }
 
 #[derive(Deserialize)]
-pub struct ManualStats {
-	pub path: ExpandedPath,
-}
-
-#[derive(Deserialize)]
 pub struct Timer {
-	pub state_path: ExpandedPath,
-	pub save_path: ExpandedPath,
 	pub hard_stop_coeff: f32,
 }
 
 #[derive(Deserialize)]
 pub struct ActivityMonitor {
-	pub activities_dir: ExpandedPath,
-	pub totals_dir: ExpandedPath,
 	pub delimitor: String,
 }
 
@@ -44,6 +36,8 @@ impl TryFrom<ExpandedPath> for Config {
 
 		let config: Config = toml::from_str(&config_str)
 			.with_context(|| "The config file is not correctly formatted TOML\nand/or\n is missing some of the required fields")?;
+
+		let _ = std::fs::create_dir_all(&config.data_dir.0);
 
 		Ok(config)
 	}

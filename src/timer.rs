@@ -1,23 +1,30 @@
-use chrono::prelude::*;
-use serde::{Deserialize, Serialize};
-use crate::utils;
 use crate::config::Config;
+use crate::utils;
 use anyhow::{anyhow, Result};
+use chrono::prelude::*;
 use clap::Args;
 use clap::Subcommand;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::process::Command;
 
+use crate::ONGOING_PATH_APPENDIX;
+use crate::TIMED_PATH_APPENDIX;
+
 pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
-	let state_path = &config.timer.state_path.0;
-	let save_path = &config.timer.save_path.0;
+	let state_path = &config.data_dir.0.join(ONGOING_PATH_APPENDIX);
+	let save_path = &config.data_dir.0.join(TIMED_PATH_APPENDIX);
+	let _ = std::fs::create_dir(&state_path);
+	let _ = std::fs::create_dir(&save_path);
 
 	let success = match args.command {
 		TimerCommands::Start(start_args) => {
 			if start_args.time > 90 {
-				return Err(anyhow!("Provided time is too large. Cut your task into smaller parts. Anything above 90m does not make sense."));
+				return Err(anyhow!(
+					"Provided time is too large. Cut your task into smaller parts. Anything above 90m does not make sense."
+				));
 			}
 
 			let timestamp_s = Utc::now().timestamp() as u32;
@@ -28,25 +35,16 @@ pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
 				description: start_args.description,
 			};
 
-			let _ = std::fs::create_dir_all(state_path.parent().unwrap());
 			let mut file = File::create(state_path)?;
 			let serialized = serde_json::to_string(&task).unwrap();
 			file.write_all(serialized.as_bytes()).unwrap();
 
 			run(&config)
-		},
-		TimerCommands::Open(_) => {
-			utils::open(save_path)
-		},
-		TimerCommands::Done(_) => {
-			save_result(&config, true)
-		},
-		TimerCommands::Failed(_) => {
-			save_result(&config, false)
-		},
-		TimerCommands::ContinueOngoing(_) => {
-			run(&config)
-		},
+		}
+		TimerCommands::Open(_) => utils::open(save_path),
+		TimerCommands::Done(_) => save_result(&config, true),
+		TimerCommands::Failed(_) => save_result(&config, false),
+		TimerCommands::ContinueOngoing(_) => run(&config),
 	};
 
 	success
@@ -96,7 +94,7 @@ macro_rules! category_flags {
 		$name: bool,
 		)*
 	}
-	
+
 	impl CategoryFlags {
 		fn extract_category_name(&self) -> String {
 			match self {
@@ -130,11 +128,10 @@ struct Record {
 	realised_minutes: u32,
 }
 
-fn save_result(config: &Config, mut completed: bool) -> Result <()> {
-	let state_path = &config.timer.state_path.0;
-	let save_path = &config.timer.save_path.0;
+fn save_result(config: &Config, mut completed: bool) -> Result<()> {
+	let state_path = &config.data_dir.0.join(ONGOING_PATH_APPENDIX);
+	let save_path = &config.data_dir.0.join(TIMED_PATH_APPENDIX);
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
-
 
 	let mut file = File::open(state_path).unwrap();
 	let mut contents = String::new();
@@ -160,7 +157,6 @@ fn save_result(config: &Config, mut completed: bool) -> Result <()> {
 		realised_minutes,
 	};
 
-	let _ = std::fs::create_dir_all(save_path.parent().unwrap());
 	let mut results: VecDeque<Record> = match File::open(save_path) {
 		Ok(mut file) => {
 			let mut contents = String::new();
@@ -180,7 +176,11 @@ fn save_result(config: &Config, mut completed: bool) -> Result <()> {
 	if let Ok(eww_output) = Command::new("sh").arg("-c").arg("eww get todo_timer".to_owned()).output() {
 		let todo_timer = String::from_utf8_lossy(&eww_output.stdout).trim().to_string();
 		if !todo_timer.starts_with("Out") {
-			let _ = Command::new("sh").arg("-c").arg("eww update todo_timer=None".to_owned()).output().unwrap();
+			let _ = Command::new("sh")
+				.arg("-c")
+				.arg("eww update todo_timer=None".to_owned())
+				.output()
+				.unwrap();
 		}
 	}
 
@@ -188,7 +188,7 @@ fn save_result(config: &Config, mut completed: bool) -> Result <()> {
 }
 
 fn run(config: &Config) -> Result<()> {
-	let state_path = &config.timer.state_path.0;
+	let state_path = &config.data_dir.0.join(ONGOING_PATH_APPENDIX);
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
 
 	let task: Ongoing = {
@@ -244,5 +244,3 @@ fn run(config: &Config) -> Result<()> {
 
 	Ok(())
 }
-
-

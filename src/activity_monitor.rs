@@ -11,12 +11,10 @@ use std::{
 	process::{Command, Output},
 };
 
-const DATE_FORMAT: &'static str = "%Y-%m-%d";
+use crate::MONITOR_PATH_APPENDIX;
+use crate::TOTALS_PATH_APPENDIX;
 
 pub fn start(config: Config) -> Result<()> {
-	let _ = std::fs::create_dir_all(&config.activity_monitor.activities_dir.0);
-	let _ = std::fs::create_dir_all(&config.activity_monitor.totals_dir.0);
-
 	let mut prev_activity_name = String::new();
 	let mut start_s = Utc::now().timestamp();
 	loop {
@@ -41,6 +39,9 @@ struct Activity {
 }
 
 fn get_activity(config: &Config) -> String {
+	let _ = std::fs::create_dir(&config.data_dir.0.join(MONITOR_PATH_APPENDIX));
+	let _ = std::fs::create_dir(&config.data_dir.0.join(TOTALS_PATH_APPENDIX));
+
 	fn cmd<S>(command: S) -> Output
 	where
 		S: AsRef<OsStr>,
@@ -96,12 +97,11 @@ fn get_activity(config: &Config) -> String {
 
 /// Incredibly inefficient way of recording a new entry, because we load all the existing ones first.
 fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
-	let save_dir = &config.activity_monitor.activities_dir.0;
-	let _ = std::fs::create_dir_all(&save_dir);
+	let save_dir = &config.data_dir.0.join(MONITOR_PATH_APPENDIX);
 
 	let record = Activity { name, start_s, end_s };
 
-	let date = Utc::now().format(DATE_FORMAT).to_string();
+	let date = Utc::now().format(&config.date_format.as_str()).to_string();
 	let target_path = save_dir.join(&date);
 	let mut records: VecDeque<Activity> = match File::open(&target_path) {
 		Ok(mut file) => {
@@ -121,13 +121,13 @@ fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
 //-----------------------------------------------------------------------------
 
 fn compile_yd_totals(config: &Config) {
-	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(DATE_FORMAT).to_string();
-	let yd_totals_file = (&config.activity_monitor.totals_dir.0).join(&date_yd);
+	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(config.date_format.as_str()).to_string();
+	let yd_totals_file = (&config.data_dir.0.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
 	if yd_totals_file.exists() {
 		return;
 	};
 
-	let yd_activities_file = (&config.activity_monitor.activities_dir.0).join(&date_yd);
+	let yd_activities_file = (&config.data_dir.0.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
 	let file_contents = match std::fs::read_to_string(&yd_activities_file) {
 		Ok(c) => c,
 		Err(_) => "[]".to_owned(),
