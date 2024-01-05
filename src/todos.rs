@@ -39,8 +39,19 @@ pub fn compile_quickfix(config: Config) -> Result<()> {
 			quickfix_str.push_str("# -----------------------------------------------------------------------------\n");
 		}
 	}
-	quickfix_str.push_str("\n\n\n\n# =============================================================================\n\n");
-	quickfix_str.push_str(day_section.description());
+	quickfix_str.push_str(&format!(
+		r#"
+# =============================================================================
+{}
+
+# -----------------------------------------------------------------------------
+
+# General
+
+Clear separation between tasks below 5m and above. Those below can be done whenever, those not only in assigned time intervals.
+"#,
+		day_section.description()
+	));
 
 	let tmp_file = Builder::new().suffix(".pdf").tempfile()?;
 	let tmp_path = tmp_file.path().to_path_buf();
@@ -232,12 +243,6 @@ impl Display for Task {
 {}
 
 {}
-
-# -----------------------------------------------------------------------------
-
-# General
-
-Clear separation between tasks below 5m and above. Those below can be done whenever, those not only in assigned time intervals.
 
 "#,
 			self.split.name,
