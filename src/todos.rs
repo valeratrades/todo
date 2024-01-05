@@ -82,7 +82,7 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 		let _ = std::process::Command::new("sh")
 			.arg("-c")
 			.arg(format!("git -C \"{}\" pull", config.todos.path.0.display()))
-			.spawn()
+			.status()
 			.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
 
 		utils::open(&path)?;
