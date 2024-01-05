@@ -11,16 +11,22 @@ use std::{
 	process::{Command, Output},
 };
 
+const DATE_FORMAT: &'static str = "%Y-%m-%d";
+
 pub fn start(config: Config) -> Result<()> {
-	let mut prev_activity = String::new();
+	let _ = std::fs::create_dir_all(&config.activity_monitor.activities_dir.0);
+	let _ = std::fs::create_dir_all(&config.activity_monitor.totals_dir.0);
+
+	let mut prev_activity_name = String::new();
 	let mut start_s = Utc::now().timestamp();
 	loop {
-		let activity = get_activity(&config);
-		if prev_activity != activity {
+		let activity_name = get_activity(&config);
+		if prev_activity_name != activity_name {
 			let now = Utc::now().timestamp();
-			record_activity(&config, activity.clone(), start_s, now);
+			record_activity(&config, activity_name.clone(), start_s, now);
+			compile_yd_totals(&config);
 
-			prev_activity = activity;
+			prev_activity_name = activity_name;
 			start_s = now;
 		}
 		std::thread::sleep(std::time::Duration::from_secs(1));
@@ -28,7 +34,7 @@ pub fn start(config: Config) -> Result<()> {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Record {
+struct Activity {
 	name: String,
 	start_s: i64,
 	end_s: i64,
@@ -90,14 +96,14 @@ fn get_activity(config: &Config) -> String {
 
 /// Incredibly inefficient way of recording a new entry, because we load all the existing ones first.
 fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
-	let save_dir = &config.activity_monitor.save_dir.0;
+	let save_dir = &config.activity_monitor.activities_dir.0;
 	let _ = std::fs::create_dir_all(&save_dir);
 
-	let record = Record { name, start_s, end_s };
+	let record = Activity { name, start_s, end_s };
 
-	let date = Utc::now().format("%Y-%m-%d").to_string();
+	let date = Utc::now().format(DATE_FORMAT).to_string();
 	let target_path = save_dir.join(&date);
-	let mut records: VecDeque<Record> = match File::open(&target_path) {
+	let mut records: VecDeque<Activity> = match File::open(&target_path) {
 		Ok(mut file) => {
 			let mut contents = String::new();
 			file.read_to_string(&mut contents).unwrap();
@@ -110,4 +116,85 @@ fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
 	let mut file = File::create(&target_path).unwrap();
 	let json = serde_json::to_string(&records).unwrap();
 	file.write_all(json.as_bytes()).unwrap();
+}
+
+//-----------------------------------------------------------------------------
+
+fn compile_yd_totals(config: &Config) {
+	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(DATE_FORMAT).to_string();
+	let yd_totals_file = (&config.activity_monitor.totals_dir.0).join(&date_yd);
+	if yd_totals_file.exists() {
+		return;
+	};
+
+	let yd_activities_file = (&config.activity_monitor.activities_dir.0).join(&date_yd);
+	let file_contents = match std::fs::read_to_string(&yd_activities_file) {
+		Ok(c) => c,
+		Err(_) => "[]".to_owned(),
+	};
+	let yd_activities: Vec<Activity> = serde_json::from_str(&file_contents).unwrap();
+
+	let mut totals: Vec<Total> = Vec::new();
+	for a in yd_activities {
+		let time = a.end_s - a.start_s;
+
+		//NB: rely on always having `2 <= levels <= 3` in the name
+		let split: Vec<&str> = a.name.split(&config.activity_monitor.delimitor).collect();
+
+		// there has to be a better way to do this, but I'm not smart enough for rust way yet.
+		let l0_name = split[0].to_owned();
+		let l0_index = match totals.iter().position(|t| t.name == l0_name) {
+			Some(index) => index,
+			None => {
+				totals.push(Total::new(l0_name));
+				totals.len() - 1
+			}
+		};
+		{
+			totals[l0_index].time_s += time;
+		}
+		let l1_name = split[1].to_owned();
+		let l1_index = match totals[l0_index].children.iter().position(|t| t.name == l1_name) {
+			Some(index) => index,
+			None => {
+				totals[l0_index].children.push(Total::new(l1_name));
+				totals.len() - 1
+			}
+		};
+		{
+			totals[l0_index].children[l1_index].time_s += time;
+		}
+		if split.len() > 2 {
+			let l2_name = split[2].to_owned();
+			let l2_index = match totals[l0_index].children[l1_index].children.iter().position(|t| t.name == l2_name) {
+				Some(index) => index,
+				None => {
+					totals[l0_index].children[l1_index].children.push(Total::new(l2_name));
+					totals.len() - 1
+				}
+			};
+			{
+				totals[l0_index].children[l1_index].children[l2_index].time_s += time;
+			}
+		}
+	}
+
+	let formatted_json = serde_json::to_string_pretty(&totals).unwrap();
+	let mut file = std::fs::File::create(&yd_totals_file).unwrap(); //NB: replaces the existing if any
+	file.write_all(formatted_json.as_bytes()).unwrap();
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct Total {
+	name: String,
+	time_s: i64,
+	children: Vec<Total>,
+}
+impl Total {
+	fn new(name: String) -> Self {
+		Total {
+			name,
+			time_s: 0,
+			children: Vec::<Total>::new(),
+		}
+	}
 }

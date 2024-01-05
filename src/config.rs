@@ -31,7 +31,8 @@ pub struct Timer {
 
 #[derive(Deserialize)]
 pub struct ActivityMonitor {
-	pub save_dir: ExpandedPath,
+	pub activities_dir: ExpandedPath,
+	pub totals_dir: ExpandedPath,
 	pub delimitor: String,
 }
 
