@@ -183,6 +183,11 @@ fn compile_yd_totals(config: &Config) {
 	let mut file = std::fs::File::create(&yd_totals_file).unwrap(); //NB: replaces the existing if any
 	file.write_all(formatted_json.as_bytes()).unwrap();
 }
+
+//you'll want to use `position()` which returns an `Option<usize>`
+//if it's none, `add` it
+//if it's there, deref the usize
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Total {
 	name: String,
