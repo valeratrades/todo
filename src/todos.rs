@@ -95,7 +95,7 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 			"git -C \"{}\" add -A && git -C \"{}\" commit -m \".\" && git -C \"{}\" push",
 			_t, _t, _t
 		))
-		.spawn()
+		.status()
 		.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
 
 	Ok(())
