@@ -87,6 +87,8 @@ fn get_activity(config: &Config) -> String {
 				}
 			} else if class == "discord" {
 				activity = "Discord".to_owned();
+			} else if class == "Zulip" {
+				activity = "Zulip".to_owned();
 			}
 		}
 	}
