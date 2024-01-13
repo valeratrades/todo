@@ -1,9 +1,9 @@
-pub mod activity_monitor;
+mod activity_monitor;
 pub mod config;
 pub mod day_section;
-pub mod manual_stats;
-pub mod timer;
-pub mod todos;
+mod manual_stats;
+mod timer;
+mod todos;
 pub mod utils;
 use config::Config;
 use utils::ExpandedPath;
