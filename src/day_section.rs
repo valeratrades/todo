@@ -44,6 +44,7 @@ for physical things
 - run
 - shower
 - 3-4 egg omelet
+- 15m of typing practice right before the transition to `Work`
 
 ### check
 - dishwasher
