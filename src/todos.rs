@@ -81,14 +81,14 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 	if flags.open == true {
 		let _ = std::process::Command::new("sh")
 			.arg("-c")
-			.arg(format!("git -C \"{}\" pull", config.todos.path.0.display()))
+			.arg(format!("git -C \"{}\" pull", config.todos.path.display()))
 			.status()
 			.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
 
 		utils::open(&path)?;
 	}
 
-	let _t = &config.todos.path.0.display();
+	let _t = &config.todos.path.display();
 	let _ = std::process::Command::new("sh")
 		.arg("-c")
 		.arg(format!(
@@ -141,7 +141,7 @@ impl TodosFlags {
 }
 
 fn day_section_path<'a>(config: &'a Config, day_section: &'a DaySection) -> PathBuf {
-	let todos_dir = config.todos.path.0.clone();
+	let todos_dir = config.todos.path.clone();
 
 	let path_appendix: &str = match day_section.to_owned() {
 		DaySection::Morning => ".morning/",

@@ -39,8 +39,8 @@ struct Activity {
 }
 
 fn get_activity(config: &Config) -> String {
-	let _ = std::fs::create_dir(&config.data_dir.0.join(MONITOR_PATH_APPENDIX));
-	let _ = std::fs::create_dir(&config.data_dir.0.join(TOTALS_PATH_APPENDIX));
+	let _ = std::fs::create_dir(&config.data_dir.join(MONITOR_PATH_APPENDIX));
+	let _ = std::fs::create_dir(&config.data_dir.join(TOTALS_PATH_APPENDIX));
 
 	fn cmd<S>(command: S) -> Output
 	where
@@ -99,7 +99,7 @@ fn get_activity(config: &Config) -> String {
 
 /// Incredibly inefficient way of recording a new entry, because we load all the existing ones first.
 fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
-	let save_dir = &config.data_dir.0.join(MONITOR_PATH_APPENDIX);
+	let save_dir = &config.data_dir.join(MONITOR_PATH_APPENDIX);
 
 	let record = Activity { name, start_s, end_s };
 
@@ -124,12 +124,12 @@ fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
 
 fn compile_yd_totals(config: &Config) {
 	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(config.date_format.as_str()).to_string();
-	let yd_totals_file = (&config.data_dir.0.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
+	let yd_totals_file = (&config.data_dir.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
 	if yd_totals_file.exists() {
 		return;
 	};
 
-	let yd_activities_file = (&config.data_dir.0.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
+	let yd_activities_file = (&config.data_dir.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
 	let file_contents = match std::fs::read_to_string(&yd_activities_file) {
 		Ok(c) => c,
 		Err(_) => "[]".to_owned(),

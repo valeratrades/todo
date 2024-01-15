@@ -14,8 +14,8 @@ use crate::ONGOING_PATH_APPENDIX;
 use crate::TIMED_PATH_APPENDIX;
 
 pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
-	let state_path = &config.data_dir.0.join(ONGOING_PATH_APPENDIX);
-	let save_path = &config.data_dir.0.join(TIMED_PATH_APPENDIX);
+	let state_path = &config.data_dir.join(ONGOING_PATH_APPENDIX);
+	let save_path = &config.data_dir.join(TIMED_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&state_path);
 	let _ = std::fs::create_dir(&save_path);
 
@@ -129,8 +129,8 @@ struct Record {
 }
 
 fn save_result(config: &Config, mut completed: bool) -> Result<()> {
-	let state_path = &config.data_dir.0.join(ONGOING_PATH_APPENDIX);
-	let save_path = &config.data_dir.0.join(TIMED_PATH_APPENDIX);
+	let state_path = &config.data_dir.join(ONGOING_PATH_APPENDIX);
+	let save_path = &config.data_dir.join(TIMED_PATH_APPENDIX);
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
 
 	let mut file = File::open(state_path).unwrap();
@@ -188,7 +188,7 @@ fn save_result(config: &Config, mut completed: bool) -> Result<()> {
 }
 
 fn run(config: &Config) -> Result<()> {
-	let state_path = &config.data_dir.0.join(ONGOING_PATH_APPENDIX);
+	let state_path = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
 
 	let task: Ongoing = {

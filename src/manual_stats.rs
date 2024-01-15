@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use crate::MANUAL_PATH_APPENDIX;
 
 pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
-	let data_storage_dir: PathBuf = config.data_dir.0.clone().join(MANUAL_PATH_APPENDIX);
+	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
 
 	if args.ev == None && args.open == false {
