@@ -12,7 +12,7 @@ impl TryFrom<ExpandedPath> for Config {
 		let raw_config: RawConfig = toml::from_str(&config_str)
 			.with_context(|| "The config file is not correctly formatted TOML\nand/or\n is missing some of the required fields")?;
 
-		let config = raw_config.apprehend();
+		let config = raw_config.process();
 		let _ = std::fs::create_dir_all(&config.data_dir);
 
 		Ok(config)
@@ -20,7 +20,7 @@ impl TryFrom<ExpandedPath> for Config {
 }
 
 //-----------------------------------------------------------------------------
-// Apprehended Config
+// Processed Config
 //-----------------------------------------------------------------------------
 
 pub struct Config {
@@ -48,11 +48,11 @@ pub struct RawConfig {
 	pub activity_monitor: ActivityMonitor,
 }
 impl RawConfig {
-	fn apprehend(&self) -> Config {
+	fn process(&self) -> Config {
 		Config {
 			data_dir: self.data_dir.0.clone(),
 			date_format: self.date_format.clone(),
-			todos: self.todos.apprehend(),
+			todos: self.todos.process(),
 			timer: self.timer.clone(),
 			activity_monitor: self.activity_monitor.clone(),
 		}
@@ -65,7 +65,7 @@ pub struct RawTodos {
 	pub n_tasks_to_show: usize,
 }
 impl RawTodos {
-	fn apprehend(&self) -> Todos {
+	fn process(&self) -> Todos {
 		Todos {
 			path: self.path.0.clone(),
 			n_tasks_to_show: self.n_tasks_to_show,
