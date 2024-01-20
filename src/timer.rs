@@ -13,6 +13,7 @@ use std::process::Command;
 use crate::ONGOING_PATH_APPENDIX;
 use crate::TIMED_PATH_APPENDIX;
 
+//TODO!!!!: make it possible to have multiple files in the state file, so it can be used as a fully fletched quickfix todo list.
 pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
