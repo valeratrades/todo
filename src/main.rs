@@ -11,8 +11,8 @@ use utils::ExpandedPath;
 use clap::{Args, Parser, Subcommand};
 
 const MANUAL_PATH_APPENDIX: &'static str = "manual_stats/";
-const MONITOR_PATH_APPENDIX: &'static str = "activities_monitor";
-const TOTALS_PATH_APPENDIX: &'static str = "activities_totals";
+const MONITOR_PATH_APPENDIX: &'static str = "activities_monitor/";
+const TOTALS_PATH_APPENDIX: &'static str = "activities_totals/";
 const ONGOING_PATH_APPENDIX: &'static str = "tmp/timer_ongoing.json";
 const TIMED_PATH_APPENDIX: &'static str = "timed_tasks/";
 

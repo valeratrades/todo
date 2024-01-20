@@ -14,10 +14,10 @@ use crate::ONGOING_PATH_APPENDIX;
 use crate::TIMED_PATH_APPENDIX;
 
 pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
-	let state_path = &config.data_dir.join(ONGOING_PATH_APPENDIX);
-	let save_path = &config.data_dir.join(TIMED_PATH_APPENDIX);
-	let _ = std::fs::create_dir(&state_path);
-	let _ = std::fs::create_dir(&save_path);
+	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
+	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
+	let save_file = save_dir.join(format!("{}.json", Utc::now().format(&config.date_format)));
+	let _ = std::fs::create_dir(&save_dir);
 
 	let success = match args.command {
 		TimerCommands::Start(start_args) => {
@@ -35,13 +35,13 @@ pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
 				description: start_args.description,
 			};
 
-			let mut file = File::create(state_path)?;
+			let mut file = File::create(state_file)?;
 			let serialized = serde_json::to_string(&task).unwrap();
 			file.write_all(serialized.as_bytes()).unwrap();
 
 			run(&config)
 		}
-		TimerCommands::Open(_) => utils::open(save_path),
+		TimerCommands::Open(_) => utils::open(&save_file),
 		TimerCommands::Done(_) => save_result(&config, true),
 		TimerCommands::Failed(_) => save_result(&config, false),
 		TimerCommands::ContinueOngoing(_) => run(&config),
@@ -129,11 +129,12 @@ struct Record {
 }
 
 fn save_result(config: &Config, mut completed: bool) -> Result<()> {
-	let state_path = &config.data_dir.join(ONGOING_PATH_APPENDIX);
-	let save_path = &config.data_dir.join(TIMED_PATH_APPENDIX);
+	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
+	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
+	let save_file = save_dir.join(format!("{}.json", Utc::now().format(&config.date_format)));
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
 
-	let mut file = File::open(state_path).unwrap();
+	let mut file = File::open(state_file).unwrap();
 	let mut contents = String::new();
 	file.read_to_string(&mut contents).unwrap();
 	let ongoing: Ongoing = serde_json::from_str(&contents).unwrap();
@@ -157,7 +158,7 @@ fn save_result(config: &Config, mut completed: bool) -> Result<()> {
 		realised_minutes,
 	};
 
-	let mut results: VecDeque<Record> = match File::open(save_path) {
+	let mut results: VecDeque<Record> = match File::open(&save_file) {
 		Ok(mut file) => {
 			let mut contents = String::new();
 			file.read_to_string(&mut contents).unwrap();
@@ -168,9 +169,9 @@ fn save_result(config: &Config, mut completed: bool) -> Result<()> {
 
 	results.push_back(result);
 
-	let mut file = File::create(save_path).unwrap(); //NB: overrides the existing file if any.
+	let mut file = File::create(&save_file).unwrap(); //NB: overrides the existing file if any.
 	file.write_all(serde_json::to_string(&results).unwrap().as_bytes()).unwrap();
-	let _ = std::fs::remove_file(state_path);
+	let _ = std::fs::remove_file(state_file);
 
 	std::thread::sleep(std::time::Duration::from_millis(300)); // wait for eww to process previous request if any.
 	if let Ok(eww_output) = Command::new("sh").arg("-c").arg("eww get todo_timer".to_owned()).output() {
@@ -188,12 +189,12 @@ fn save_result(config: &Config, mut completed: bool) -> Result<()> {
 }
 
 fn run(config: &Config) -> Result<()> {
-	let state_path = &config.data_dir.join(ONGOING_PATH_APPENDIX);
+	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
 
 	let task: Ongoing = {
-		if state_path.exists() {
-			let mut file = File::open(state_path).unwrap();
+		if state_file.exists() {
+			let mut file = File::open(state_file).unwrap();
 			let mut contents = String::new();
 			file.read_to_string(&mut contents).unwrap();
 			serde_json::from_str(&contents).unwrap()
@@ -206,7 +207,7 @@ fn run(config: &Config) -> Result<()> {
 	let hard_stop_s = task.timestamp_s + (hard_stop_coeff * (task.estimated_minutes * 60) as f32) as u32;
 
 	loop {
-		if !state_path.exists() {
+		if !state_file.exists() {
 			break;
 		}
 
@@ -231,7 +232,6 @@ fn run(config: &Config) -> Result<()> {
 
 		let _ = Command::new("sh")
 			.arg("-c")
-			//.arg(format!("eww update todo_timer={}", value.replace(" ", "_"))) // eww panics if any spaces are passed here.
 			.arg(format!("eww update todo_timer=\"{}\"", value))
 			.output()
 			.unwrap();
