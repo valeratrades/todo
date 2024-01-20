@@ -58,7 +58,6 @@ pub struct TimerArgs {
 
 #[derive(Subcommand)]
 enum TimerCommands {
-	//TODO!: implement abort command for timer.
 	/// Start a timer for a task
 	Start(TimerStartArgs),
 	Done(TimerDoneArgs),
