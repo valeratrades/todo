@@ -14,6 +14,7 @@ impl TryFrom<ExpandedPath> for Config {
 
 		let config = raw_config.process();
 		let _ = std::fs::create_dir_all(&config.data_dir);
+		let _ = std::fs::create_dir_all(&config.data_dir.join("tmp/"));
 
 		Ok(config)
 	}
