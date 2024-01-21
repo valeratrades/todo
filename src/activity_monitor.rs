@@ -31,7 +31,7 @@ pub fn start(config: Config) -> Result<()> {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Activity {
 	name: String,
 	start_s: i64,
@@ -122,11 +122,13 @@ fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
 
 //-----------------------------------------------------------------------------
 
+//TODO!!!: change so it takes the target date instead. Once done, add a command to recompile all of the recorded days. \
 fn compile_yd_totals(config: &Config) {
 	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(config.date_format.as_str()).to_string();
 	let yd_totals_file = (&config.data_dir.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
 	if yd_totals_file.exists() {
-		return;
+		//dbg
+		//return;
 	};
 
 	let yd_activities_file = (&config.data_dir.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
@@ -136,54 +138,55 @@ fn compile_yd_totals(config: &Config) {
 	};
 	let yd_activities: Vec<Activity> = serde_json::from_str(&file_contents).unwrap();
 
-	let mut totals: Vec<Total> = Vec::new();
-	for a in yd_activities {
-		let time = a.end_s - a.start_s;
+	fn write_grand_total(yd_activities: Vec<Activity>, config: &Config) {
+		let grand_total = Total::from_activities(yd_activities, &config.activity_monitor.delimitor);
 
-		//NB: rely on always having `2 <= levels <= 3` in the name
-		let split: Vec<&str> = a.name.split(&config.activity_monitor.delimitor).collect();
+		let formatted_json = serde_json::to_string_pretty(&grand_total).unwrap();
+		let mut file = std::fs::File::create(&config.data_dir.join(TOTALS_PATH_APPENDIX).join("Grand Total")).unwrap(); //NB: replaces the existing if any
+		file.write_all(formatted_json.as_bytes()).unwrap();
+	}
+	//dbg
+	//write_grand_total(yd_activities.clone(), &config);
 
-		// there has to be a better way to do this, but I'm not smart enough for rust way yet.
-		let l0_name = split[0].to_owned();
-		let l0_index = match totals.iter().position(|t| t.name == l0_name) {
-			Some(index) => index,
-			None => {
-				totals.push(Total::new(l0_name));
-				totals.len() - 1
-			}
-		};
-		{
-			totals[l0_index].time_s += time;
-		}
-		let l1_name = split[1].to_owned();
-		let l1_index = match totals[l0_index].children.iter().position(|t| t.name == l1_name) {
-			Some(index) => index,
-			None => {
-				totals[l0_index].children.push(Total::new(l1_name));
-				totals.len() - 1
-			}
-		};
-		{
-			totals[l0_index].children[l1_index].time_s += time;
-		}
-		if split.len() > 2 {
-			let l2_name = split[2].to_owned();
-			let l2_index = match totals[l0_index].children[l1_index].children.iter().position(|t| t.name == l2_name) {
-				Some(index) => index,
-				None => {
-					totals[l0_index].children[l1_index].children.push(Total::new(l2_name));
-					totals.len() - 1
+	fn compile_calendar(yd_activities: Vec<Activity>, config: &Config) {
+		let mut calendar: Vec<(String, i64)> = Vec::new();
+
+		// iter over activities: from first found compile grand_total over next 15m. If it is above 7.5 -> store as (Total, start_timestamp)
+		let mut period_end: i64 = 0;
+		let mut over_period: Vec<Activity> = Vec::new();
+		for a in yd_activities.iter() {
+			if a.start_s > period_end {
+				let period_total = Total::from_activities(over_period.clone(), &config.activity_monitor.delimitor);
+				if period_total.time_s > (7.5 * 60.0 + 0.5) as i64 {
+					calendar.push((
+						period_total.find_largest("".to_owned(), &config.activity_monitor.delimitor),
+						period_end - 15 * 60,
+					));
 				}
-			};
-			{
-				totals[l0_index].children[l1_index].children[l2_index].time_s += time;
+
+				period_end = a.start_s + 15 * 60;
+				over_period.clear();
 			}
+			over_period.push(a.clone());
+		}
+
+		//- upload all stored.
+		//TODO!!!: add calendar_key and calendar_id to config
+		// reference: https://developers.google.com/calendar/api/v3/reference/events#resource-representations
+		for (activity_name, start_s) in calendar.iter() {
+			let command = format!(
+				"curl -X POST -H \"Content-Type: application/json\" -d '{{\"summary\": \"{}\", \"start\": {{\"dateTime\": \"{}\", \"timeZone\": \"UTC\"}}, \"end\": {{\"dateTime\": \"{}\", \"timeZone\": \"UTC\"}}}}' \
+				https://www.googleapis.com/calendar/v3/calendars/{}/events?access_token={}",
+				activity_name,
+				DateTime::from_timestamp(*start_s, 0).unwrap().to_rfc3339(),
+				DateTime::from_timestamp(*start_s + 15 * 60, 0).unwrap().to_rfc3339(),
+				config.activity_monitor.calendar_id,
+				config.activity_monitor.calendar_token,
+			);
+			let _ = Command::new("sh").arg("-c").arg(command).output().unwrap();
 		}
 	}
-
-	let formatted_json = serde_json::to_string_pretty(&totals).unwrap();
-	let mut file = std::fs::File::create(&yd_totals_file).unwrap(); //NB: replaces the existing if any
-	file.write_all(formatted_json.as_bytes()).unwrap();
+	compile_calendar(yd_activities.clone(), &config);
 }
 
 //you'll want to use `position()` which returns an `Option<usize>`
@@ -196,12 +199,90 @@ struct Total {
 	time_s: i64,
 	children: Vec<Total>,
 }
+//TODO!: when Phone is added, make it so that if any point of time is claimed by both, Phone takes precedence.
+// to implement, will need to just apply a mask once immediately after reading the file.
 impl Total {
 	fn new(name: String) -> Self {
 		Total {
 			name,
 			time_s: 0,
 			children: Vec::<Total>::new(),
+		}
+	}
+
+	fn from_activities(activities: Vec<Activity>, activities_delimiter: &String) -> Self {
+		let mut grand_total = Total::new("Total".to_owned());
+		for a in activities {
+			let time = a.end_s - a.start_s;
+
+			let split: Vec<&str> = a.name.split(activities_delimiter).collect();
+			assert!(split.len() <= 3); // in the perfect world expand to infinite, but seems like the current logic will be sufficient.
+
+			// there has to be a better way to do this, but I'm not smart enough for rust way yet.
+			{
+				grand_total.time_s += time;
+			}
+			let l0_name = split[0].to_owned();
+			let l0_index = match grand_total.children.iter().position(|t| t.name == l0_name) {
+				Some(index) => index,
+				None => {
+					grand_total.children.push(Total::new(l0_name));
+					grand_total.children.len() - 1
+				}
+			};
+			{
+				grand_total.children[l0_index].time_s += time;
+			}
+			let l1_name = split[1].to_owned();
+			let l1_index = match grand_total.children[l0_index].children.iter().position(|t| t.name == l1_name) {
+				Some(index) => index,
+				None => {
+					grand_total.children[l0_index].children.push(Total::new(l1_name));
+					grand_total.children.len() - 1
+				}
+			};
+			{
+				grand_total.children[l0_index].children[l1_index].time_s += time;
+			}
+			if split.len() > 2 {
+				let l2_name = split[2].to_owned();
+				let l2_index = match grand_total.children[l0_index].children[l1_index]
+					.children
+					.iter()
+					.position(|t| t.name == l2_name)
+				{
+					Some(index) => index,
+					None => {
+						grand_total.children[l0_index].children[l1_index].children.push(Total::new(l2_name));
+						grand_total.children.len() - 1
+					}
+				};
+				{
+					grand_total.children[l0_index].children[l1_index].children[l2_index].time_s += time;
+				}
+			}
+		}
+		grand_total
+	}
+
+	/// returns the full path of the most prominent activity.
+	/// to find, goes down the tree, and at each level takes the largest child.
+	fn find_largest(&self, mut collect_str: String, activities_delimiter: &String) -> String {
+		if self.children.len() == 0 {
+			return collect_str;
+		} else {
+			let mut largest = &self.children[0];
+			for c in self.children.iter() {
+				if c.time_s > largest.time_s {
+					largest = c;
+				}
+			}
+
+			if collect_str.len() > 0 {
+				collect_str = collect_str + " - ";
+			}
+			collect_str = collect_str + &largest.name;
+			return largest.find_largest(collect_str, activities_delimiter);
 		}
 	}
 }
