@@ -10,8 +10,12 @@ anyhow = "1.0.79"
 chrono = "0.4.31"
 clap = { version = "4.4.13", features = ["derive"] }
 dirs = "5.0.1"
+google-calendar = "0.7.0"
 pandoc = "0.8.11"
+reqwest = { version = "0.11.23", features = ["json"] }
 serde = { version = "1.0.190", features = ["derive"] }
 serde_json = { version = "1.0.107", features = ["std"] }
 tempfile = "3.9.0"
+tokio = { version = "1.35.1", features = ["rt", "rt-multi-thread"] }
 toml = "0.8.8"
+v_utils = { version = "0.1.49", features = ["io"] }

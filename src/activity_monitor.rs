@@ -2,7 +2,7 @@ use crate::config::Config;
 use anyhow::Result;
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{self, Value};
+use serde_json::{self, json, Value};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -55,10 +55,10 @@ fn get_activity(config: &Config) -> String {
 	let focused = output_str.trim_end_matches('\n');
 
 	let mut activity: String = match focused.parse() {
-		Ok(1) => "Neovim".to_owned(),
+		Ok(1) => "Tmux".to_owned(),
 		Ok(3) => "Editing todos/notes".to_owned(),
 		Ok(5) => "Reading a book".to_owned(),
-		Ok(0) => "Reading runtime exceptions".to_owned(),
+		Ok(0) => "Catching runtime exceptions".to_owned(),
 		Ok(num) => format!("Workspace {}", num),
 		Err(_) => unreachable!(),
 	};
@@ -127,8 +127,7 @@ fn compile_yd_totals(config: &Config) {
 	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(config.date_format.as_str()).to_string();
 	let yd_totals_file = (&config.data_dir.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
 	if yd_totals_file.exists() {
-		//dbg
-		//return;
+		return;
 	};
 
 	let yd_activities_file = (&config.data_dir.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
@@ -145,8 +144,7 @@ fn compile_yd_totals(config: &Config) {
 		let mut file = std::fs::File::create(&config.data_dir.join(TOTALS_PATH_APPENDIX).join("Grand Total")).unwrap(); //NB: replaces the existing if any
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
-	//dbg
-	//write_grand_total(yd_activities.clone(), &config);
+	write_grand_total(yd_activities.clone(), &config);
 
 	fn compile_calendar(yd_activities: Vec<Activity>, config: &Config) {
 		let mut calendar: Vec<(String, i64)> = Vec::new();
@@ -170,23 +168,76 @@ fn compile_yd_totals(config: &Config) {
 			over_period.push(a.clone());
 		}
 
-		//- upload all stored.
-		//TODO!!!: add calendar_key and calendar_id to config
-		// reference: https://developers.google.com/calendar/api/v3/reference/events#resource-representations
-		for (activity_name, start_s) in calendar.iter() {
-			let command = format!(
-				"curl -X POST -H \"Content-Type: application/json\" -d '{{\"summary\": \"{}\", \"start\": {{\"dateTime\": \"{}\", \"timeZone\": \"UTC\"}}, \"end\": {{\"dateTime\": \"{}\", \"timeZone\": \"UTC\"}}}}' \
-				https://www.googleapis.com/calendar/v3/calendars/{}/events?access_token={}",
-				activity_name,
-				DateTime::from_timestamp(*start_s, 0).unwrap().to_rfc3339(),
-				DateTime::from_timestamp(*start_s + 15 * 60, 0).unwrap().to_rfc3339(),
-				config.activity_monitor.calendar_id,
-				config.activity_monitor.calendar_token,
-			);
-			let _ = Command::new("sh").arg("-c").arg(command).output().unwrap();
-		}
+		let client_id = config.activity_monitor.google_client_id.clone();
+		let client_secret = config.activity_monitor.google_client_secret.clone();
+		let refresh_token = config.activity_monitor.google_calendar_refresh_token.clone();
+		let redirect_uri = "http://localhost";
+		let calendar_client = google_calendar::Client::new(client_id, client_secret, redirect_uri, "", refresh_token);
+		let r = tokio::runtime::Runtime::new().unwrap();
+		r.block_on(async {
+			let access_token = calendar_client.refresh_access_token().await.unwrap().access_token;
+
+			let client = reqwest::Client::new();
+
+			// reference: https://developers.google.com/calendar/api/v3/reference/events#resource-representations
+			let mut handles = Vec::new();
+			for (activity_name, start_s) in calendar.iter() {
+				let start_time = DateTime::from_timestamp(*start_s, 0).unwrap().to_rfc3339();
+				let end_time = DateTime::from_timestamp(*start_s + 15 * 60, 0).unwrap().to_rfc3339();
+				let event = &json!({
+					"summary": activity_name,
+					"start": {
+						"dateTime": start_time,
+						"timeZone": "UTC"
+					},
+					"end": {
+						"dateTime": end_time,
+						"timeZone": "UTC"
+					}
+				});
+				let url = format!(
+					"https://www.googleapis.com/calendar/v3/calendars/{}/events",
+					config.activity_monitor.calendar_id.clone()
+				);
+
+				let handle = client
+					.post(url)
+					.header("Content-Type", "application/json")
+					.header("Authorization", format!("Bearer {}", &access_token))
+					.json(event)
+					.send();
+
+				handles.push(handle);
+			}
+			for handle in handles {
+				match handle.await {
+					Ok(_) => {}
+					Err(e) => {
+						std::process::Command::new("echo")
+							.arg(format!("{} >> /home/v/logs/activity_monitor.log", e))
+							.output()
+							.unwrap();
+					}
+				};
+			}
+		});
 	}
 	compile_calendar(yd_activities.clone(), &config);
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GoogleServiceAccount {
+	r#type: String,
+	project_id: String,
+	private_key_id: String,
+	private_key: String,
+	client_email: String,
+	client_id: String,
+	auth_uri: String,
+	token_uri: String,
+	auth_provider_x509_cert_url: String,
+	client_x509_cert_url: String,
+	universe_domain: String,
 }
 
 //you'll want to use `position()` which returns an `Option<usize>`

@@ -6,7 +6,7 @@ mod timer;
 mod todos;
 pub mod utils;
 use config::Config;
-use utils::ExpandedPath;
+use v_utils::io::ExpandedPath;
 
 use clap::{Args, Parser, Subcommand};
 

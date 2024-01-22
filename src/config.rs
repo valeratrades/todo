@@ -1,9 +1,9 @@
-use crate::utils::ExpandedPath;
 use anyhow::{Context, Result};
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::fmt;
 use std::{convert::TryFrom, path::PathBuf};
+use v_utils::io::ExpandedPath;
 
 impl TryFrom<ExpandedPath> for Config {
 	type Error = anyhow::Error;
@@ -40,7 +40,9 @@ pub struct Todos {
 pub struct ActivityMonitor {
 	pub delimitor: String,
 	pub calendar_id: String,
-	pub calendar_token: String,
+	pub google_calendar_refresh_token: String,
+	pub google_client_id: String,
+	pub google_client_secret: String,
 }
 
 //-----------------------------------------------------------------------------
@@ -53,7 +55,7 @@ pub struct RawConfig {
 	pub date_format: String,
 	pub todos: RawTodos,
 	pub timer: Timer,
-	pub raw_activity_monitor: RawActivityMonitor,
+	pub activity_monitor: RawActivityMonitor,
 }
 impl RawConfig {
 	fn process(&self) -> Result<Config> {
@@ -62,7 +64,7 @@ impl RawConfig {
 			date_format: self.date_format.clone(),
 			todos: self.todos.process(),
 			timer: self.timer.clone(),
-			activity_monitor: self.raw_activity_monitor.process()?,
+			activity_monitor: self.activity_monitor.process()?,
 		})
 	}
 }
@@ -90,14 +92,18 @@ pub struct Timer {
 pub struct RawActivityMonitor {
 	pub delimitor: String,
 	pub calendar_id: String,
-	pub calendar_token: PrivateValue,
+	pub google_calendar_refresh_token: PrivateValue,
+	pub google_client_id: PrivateValue,
+	pub google_client_secret: PrivateValue,
 }
 impl RawActivityMonitor {
 	fn process(&self) -> Result<ActivityMonitor> {
 		Ok(ActivityMonitor {
 			delimitor: self.delimitor.clone(),
 			calendar_id: self.calendar_id.clone(),
-			calendar_token: self.calendar_token.process()?,
+			google_calendar_refresh_token: self.google_calendar_refresh_token.process()?,
+			google_client_id: self.google_client_id.process()?,
+			google_client_secret: self.google_client_secret.process()?,
 		})
 	}
 }
