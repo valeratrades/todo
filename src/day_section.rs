@@ -68,7 +68,9 @@ Can be asked, but not requested.
 			DaySection::Work => {
 				r#"
 # Work
-for necessary things
+For Necessary things.
+
+You work with what you have, and you get shit done. In these 8 hours it does not matter what project could be good for your future; what skills would be good to learn; how your environment could be improved. You do the things to maximize their immediate productive output. It does not matter if you had some project to watch your todos, or make the screen redder closer to night, - you maximize the day's dollar value, and *nothing* else.
 
 ## Actions:
 ### Coffee
