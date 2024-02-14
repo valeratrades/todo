@@ -63,6 +63,9 @@ Running outfit. Even after running I just change the underwear, and remain in it
 
 ### Payed work
 Can be asked, but not requested.
+
+### Remember
+> There are no shortcuts for you, Valera
 "#
 			}
 			DaySection::Work => {
@@ -87,6 +90,9 @@ First priority
 
 ### Phone
 Turned off fully, and placed inside a mailbox if any urges arise.
+
+### Remember
+> It's not going to be fun. You will feel tired, bored, at times physically suffering. You must say "no" to everything your whole life. Your existence is optimising for pressing keys in correct order, sitting at a desk 14 hours a day. This is the cost of greatness.
 "#
 			}
 			DaySection::Evening => {
@@ -106,6 +112,9 @@ Any clothes I want, that are not taken up by the previous day sections.
 
 ### Payed work
 Can be asked, but not requested.
+
+### Remember
+> Iteration Speed
 "#
 			}
 			DaySection::Night => {
