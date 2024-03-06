@@ -106,7 +106,7 @@ create_stats_class! {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct Masturbation {
+struct JOp {
 	times: i32,
 	visuals__full_none_work: Option<String>,
 }
@@ -114,7 +114,7 @@ struct Masturbation {
 #[derive(Default, Debug, Serialize, Deserialize)]
 struct Stats {
 	time_on_eating: Eating,
-	masturbation: Masturbation,
+	jo_p: JOp,
 	sleep: Sleep,
 }
 
