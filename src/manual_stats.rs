@@ -17,15 +17,15 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
 
-	if args.ev == None && args.open == false {
-		return Err(anyhow::anyhow!("provide `ev` and/or `open` arguments"));
-	}
-
 	let date: String = match args.yesterday {
 		true => (Utc::now() - Duration::days(1)).format(&config.date_format.as_str()).to_string(),
 		false => Utc::now().format(&config.date_format.as_str()).to_string(),
 	};
+
 	let target_file_path = data_storage_dir.join(&date);
+	if args.ev == None && args.open == false {
+		utils::open(&target_file_path)?;
+	}
 
 	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
 		Ok(s) => s,
@@ -54,7 +54,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
-	if args.open == true || args.ev == None {
+	if args.open == true {
 		utils::open(&target_file_path)?;
 	}
 
