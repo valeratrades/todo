@@ -54,7 +54,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
-	if args.open == true {
+	if args.open == true || args.ev == None {
 		utils::open(&target_file_path)?;
 	}
 
