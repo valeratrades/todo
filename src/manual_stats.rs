@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use crate::MANUAL_PATH_APPENDIX;
 
-pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
+pub fn update_or_open(config: Config, mut args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
 
@@ -24,7 +24,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 
 	let target_file_path = data_storage_dir.join(&date);
 	if args.ev == None && args.open == false {
-		utils::open(&target_file_path)?;
+		args.open = true;
 	}
 
 	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
