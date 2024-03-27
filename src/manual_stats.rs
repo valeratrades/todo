@@ -13,9 +13,10 @@ use std::path::PathBuf;
 
 use crate::MANUAL_PATH_APPENDIX;
 
-pub fn update_or_open(config: Config, mut args: ManualArgs) -> Result<()> {
+pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
+	let mut open_anyway = false;
 
 	let date: String = match args.yesterday {
 		true => (Utc::now() - Duration::days(1)).format(&config.date_format.as_str()).to_string(),
@@ -24,7 +25,7 @@ pub fn update_or_open(config: Config, mut args: ManualArgs) -> Result<()> {
 
 	let target_file_path = data_storage_dir.join(&date);
 	if args.ev == None && args.open == false {
-		args.open = true;
+		open_anyway = true;
 	}
 
 	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
@@ -57,7 +58,7 @@ pub fn update_or_open(config: Config, mut args: ManualArgs) -> Result<()> {
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
-	if args.open == true {
+	if args.open == true || open_anyway == true {
 		utils::open(&target_file_path)?;
 	}
 
