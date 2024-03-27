@@ -38,7 +38,10 @@ pub fn update_or_open(config: Config, mut args: ManualArgs) -> Result<()> {
 				Day {
 					date: date.clone(),
 					ev,
-					stats: Stats::default(),
+					morning: Morning::default(),
+					midday: Midday::default(),
+					evening: Evening::default(),
+					sleep: Sleep::default(),
 				}
 			} else {
 				return Err(anyhow::anyhow!("The day object is not initialized, so `ev` argument is required"));
@@ -68,59 +71,74 @@ pub struct ManualArgs {
 	#[arg(short, long)]
 	pub open: bool,
 	#[arg(short, long)]
-	pub yesterday: bool,
+	pub yesterday: bool, //TODO!!: change to -d, --days-ago <days> and make it accept a number of days to go back instead of just yesterday
 }
 
 //=============================================================================
 
-macro_rules! create_stats_class {
-	($name:ident { $($field:ident),* $(,)? }) => {
-		#[derive(Debug, Serialize, Deserialize, Default)]
-		struct $name {
-		$(
-		//#[serde(skip_serializing_if = "Option::is_none")] // this would just skip `None` values, instead of submitting them to serialization, to be `null`
-		$field: Option<i32>,
-		)*
-		}
-	};
-}
+// This macro will be used if I decide I want to do skiping of `None` values in the serialization again
+//macro_rules! create_stats_class {
+//	($name:ident { $($field:ident),* $(,)? }) => {
+//		#[derive(Debug, Serialize, Deserialize, Default)]
+//		struct $name {
+//		$(
+//			//#[serde(skip_serializing_if = "Option::is_none")] // this would just skip `None` values, instead of submitting them to serialization, to be `null`
+//			$field: Option<i32>,
+//		)*
+//		}
+//	};
+//}
 
-create_stats_class! {
-	Sleep {
-		yd_to_bed_t_plus_min,
-		from_bed_t_plus_min,
-		// not sure this is the best word though. It's difference, but I want to accent that it is |distance|
-		to_bed_distance_yd_from_day_before_min,
-	}
-}
-
-create_stats_class! {
-	Eating {
-		making_breakfast,
-		eating_breakfast,
-		making_lunch,
-		eating_lunch,
-		making_diner,
-		eating_diner,
-	}
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct Sleep {
+	yd_to_bed_t_plus: Option<i32>,
+	from_bed_t_plus: Option<i32>,
+	from_bed_diff_from_day_before: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct JOp {
-	times: i32,
-	visuals__full_none_work: Option<String>,
+struct Morning {
+	alarm_to_run: Option<usize>,
+	run: Option<usize>,
+	run_to_shower: Option<usize>,
+	making_breakfast: Option<usize>,
+	eating_breakfast: Option<usize>,
+	j_o_times: JOtimes,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize)]
-struct Stats {
-	time_on_eating: Eating,
-	jo_p: JOp,
-	sleep: Sleep,
+#[derive(Debug, Serialize, Deserialize, Default)]
+// could be called `_8h`
+struct Midday {
+	hours_of_work: Option<usize>,
+	making_lunch: Option<usize>,
+	eating_lunch: Option<usize>,
+	j_o_times: JOtimes,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct Evening {
+	focus_meditation: Option<usize>, // fixed at 13m under current sota, but why not keep it flexible
+	nsdr: Option<usize>,
+	making_dinner: Option<usize>,
+	eating_dinner: Option<usize>,
+	j_o_times: JOtimes,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+// removed the Option for ease of input, let's see how capable I am of always filling these in. Otherwise I'll have to add them back.
+struct JOtimes {
+	full_visuals: usize,
+	no_visuals: usize,
+	work_for_visuals: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Unless specified otherwise, all times are in minutes
 struct Day {
 	date: String,
 	ev: i32,
-	stats: Stats,
+	morning: Morning,
+	midday: Midday,
+	evening: Evening,
+	sleep: Sleep,
 }
