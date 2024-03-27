@@ -15,8 +15,6 @@ use std::path::PathBuf;
 use crate::MANUAL_PATH_APPENDIX;
 
 pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
-	args.command.validate()?;
-
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
 
@@ -29,7 +27,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 		ManualSubcommands::Open { .. } => {
 			return utils::open(&target_file_path);
 		}
-		ManualSubcommands::Ev(ev) => ev,
+		ManualSubcommands::Ev(ev) => ev.to_validated()?,
 	};
 
 	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
@@ -99,27 +97,26 @@ pub struct ManualEv {
 	#[arg(short, long, default_value = "true")]
 	pub replace: bool,
 }
-impl ManualSubcommands {
-	fn validate(&self) -> Result<()> {
-		match self {
-			ManualSubcommands::Ev(ev) => {
-				let mut count = 0;
-				if ev.add {
-					count += 1;
-				}
-				if ev.subtract {
-					count += 1;
-				}
-				if ev.replace {
-					count += 1;
-				}
-				if count != 1 {
-					return Err(anyhow!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
-				}
-				Ok(())
-			}
-			ManualSubcommands::Open { .. } => Ok(()),
+impl ManualEv {
+	//? This seems ugly. There has to be a way to do this natively with clap, specifically with the `conflicts_with` attribute
+	fn to_validated(&self) -> Result<Self> {
+		let replace = match self.add || self.subtract {
+			true => false,
+			false => self.replace,
+		};
+		if self.add && self.subtract {
+			return Err(anyhow!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
 		}
+		if !self.add && !self.subtract && !self.replace {
+			return Err(anyhow!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
+		}
+		Ok(Self {
+			ev: self.ev,
+			open: self.open,
+			add: self.add,
+			subtract: self.subtract,
+			replace,
+		})
 	}
 }
 

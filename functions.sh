@@ -1,6 +1,6 @@
 tev() {
 	if [ -z "$1" ]; then
-		todo manual -o
+		todo manual open
 	else
 		todo manual --ev ${@}
 	fi
