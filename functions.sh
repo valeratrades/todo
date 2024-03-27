@@ -2,7 +2,7 @@ tev() {
 	if [ -z "$1" ]; then
 		todo manual open
 	else
-		todo manual --ev ${@}
+		todo manual ev ${@}
 	fi
 }
 alias tdo="cs ${HOME}/.data/personal/"
