@@ -1,9 +1,10 @@
 #![allow(non_snake_case)]
 use crate::config::Config;
 use crate::utils;
-use anyhow::Result;
+use anyhow::{anyhow, ensure, Result};
 use chrono::prelude::*;
 use chrono::Duration;
+use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -14,51 +15,60 @@ use std::path::PathBuf;
 use crate::MANUAL_PATH_APPENDIX;
 
 pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
+	args.command.validate()?;
+
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
-	let mut open_anyway = false;
 
-	let date: String = match args.yesterday {
-		true => (Utc::now() - Duration::days(1)).format(&config.date_format.as_str()).to_string(),
-		false => Utc::now().format(&config.date_format.as_str()).to_string(),
-	};
+	let date: String = (Utc::now() - Duration::days(args.days_back as i64))
+		.format(&config.date_format.as_str())
+		.to_string();
 
 	let target_file_path = data_storage_dir.join(&date);
-	if args.ev == None && args.open == false {
-		open_anyway = true;
-	}
+	let ev_args = match args.command {
+		ManualSubcommands::Open { .. } => {
+			return utils::open(&target_file_path);
+		}
+		ManualSubcommands::Ev(ev) => ev,
+	};
 
 	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
 		Ok(s) => s,
 		Err(_) => "".to_owned(),
 	};
-	let mut day: Day = match serde_json::from_str(&file_contents) {
-		Ok(v) => v,
+	let day = match serde_json::from_str::<Day>(&file_contents) {
+		Ok(d) => {
+			let ev = match (ev_args.add, ev_args.subtract) {
+				(true, false) => d.ev + ev_args.ev,
+				(false, true) => d.ev - ev_args.ev,
+				(false, false) => ev_args.ev,
+				(true, true) => unreachable!(),
+			};
+			let mut d: Day = d;
+			d.ev = ev;
+			d
+		}
 		Err(_) => {
-			if let Some(ev) = args.ev {
-				Day {
-					date: date.clone(),
-					ev,
-					morning: Morning::default(),
-					midday: Midday::default(),
-					evening: Evening::default(),
-					sleep: Sleep::default(),
-				}
-			} else {
-				return Err(anyhow::anyhow!("The day object is not initialized, so `ev` argument is required"));
+			ensure!(
+				ev_args.replace,
+				"The day object is not initialized, so `ev` argument must be provided with `-r --replace` flag"
+			);
+			Day {
+				date: date.clone(),
+				ev: ev_args.ev,
+				morning: Morning::default(),
+				midday: Midday::default(),
+				evening: Evening::default(),
+				sleep: Sleep::default(),
 			}
 		}
 	};
-
-	if let Some(ev) = args.ev {
-		day.ev = ev;
-	}
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
-	if args.open == true || open_anyway == true {
+	if ev_args.open == true {
 		utils::open(&target_file_path)?;
 	}
 
@@ -67,12 +77,50 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 
 #[derive(Args)]
 pub struct ManualArgs {
-	#[arg(long)]
-	pub ev: Option<i32>,
+	#[arg(short, long, default_value = "0")]
+	pub days_back: usize,
+	#[command(subcommand)]
+	pub command: ManualSubcommands,
+}
+#[derive(Subcommand)]
+pub enum ManualSubcommands {
+	Ev(ManualEv),
+	Open {},
+}
+#[derive(Args)]
+pub struct ManualEv {
+	pub ev: i32,
 	#[arg(short, long)]
 	pub open: bool,
 	#[arg(short, long)]
-	pub yesterday: bool, //TODO!!: change to -d, --days-ago <days> and make it accept a number of days to go back instead of just yesterday
+	pub add: bool,
+	#[arg(short, long)]
+	pub subtract: bool,
+	#[arg(short, long, default_value = "true")]
+	pub replace: bool,
+}
+impl ManualSubcommands {
+	fn validate(&self) -> Result<()> {
+		match self {
+			ManualSubcommands::Ev(ev) => {
+				let mut count = 0;
+				if ev.add {
+					count += 1;
+				}
+				if ev.subtract {
+					count += 1;
+				}
+				if ev.replace {
+					count += 1;
+				}
+				if count != 1 {
+					return Err(anyhow!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
+				}
+				Ok(())
+			}
+			ManualSubcommands::Open { .. } => Ok(()),
+		}
+	}
 }
 
 //=============================================================================

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
 use std::fmt;
-use std::{convert::TryFrom, path::PathBuf};
+use std::path::PathBuf;
 use v_utils::io::ExpandedPath;
 
 impl TryFrom<ExpandedPath> for Config {

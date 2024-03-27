@@ -2,7 +2,7 @@ use crate::config::Config;
 use anyhow::Result;
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{self, json, Value};
+use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
