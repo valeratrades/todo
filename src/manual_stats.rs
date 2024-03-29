@@ -13,7 +13,7 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::MANUAL_PATH_APPENDIX;
-
+//TODO: check that inputted contents are correct if file changed after us openning it for the user.
 pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
@@ -139,7 +139,7 @@ impl ManualEv {
 struct Sleep {
 	yd_to_bed_t_plus: Option<i32>,
 	from_bed_t_plus: Option<i32>,
-	from_bed_diff_from_day_before: Option<i32>,
+	from_bed_abs_diff_from_day_before: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
