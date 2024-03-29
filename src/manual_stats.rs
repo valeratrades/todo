@@ -187,4 +187,5 @@ struct Day {
 	midday: Midday,
 	evening: Evening,
 	sleep: Sleep,
+	non_negotiables_done: Option<usize>, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 }
