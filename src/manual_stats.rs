@@ -58,6 +58,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 				midday: Midday::default(),
 				evening: Evening::default(),
 				sleep: Sleep::default(),
+				non_negotiables_done: None,
 			}
 		}
 	};
@@ -122,18 +123,12 @@ impl ManualEv {
 
 //=============================================================================
 
-// This macro will be used if I decide I want to do skiping of `None` values in the serialization again
-//macro_rules! create_stats_class {
-//	($name:ident { $($field:ident),* $(,)? }) => {
-//		#[derive(Debug, Serialize, Deserialize, Default)]
-//		struct $name {
-//		$(
-//			//#[serde(skip_serializing_if = "Option::is_none")] // this would just skip `None` values, instead of submitting them to serialization, to be `null`
-//			$field: Option<i32>,
-//		)*
-//		}
-//	};
-//}
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct Transcendential {
+	making_food: Option<usize>,
+	eating_food: Option<usize>,
+	j_o_times: JOtimes,
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Sleep {
@@ -147,27 +142,24 @@ struct Morning {
 	alarm_to_run: Option<usize>,
 	run: Option<usize>,
 	run_to_shower: Option<usize>,
-	making_breakfast: Option<usize>,
-	eating_breakfast: Option<usize>,
-	j_o_times: JOtimes,
+	#[serde(flatten)]
+	transcendential: Transcendential,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 // could be called `_8h`
 struct Midday {
 	hours_of_work: Option<usize>,
-	making_lunch: Option<usize>,
-	eating_lunch: Option<usize>,
-	j_o_times: JOtimes,
+	#[serde(flatten)]
+	transcendential: Transcendential,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Evening {
 	focus_meditation: Option<usize>, // fixed at 13m under current sota, but why not keep it flexible
 	nsdr: Option<usize>,
-	making_dinner: Option<usize>,
-	eating_dinner: Option<usize>,
-	j_o_times: JOtimes,
+	#[serde(flatten)]
+	transcendential: Transcendential,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
