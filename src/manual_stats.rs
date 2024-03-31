@@ -14,7 +14,6 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::MANUAL_PATH_APPENDIX;
-//TODO: check that inputted contents are correct if file changed after us openning it for the user.
 pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
@@ -30,7 +29,8 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 			if !target_file_path.exists() {
 				return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
 			}
-			return utils::open(&target_file_path);
+			utils::open(&target_file_path)?;
+			return process_manual_updates(&target_file_path);
 		}
 		ManualSubcommands::Ev(ev) => ev.to_validated()?,
 	};
@@ -75,8 +75,18 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 
 	if ev_args.open == true {
 		utils::open(&target_file_path)?;
+		process_manual_updates(&target_file_path)?;
 	}
 
+	Ok(())
+}
+
+fn process_manual_updates<T: AsRef<Path>>(path: T) -> Result<()> {
+	if !path.as_ref().exists() {
+		return Err(anyhow!("File does not exist, the fuck you just did"));
+	}
+	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+	day.update_pbs(path.as_ref().parent().unwrap());
 	Ok(())
 }
 
@@ -197,42 +207,68 @@ struct Pbs {
 	alarm_to_run: usize,
 	run_to_shower: usize,
 	midday_hours_of_work: usize,
-}
-impl Default for Pbs {
-	fn default() -> Self {
-		Self {
-			alarm_to_run: std::usize::MAX,
-			run_to_shower: std::usize::MAX,
-			midday_hours_of_work: std::usize::MIN,
-		}
-	}
+	ev: usize,
 }
 
 impl Day {
 	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T) {
+		fn announce_new_pb(new_value: usize, old_value: usize, name: &str) {
+			let announcement = format!("New pb on {}! ({} -> {})", name, old_value, new_value);
+			println!("{}", announcement);
+			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap();
+		}
+
 		let pb_path = data_storage_dir.as_ref().join("pbs.json");
-		let mut pb = match std::fs::read_to_string(&pb_path) {
-			Ok(s) => serde_json::from_str::<Pbs>(&s).unwrap(),
-			Err(_) => Pbs::default(),
+		let mut pb_as_value = match std::fs::read_to_string(&pb_path) {
+			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // so if we change the struct, we don't rewrite everything
+			Err(_) => serde_json::Value::Null,
 		};
 
-		if let Some(v) = self.morning.alarm_to_run {
-			if v < pb.alarm_to_run {
-				pb.alarm_to_run = v;
+		if self.ev >= 0 {
+			let new = self.ev;
+			let old = match pb_as_value.get_mut("ev") {
+				Some(v) => v.as_u64().unwrap() as usize,
+				None => std::u64::MAX as usize,
+			};
+			if new > old as i32 {
+				announce_new_pb(new as usize, old, "ev");
+				pb_as_value["ev"] = serde_json::Value::from(new);
 			}
 		}
-		if let Some(v) = self.morning.run_to_shower {
-			if v < pb.run_to_shower {
-				pb.run_to_shower = v;
+		if let Some(new) = self.morning.alarm_to_run {
+			let old = match pb_as_value.get_mut("alarm_to_run") {
+				Some(v) => v.as_u64().unwrap() as usize,
+				None => std::u64::MAX as usize,
+			};
+			if new < old {
+				announce_new_pb(new, old, "alarm_to_run");
+				pb_as_value["alarm_to_run"] = serde_json::Value::from(new);
 			}
 		}
-		if let Some(v) = self.midday.hours_of_work {
-			if v > pb.midday_hours_of_work {
-				pb.midday_hours_of_work = v;
+		if let Some(new) = self.morning.run_to_shower {
+			let old = match pb_as_value.get_mut("run_to_shower") {
+				Some(v) => v.as_u64().unwrap() as usize,
+				None => std::u64::MAX as usize,
+			};
+			if new < old {
+				announce_new_pb(new, old, "run_to_shower");
+				pb_as_value["run_to_shower"] = serde_json::Value::from(new);
 			}
 		}
+		if let Some(new) = self.midday.hours_of_work {
+			let old = match pb_as_value.get_mut("midday_hours_of_work") {
+				Some(v) => v.as_u64().unwrap() as usize,
+				None => std::u64::MAX as usize,
+			};
+			if new > old {
+				announce_new_pb(new, old, "midday_hours_of_work");
+				pb_as_value["midday_hours_of_work"] = serde_json::Value::from(new);
+			}
+		}
+		let pb = serde_json::from_value::<Pbs>(pb_as_value).unwrap();
 		//TODO!: streaks
 
+		assert!(pb_path.exists());
 		let formatted_json = serde_json::to_string_pretty(&pb).unwrap();
 		let mut file = OpenOptions::new().read(true).write(true).create(true).open(&pb_path).unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
