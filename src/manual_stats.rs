@@ -2,8 +2,6 @@
 use crate::config::Config;
 use crate::utils;
 use anyhow::{anyhow, ensure, Result};
-use chrono::prelude::*;
-use chrono::Duration;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
@@ -18,9 +16,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
 
-	let date: String = (Utc::now() - Duration::days(args.days_back as i64))
-		.format(&config.date_format.as_str())
-		.to_string();
+	let date = utils::format_date(args.days_back, &config);
 	let filename = format!("{}.json", date);
 
 	let target_file_path = data_storage_dir.join(&filename);
@@ -30,7 +26,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 				return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
 			}
 			utils::open(&target_file_path)?;
-			return process_manual_updates(&target_file_path);
+			return process_manual_updates(&target_file_path, &config);
 		}
 		ManualSubcommands::Ev(ev) => ev.to_validated()?,
 	};
@@ -67,7 +63,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 			}
 		}
 	};
-	day.update_pbs(&data_storage_dir);
+	day.update_pbs(&data_storage_dir, &config);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
@@ -75,18 +71,18 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 
 	if ev_args.open == true {
 		utils::open(&target_file_path)?;
-		process_manual_updates(&target_file_path)?;
+		process_manual_updates(&target_file_path, &config)?;
 	}
 
 	Ok(())
 }
 
-fn process_manual_updates<T: AsRef<Path>>(path: T) -> Result<()> {
+fn process_manual_updates<T: AsRef<Path>>(path: T, config: &Config) -> Result<()> {
 	if !path.as_ref().exists() {
 		return Err(anyhow!("File does not exist, the fuck you just did"));
 	}
 	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-	day.update_pbs(path.as_ref().parent().unwrap());
+	day.update_pbs(path.as_ref().parent().unwrap(), config);
 	Ok(())
 }
 
@@ -208,15 +204,17 @@ struct Pbs {
 	run_to_shower: Option<usize>,
 	midday_hours_of_work: Option<usize>,
 	ev: Option<usize>,
-	//streaks: Streaks,
+	streaks: Streaks,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Streaks {
-	no_jo_full_visuals: Streak,
-	no_jo_no_visuals: Streak,
-	no_jo_work_for_visuals: Streak,
-	stable_sleep: Streak,
+	no_jo_full_visuals: Option<Streak>,
+	no_jo_no_visuals: Option<Streak>,
+	no_jo_work_for_visuals: Option<Streak>,
+	stable_sleep: Option<Streak>,
+	focus_meditation: Option<Streak>,
+	__last_date_processed: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -226,7 +224,7 @@ struct Streak {
 }
 
 impl Day {
-	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T) {
+	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &Config) {
 		fn announce_new_pb(new_value: usize, old_value: Option<usize>, name: &str) {
 			let old_value = match old_value {
 				Some(v) => v.to_string(),
@@ -237,7 +235,8 @@ impl Day {
 			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap();
 		}
 
-		let pbs_path = data_storage_dir.as_ref().join("pbs.json");
+		let pbs_path = data_storage_dir.as_ref().join(".pbs.json");
+		let yd_date = utils::format_date(1, config); // no matter what file is being checked, we only ever care about physical yesterday
 		let mut pbs_as_value = match std::fs::read_to_string(&pbs_path) {
 			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // so if we change the struct, we don't rewrite everything
 			Err(_) => serde_json::Value::Null,
@@ -279,123 +278,80 @@ impl Day {
 			conditional_update("midday_hours_of_work", new_hours_of_work, |new, old| new > old);
 		}
 
-		//let mut jo_full_visuals = false;
-		//{
-		//	let old = match pbs_as_value.get("streak_no_jo_full_visuals") {
-		//		Some(v) => v.as_u64().unwrap() as usize,
-		//		None => 0,
-		//	};
-		//	let new = {
-		//		if self.morning.transcendential.jo_times.full_visuals == 0
-		//			&& self.midday.transcendential.jo_times.full_visuals == 0
-		//			&& self.evening.transcendential.jo_times.full_visuals == 0
-		//		{
-		//			announce_new_pb(old + 1, old, "streak_no_jo_full_visuals");
-		//			old + 1
-		//		} else {
-		//			jo_full_visuals = true;
-		//			0
-		//		}
-		//	};
-		//	pbs_as_value["streak_no_jo_full_visuals"] = serde_json::Value::from(new);
-		//}
-		//let mut jo_no_visuals = false;
-		//{
-		//	let old = match pbs_as_value.get("streak_no_jo_no_visuals") {
-		//		Some(v) => v.as_u64().unwrap() as usize,
-		//		None => 0,
-		//	};
-		//	let new = {
-		//		if self.morning.transcendential.jo_times.no_visuals == 0
-		//			&& self.midday.transcendential.jo_times.no_visuals == 0
-		//			&& self.evening.transcendential.jo_times.no_visuals == 0
-		//			&& !jo_full_visuals
-		//		{
-		//			announce_new_pb(old + 1, old, "streak_no_jo_no_visuals");
-		//			old + 1
-		//		} else {
-		//			jo_no_visuals = true;
-		//			0
-		//		}
-		//	};
-		//	pbs_as_value["streak_no_jo_no_visuals"] = serde_json::Value::from(new);
-		//}
-		//{
-		//	let old = match pbs_as_value.get("streak_no_jo_work_for_visuals") {
-		//		Some(v) => v.as_u64().unwrap() as usize,
-		//		None => 0,
-		//	};
-		//	let new = {
-		//		if self.morning.transcendential.jo_times.work_for_visuals == 0
-		//			&& self.midday.transcendential.jo_times.work_for_visuals == 0
-		//			&& self.evening.transcendential.jo_times.work_for_visuals == 0
-		//			&& !jo_no_visuals
-		//		{
-		//			announce_new_pb(old + 1, old, "streak_no_jo_work_for_visuals");
-		//			old + 1
-		//		} else {
-		//			0
-		//		}
-		//	};
-		//	pbs_as_value["streak_no_jo_work_for_visuals"] = serde_json::Value::from(new);
-		//}
-		//
-		//{
-		//	let old = match pbs_as_value.get_mut("streak_stable_sleep") {
-		//		Some(v) => v.as_u64().unwrap() as usize,
-		//		None => 0,
-		//	};
-		//	let mut invalidated = false;
-		//	if let Some(v) = self.sleep.yd_to_bed_t_plus {
-		//		if v > 0 {
-		//			invalidated = true;
-		//		}
-		//	} else {
-		//		invalidated = true;
-		//	}
-		//	if let Some(v) = self.sleep.from_bed_t_plus {
-		//		if v > 0 {
-		//			invalidated = true;
-		//		}
-		//	} else {
-		//		invalidated = true;
-		//	}
-		//	if let Some(v) = self.sleep.from_bed_abs_diff_from_day_before {
-		//		if v > 0 {
-		//			invalidated = true;
-		//		}
-		//	} else {
-		//		invalidated = true;
-		//	}
-		//
-		//	let new = if invalidated {
-		//		0
-		//	} else {
-		//		announce_new_pb(old + 1, old, "streak_stable_sleep");
-		//		old + 1
-		//	};
-		//	pbs_as_value["streak_stable_sleep"] = serde_json::Value::from(new);
-		//}
-		//
-		//{
-		//	let old = match pbs_as_value.get_mut("meditation") {
-		//		Some(v) => v.as_u64().unwrap() as usize,
-		//		None => 0,
-		//	};
-		//	let mut invalidated = true;
-		//	if !self.evening.focus_meditation.is_some() || self.evening.focus_meditation.unwrap() != 0 {
-		//		invalidated = false;
-		//	}
-		//
-		//	let new = if invalidated {
-		//		0
-		//	} else {
-		//		announce_new_pb(old + 1, old, "meditation");
-		//		old + 1
-		//	};
-		//	pbs_as_value["meditation"] = serde_json::Value::from(new);
-		//}
-		//
+		// Returns bool for convienience of recursing some of these
+		let mut streak_update = |metric: &str, condition: &dyn Fn(&Day) -> bool| -> bool {
+			let load_streaks_from = data_storage_dir.as_ref().join(&format!("{}.json", yd_date));
+			let yd_streaks_source = match std::fs::read_to_string(&load_streaks_from) {
+				Ok(s) => Some(serde_json::from_str::<Day>(&s).unwrap()),
+				Err(_) => None,
+			};
+
+			let pb_streaks = pbs_as_value.get("streaks").unwrap_or(&serde_json::Value::Null);
+			let read_streak: Streak = pb_streaks
+				.get(metric)
+				.map_or_else(Streak::default, |v| serde_json::from_value::<Streak>(v.clone()).unwrap_or_default());
+
+			let is_validated: bool = yd_streaks_source.is_some() && condition(&yd_streaks_source.unwrap());
+			let skip = match pb_streaks.get("__last_date_processed") {
+				Some(v) => v.as_str().expect("The only way this panics is if user manually changes pbs file") == yd_date,
+				None => false,
+			};
+			if !skip {
+				let mut new_streak = if is_validated {
+					Streak {
+						pb: read_streak.pb,
+						current: read_streak.current + 1,
+					}
+				} else {
+					Streak {
+						pb: read_streak.pb,
+						current: 0,
+					}
+				};
+				if new_streak.current > read_streak.current {
+					announce_new_pb(new_streak.current, Some(read_streak.current), metric);
+					new_streak.pb = new_streak.current;
+				}
+				pbs_as_value["streaks"][metric] = serde_json::to_value(new_streak).unwrap();
+			} else {
+				pbs_as_value["streaks"][metric] = serde_json::to_value(read_streak).unwrap();
+			}
+
+			is_validated
+		};
+
+		let full_visuals_condition = |d: &Day| {
+			d.morning.transcendential.jo_times.full_visuals == 0
+				&& d.midday.transcendential.jo_times.full_visuals == 0
+				&& d.evening.transcendential.jo_times.full_visuals == 0
+		};
+		let no_jo_full_visuals = streak_update("no_jo_full_visuals", &full_visuals_condition);
+
+		let no_visuals_condition = |d: &Day| {
+			d.morning.transcendential.jo_times.no_visuals == 0
+				&& d.midday.transcendential.jo_times.no_visuals == 0
+				&& d.evening.transcendential.jo_times.no_visuals == 0
+				&& no_jo_full_visuals
+		};
+		let no_jo_no_visuals = streak_update("no_jo_no_visuals", &no_visuals_condition);
+
+		let work_for_visuals_condition = |d: &Day| {
+			d.morning.transcendential.jo_times.work_for_visuals == 0
+				&& d.midday.transcendential.jo_times.work_for_visuals == 0
+				&& d.evening.transcendential.jo_times.work_for_visuals == 0
+				&& no_jo_no_visuals
+		};
+		let _ = streak_update("no_jo_work_for_visuals", &work_for_visuals_condition);
+
+		let stable_sleep_condition = |d: &Day| {
+			d.sleep.yd_to_bed_t_plus == Some(0) && d.sleep.from_bed_t_plus == Some(0) && d.sleep.from_bed_abs_diff_from_day_before == Some(0)
+		};
+		let _ = streak_update("stable_sleep", &stable_sleep_condition);
+
+		let meditation_condition = |d: &Day| d.evening.focus_meditation.is_some() && d.evening.focus_meditation.unwrap() > 0;
+		let _ = streak_update("focus_meditation", &meditation_condition);
+
+		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 		let pb = serde_json::from_value::<Pbs>(pbs_as_value).unwrap();
 
 		let formatted_json = serde_json::to_string_pretty(&pb).unwrap();
