@@ -8,6 +8,7 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 
 use clap::Args;
 use std::path::PathBuf;
@@ -21,10 +22,14 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	let date: String = (Utc::now() - Duration::days(args.days_back as i64))
 		.format(&config.date_format.as_str())
 		.to_string();
+	let filename = format!("{}.json", date);
 
-	let target_file_path = data_storage_dir.join(&date);
+	let target_file_path = data_storage_dir.join(&filename);
 	let ev_args = match args.command {
 		ManualSubcommands::Open { .. } => {
+			if !target_file_path.exists() {
+				return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
+			}
 			return utils::open(&target_file_path);
 		}
 		ManualSubcommands::Ev(ev) => ev.to_validated()?,
@@ -123,6 +128,10 @@ impl ManualEv {
 
 //=============================================================================
 
+// So I'm assuming the PbTracker is actually a mirror of the Day struct, with fields set to their best ever values. Although: 1) What about the changes to the structs 2) Streaks, where the members could be multiple?
+
+// Basically only serialization to pb format is needed. Let's also flatten it, and require manual specification of the recorded name.
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Transcendential {
 	making_food: Option<usize>,
@@ -180,4 +189,51 @@ struct Day {
 	evening: Evening,
 	sleep: Sleep,
 	non_negotiables_done: Option<usize>, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Pbs {
+	alarm_to_run: usize,
+	run_to_shower: usize,
+	midday_hours_of_work: usize,
+}
+impl Default for Pbs {
+	fn default() -> Self {
+		Self {
+			alarm_to_run: std::usize::MAX,
+			run_to_shower: std::usize::MAX,
+			midday_hours_of_work: std::usize::MIN,
+		}
+	}
+}
+
+impl Day {
+	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T) {
+		let pb_path = data_storage_dir.as_ref().join("pbs.json");
+		let mut pb = match std::fs::read_to_string(&pb_path) {
+			Ok(s) => serde_json::from_str::<Pbs>(&s).unwrap(),
+			Err(_) => Pbs::default(),
+		};
+
+		if let Some(v) = self.morning.alarm_to_run {
+			if v < pb.alarm_to_run {
+				pb.alarm_to_run = v;
+			}
+		}
+		if let Some(v) = self.morning.run_to_shower {
+			if v < pb.run_to_shower {
+				pb.run_to_shower = v;
+			}
+		}
+		if let Some(v) = self.midday.hours_of_work {
+			if v > pb.midday_hours_of_work {
+				pb.midday_hours_of_work = v;
+			}
+		}
+		//TODO!: streaks
+
+		let formatted_json = serde_json::to_string_pretty(&pb).unwrap();
+		let mut file = OpenOptions::new().read(true).write(true).create(true).open(&pb_path).unwrap();
+		file.write_all(formatted_json.as_bytes()).unwrap();
+	}
 }

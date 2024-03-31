@@ -3,6 +3,9 @@ use std::{path::PathBuf, process::Command};
 
 //TODO!: make it take a flag for whether to sync with git before and open opening, and add the whole to v_utils \
 pub fn open(path: &PathBuf) -> Result<()> {
+	if !path.exists() {
+		return Err(anyhow!("File does not exist"));
+	}
 	Command::new("sh")
 		.arg("-c")
 		.arg(format!("$EDITOR {}", path.display()))
