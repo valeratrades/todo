@@ -67,6 +67,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 			}
 		}
 	};
+	day.update_pbs(&data_storage_dir);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
