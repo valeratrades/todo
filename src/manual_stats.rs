@@ -147,7 +147,7 @@ impl ManualEv {
 struct Transcendential {
 	making_food: Option<usize>,
 	eating_food: Option<usize>,
-	j_o_times: JOtimes,
+	jo_times: JoTimes,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -184,7 +184,7 @@ struct Evening {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 // removed the Option for ease of input, let's see how capable I am of always filling these in. Otherwise I'll have to add them back.
-struct JOtimes {
+struct JoTimes {
 	full_visuals: usize,
 	no_visuals: usize,
 	work_for_visuals: usize,
@@ -204,73 +204,202 @@ struct Day {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Pbs {
-	alarm_to_run: usize,
-	run_to_shower: usize,
-	midday_hours_of_work: usize,
-	ev: usize,
+	alarm_to_run: Option<usize>,
+	run_to_shower: Option<usize>,
+	midday_hours_of_work: Option<usize>,
+	ev: Option<usize>,
+	//streaks: Streaks,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Streaks {
+	no_jo_full_visuals: Streak,
+	no_jo_no_visuals: Streak,
+	no_jo_work_for_visuals: Streak,
+	stable_sleep: Streak,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct Streak {
+	pb: usize,
+	current: usize,
 }
 
 impl Day {
 	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T) {
-		fn announce_new_pb(new_value: usize, old_value: usize, name: &str) {
+		fn announce_new_pb(new_value: usize, old_value: Option<usize>, name: &str) {
+			let old_value = match old_value {
+				Some(v) => v.to_string(),
+				None => "None".to_owned(),
+			};
 			let announcement = format!("New pb on {}! ({} -> {})", name, old_value, new_value);
 			println!("{}", announcement);
 			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap();
 		}
 
-		let pb_path = data_storage_dir.as_ref().join("pbs.json");
-		let mut pb_as_value = match std::fs::read_to_string(&pb_path) {
+		let pbs_path = data_storage_dir.as_ref().join("pbs.json");
+		let mut pbs_as_value = match std::fs::read_to_string(&pbs_path) {
 			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // so if we change the struct, we don't rewrite everything
 			Err(_) => serde_json::Value::Null,
 		};
 
-		if self.ev >= 0 {
-			let new = self.ev;
-			let old = match pb_as_value.get_mut("ev") {
-				Some(v) => v.as_u64().unwrap() as usize,
-				None => std::u64::MAX as usize,
-			};
-			if new > old as i32 {
-				announce_new_pb(new as usize, old, "ev");
-				pb_as_value["ev"] = serde_json::Value::from(new);
-			}
-		}
-		if let Some(new) = self.morning.alarm_to_run {
-			let old = match pb_as_value.get_mut("alarm_to_run") {
-				Some(v) => v.as_u64().unwrap() as usize,
-				None => std::u64::MAX as usize,
-			};
-			if new < old {
-				announce_new_pb(new, old, "alarm_to_run");
-				pb_as_value["alarm_to_run"] = serde_json::Value::from(new);
-			}
-		}
-		if let Some(new) = self.morning.run_to_shower {
-			let old = match pb_as_value.get_mut("run_to_shower") {
-				Some(v) => v.as_u64().unwrap() as usize,
-				None => std::u64::MAX as usize,
-			};
-			if new < old {
-				announce_new_pb(new, old, "run_to_shower");
-				pb_as_value["run_to_shower"] = serde_json::Value::from(new);
-			}
-		}
-		if let Some(new) = self.midday.hours_of_work {
-			let old = match pb_as_value.get_mut("midday_hours_of_work") {
-				Some(v) => v.as_u64().unwrap() as usize,
-				None => std::u64::MAX as usize,
-			};
-			if new > old {
-				announce_new_pb(new, old, "midday_hours_of_work");
-				pb_as_value["midday_hours_of_work"] = serde_json::Value::from(new);
-			}
-		}
-		let pb = serde_json::from_value::<Pbs>(pb_as_value).unwrap();
-		//TODO!: streaks
+		let mut conditional_update = |metric: &str, new_value: usize, condition: fn(usize, usize) -> bool| {
+			let old_value = pbs_as_value
+				.get(metric)
+				.and_then(|v| v.as_u64())
+				.map(|v| Some(v as usize))
+				.unwrap_or(None);
 
-		assert!(pb_path.exists());
+			match old_value {
+				Some(v) => {
+					if condition(new_value, v) {
+						announce_new_pb(new_value, Some(v), metric);
+						pbs_as_value[metric] = serde_json::Value::from(new_value);
+					} else {
+						pbs_as_value[metric] = serde_json::Value::from(v);
+					}
+				}
+				None => {
+					announce_new_pb(new_value, None, metric);
+					pbs_as_value[metric] = serde_json::Value::from(new_value);
+				}
+			}
+		};
+
+		if self.ev >= 0 {
+			conditional_update("ev", self.ev as usize, |new, old| new > old);
+		}
+		if let Some(new_alarm) = self.morning.alarm_to_run {
+			conditional_update("alarm_to_run", new_alarm, |new, old| new < old);
+		}
+		if let Some(new_run) = self.morning.run_to_shower {
+			conditional_update("run_to_shower", new_run, |new, old| new < old);
+		}
+		if let Some(new_hours_of_work) = self.midday.hours_of_work {
+			conditional_update("midday_hours_of_work", new_hours_of_work, |new, old| new > old);
+		}
+
+		//let mut jo_full_visuals = false;
+		//{
+		//	let old = match pbs_as_value.get("streak_no_jo_full_visuals") {
+		//		Some(v) => v.as_u64().unwrap() as usize,
+		//		None => 0,
+		//	};
+		//	let new = {
+		//		if self.morning.transcendential.jo_times.full_visuals == 0
+		//			&& self.midday.transcendential.jo_times.full_visuals == 0
+		//			&& self.evening.transcendential.jo_times.full_visuals == 0
+		//		{
+		//			announce_new_pb(old + 1, old, "streak_no_jo_full_visuals");
+		//			old + 1
+		//		} else {
+		//			jo_full_visuals = true;
+		//			0
+		//		}
+		//	};
+		//	pbs_as_value["streak_no_jo_full_visuals"] = serde_json::Value::from(new);
+		//}
+		//let mut jo_no_visuals = false;
+		//{
+		//	let old = match pbs_as_value.get("streak_no_jo_no_visuals") {
+		//		Some(v) => v.as_u64().unwrap() as usize,
+		//		None => 0,
+		//	};
+		//	let new = {
+		//		if self.morning.transcendential.jo_times.no_visuals == 0
+		//			&& self.midday.transcendential.jo_times.no_visuals == 0
+		//			&& self.evening.transcendential.jo_times.no_visuals == 0
+		//			&& !jo_full_visuals
+		//		{
+		//			announce_new_pb(old + 1, old, "streak_no_jo_no_visuals");
+		//			old + 1
+		//		} else {
+		//			jo_no_visuals = true;
+		//			0
+		//		}
+		//	};
+		//	pbs_as_value["streak_no_jo_no_visuals"] = serde_json::Value::from(new);
+		//}
+		//{
+		//	let old = match pbs_as_value.get("streak_no_jo_work_for_visuals") {
+		//		Some(v) => v.as_u64().unwrap() as usize,
+		//		None => 0,
+		//	};
+		//	let new = {
+		//		if self.morning.transcendential.jo_times.work_for_visuals == 0
+		//			&& self.midday.transcendential.jo_times.work_for_visuals == 0
+		//			&& self.evening.transcendential.jo_times.work_for_visuals == 0
+		//			&& !jo_no_visuals
+		//		{
+		//			announce_new_pb(old + 1, old, "streak_no_jo_work_for_visuals");
+		//			old + 1
+		//		} else {
+		//			0
+		//		}
+		//	};
+		//	pbs_as_value["streak_no_jo_work_for_visuals"] = serde_json::Value::from(new);
+		//}
+		//
+		//{
+		//	let old = match pbs_as_value.get_mut("streak_stable_sleep") {
+		//		Some(v) => v.as_u64().unwrap() as usize,
+		//		None => 0,
+		//	};
+		//	let mut invalidated = false;
+		//	if let Some(v) = self.sleep.yd_to_bed_t_plus {
+		//		if v > 0 {
+		//			invalidated = true;
+		//		}
+		//	} else {
+		//		invalidated = true;
+		//	}
+		//	if let Some(v) = self.sleep.from_bed_t_plus {
+		//		if v > 0 {
+		//			invalidated = true;
+		//		}
+		//	} else {
+		//		invalidated = true;
+		//	}
+		//	if let Some(v) = self.sleep.from_bed_abs_diff_from_day_before {
+		//		if v > 0 {
+		//			invalidated = true;
+		//		}
+		//	} else {
+		//		invalidated = true;
+		//	}
+		//
+		//	let new = if invalidated {
+		//		0
+		//	} else {
+		//		announce_new_pb(old + 1, old, "streak_stable_sleep");
+		//		old + 1
+		//	};
+		//	pbs_as_value["streak_stable_sleep"] = serde_json::Value::from(new);
+		//}
+		//
+		//{
+		//	let old = match pbs_as_value.get_mut("meditation") {
+		//		Some(v) => v.as_u64().unwrap() as usize,
+		//		None => 0,
+		//	};
+		//	let mut invalidated = true;
+		//	if !self.evening.focus_meditation.is_some() || self.evening.focus_meditation.unwrap() != 0 {
+		//		invalidated = false;
+		//	}
+		//
+		//	let new = if invalidated {
+		//		0
+		//	} else {
+		//		announce_new_pb(old + 1, old, "meditation");
+		//		old + 1
+		//	};
+		//	pbs_as_value["meditation"] = serde_json::Value::from(new);
+		//}
+		//
+		let pb = serde_json::from_value::<Pbs>(pbs_as_value).unwrap();
+
 		let formatted_json = serde_json::to_string_pretty(&pb).unwrap();
-		let mut file = OpenOptions::new().read(true).write(true).create(true).open(&pb_path).unwrap();
+		let mut file = OpenOptions::new().read(true).write(true).create(true).open(&pbs_path).unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
 }
