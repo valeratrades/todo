@@ -50,9 +50,10 @@ enum Commands {
 	///todo quickfix
 	///```
 	Quickfix(NoArgs),
-	/// Record day's ev and other stats
+	/// Record day's ev and other stats.
+	///Following records ev of 420 for yesterday, then opens the file.
 	///```rust
-	///todo manual --ev 420 -oy
+	///todo manual -d1 --ev 420 -o
 	///```
 	Manual(manual_stats::ManualArgs),
 	/// Start a task with timer, then store error (to track improvement of your estimations of time spent on different task categories)

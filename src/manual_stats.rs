@@ -212,25 +212,6 @@ struct Day {
 	non_negotiables_done: Option<usize>, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Pbs {
-	alarm_to_run: Option<usize>,
-	run_to_shower: Option<usize>,
-	midday_hours_of_work: Option<usize>,
-	ev: Option<usize>,
-	streaks: Streaks,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Streaks {
-	no_jo_full_visuals: Option<Streak>,
-	no_jo_no_visuals: Option<Streak>,
-	no_jo_work_for_visuals: Option<Streak>,
-	stable_sleep: Option<Streak>,
-	focus_meditation: Option<Streak>,
-	__last_date_processed: String,
-}
-
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Streak {
 	pb: usize,
@@ -252,7 +233,7 @@ impl Day {
 		let pbs_path = data_storage_dir.as_ref().join(PBS_FILENAME);
 		let yd_date = utils::format_date(1, config); // no matter what file is being checked, we only ever care about physical yesterday
 		let mut pbs_as_value = match std::fs::read_to_string(&pbs_path) {
-			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // so if we change the struct, we don't rewrite everything
+			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // Value so we don't need to rewrite everything on `Day` struct changes. Both in terms of extra code, and recorded pb values. Previously had a Pbs struct, but that has proven to be unnecessary.
 			Err(_) => serde_json::Value::Null,
 		};
 
@@ -365,10 +346,12 @@ impl Day {
 		let meditation_condition = |d: &Day| d.evening.focus_meditation.is_some() && d.evening.focus_meditation.unwrap() > 0;
 		let _ = streak_update("focus_meditation", &meditation_condition);
 
-		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
-		let pb = serde_json::from_value::<Pbs>(pbs_as_value).unwrap();
+		let nsdr_condition = |d: &Day| d.evening.nsdr.is_some() && d.evening.nsdr.unwrap() > 0;
+		let _ = streak_update("nsdr", &nsdr_condition);
 
-		let formatted_json = serde_json::to_string_pretty(&pb).unwrap();
+		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
+
+		let formatted_json = serde_json::to_string_pretty(&pbs_as_value).unwrap();
 		let mut file = OpenOptions::new().read(true).write(true).create(true).open(&pbs_path).unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
