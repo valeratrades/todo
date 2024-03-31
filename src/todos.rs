@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::day_section::DaySection;
-use crate::utils;
 use anyhow::{Context, Result};
 use std::fmt::{self, Display};
+use v_utils::io::OpenMode;
 
 use clap::Args;
 use std::path::PathBuf;
@@ -78,25 +78,8 @@ pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> R
 		let _ = std::fs::File::create(&path).unwrap();
 	}
 
-	if flags.open == true {
-		let _ = std::process::Command::new("sh")
-			.arg("-c")
-			.arg(format!("git -C \"{}\" pull", config.todos.path.display()))
-			.status()
-			.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
-
-		utils::open(&path)?;
-	}
-
-	let _t = &config.todos.path.display();
-	let _ = std::process::Command::new("sh")
-		.arg("-c")
-		.arg(format!(
-			"git -C \"{}\" add -A && git -C \"{}\" commit -m \".\" && git -C \"{}\" push",
-			_t, _t, _t
-		))
-		.status()
-		.with_context(|| "Synchronize your directory with todo items to a private git repo first.")?;
+	let mode = if flags.open == true { Some(OpenMode::Normal) } else { None };
+	v_utils::io::sync_file_with_git(&path, mode)?;
 
 	Ok(())
 }

@@ -2,14 +2,16 @@
 use crate::config::Config;
 use crate::utils;
 use anyhow::{anyhow, ensure, Result};
+use clap::Args;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-
-use clap::Args;
 use std::path::PathBuf;
+use v_utils::io::OpenMode;
+
+static PBS_FILENAME: &'static str = ".pbs.json";
 
 use crate::MANUAL_PATH_APPENDIX;
 pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
@@ -21,13 +23,19 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 
 	let target_file_path = data_storage_dir.join(&filename);
 	let ev_args = match args.command {
-		ManualSubcommands::Open { .. } => {
-			if !target_file_path.exists() {
-				return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
+		ManualSubcommands::Open(open_args) => match open_args.pbs {
+			false => {
+				if !target_file_path.exists() {
+					return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
+				}
+				v_utils::io::open(&target_file_path)?;
+				return process_manual_updates(&target_file_path, &config);
 			}
-			utils::open(&target_file_path)?;
-			return process_manual_updates(&target_file_path, &config);
-		}
+			true => {
+				let pbs_path = data_storage_dir.join(PBS_FILENAME);
+				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Readonly);
+			}
+		},
 		ManualSubcommands::Ev(ev) => ev.to_validated()?,
 	};
 
@@ -70,7 +78,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
 	if ev_args.open == true {
-		utils::open(&target_file_path)?;
+		v_utils::io::open(&target_file_path)?;
 		process_manual_updates(&target_file_path, &config)?;
 	}
 
@@ -96,7 +104,7 @@ pub struct ManualArgs {
 #[derive(Subcommand)]
 pub enum ManualSubcommands {
 	Ev(ManualEv),
-	Open {},
+	Open(ManualOpen),
 }
 #[derive(Args)]
 pub struct ManualEv {
@@ -131,6 +139,12 @@ impl ManualEv {
 			replace,
 		})
 	}
+}
+
+#[derive(Args)]
+pub struct ManualOpen {
+	#[arg(short, long)]
+	pub pbs: bool,
 }
 
 //=============================================================================
@@ -235,7 +249,7 @@ impl Day {
 			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap();
 		}
 
-		let pbs_path = data_storage_dir.as_ref().join(".pbs.json");
+		let pbs_path = data_storage_dir.as_ref().join(PBS_FILENAME);
 		let yd_date = utils::format_date(1, config); // no matter what file is being checked, we only ever care about physical yesterday
 		let mut pbs_as_value = match std::fs::read_to_string(&pbs_path) {
 			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // so if we change the struct, we don't rewrite everything

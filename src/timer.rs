@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::utils;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use clap::Args;
@@ -42,7 +41,7 @@ pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
 
 			run(&config)
 		}
-		TimerCommands::Open(_) => utils::open(&save_file),
+		TimerCommands::Open(_) => v_utils::io::open(&save_file),
 		TimerCommands::Done(_) => save_result(&config, true),
 		TimerCommands::Failed(_) => save_result(&config, false),
 		TimerCommands::ContinueOngoing(_) => run(&config),
