@@ -1,3 +1,5 @@
 - [ ] add count of total ev collected, and then near it total ev required, which I am collecting daily. Obviously, discounted for time and risk. And then I shall keep these two numbers somewhere visible. I was thinking overlay on the wallpaper or make a new eww widget to keep track of the life stats // brownie points for figuring out if I can predict ev based on what is open at the moment, and display immediately.
 
 - [ ] on the site, compile the horizontal bar chart for time spent at first only for the highest level, (being PC and Phone), only. And then have a thing that compiles the bar for the children right below it on click at the parent; then rolls back on second click. Practically, like the file tree thing in any modern editor.
+
+- [ ] Figure out database migrations. Potentially switch to a real database, instead of hand-rolled json storage thing.
