@@ -186,8 +186,8 @@ struct Midday {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Evening {
-	focus_meditation: Option<usize>, // fixed at 13m under current sota, but why not keep it flexible
-	nsdr: Option<usize>,
+	focus_meditation: usize, // fixed at 13m under current sota, but why not keep it flexible
+	nsdr: usize,
 	#[serde(flatten)]
 	transcendential: Transcendential,
 }
@@ -303,7 +303,7 @@ impl Day {
 						current: 0,
 					}
 				};
-				if new_streak.current > read_streak.current {
+				if new_streak.current > read_streak.pb {
 					announce_new_pb(new_streak.current, Some(read_streak.current), metric);
 					new_streak.pb = new_streak.current;
 				}
@@ -343,10 +343,10 @@ impl Day {
 		};
 		let _ = streak_update("stable_sleep", &stable_sleep_condition);
 
-		let meditation_condition = |d: &Day| d.evening.focus_meditation.is_some() && d.evening.focus_meditation.unwrap() > 0;
+		let meditation_condition = |d: &Day| d.evening.focus_meditation > 0;
 		let _ = streak_update("focus_meditation", &meditation_condition);
 
-		let nsdr_condition = |d: &Day| d.evening.nsdr.is_some() && d.evening.nsdr.unwrap() > 0;
+		let nsdr_condition = |d: &Day| d.evening.nsdr > 0;
 		let _ = streak_update("nsdr", &nsdr_condition);
 
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
