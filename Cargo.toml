@@ -17,4 +17,4 @@ serde_json = { version = "1.0.107", features = ["std"] }
 tempfile = "3.9.0"
 tokio = { version = "1.35.1", features = ["rt", "rt-multi-thread"] }
 toml = "0.8.8"
-v_utils = { version = "1.1.0", features = ["io"] }
+v_utils = { version = "1.2.1", features = ["io"] }
