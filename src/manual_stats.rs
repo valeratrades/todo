@@ -172,8 +172,10 @@ struct Morning {
 	alarm_to_run: Option<usize>,
 	run: Option<usize>,
 	run_to_shower: Option<usize>,
+	shower_to_breakfast_work_efficiency_percent_of_optimal: Option<usize>,
 	#[serde(flatten)]
 	transcendential: Transcendential,
+	breakfast_to_work: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -348,6 +350,18 @@ impl Day {
 
 		let nsdr_condition = |d: &Day| d.evening.nsdr > 0;
 		let _ = streak_update("nsdr", &nsdr_condition);
+
+		let perfect_morning_condition = |d: &Day| {
+			d.morning.alarm_to_run.is_some_and(|v| v < 10)
+				&& d.morning.run_to_shower.is_some_and(|v| v <= 5)
+				&& d.morning.shower_to_breakfast_work_efficiency_percent_of_optimal.is_some_and(|v| v > 90)
+				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
+				&& d.morning.transcendential.jo_times.full_visuals == 0
+				&& d.morning.transcendential.jo_times.no_visuals == 0
+				&& d.morning.transcendential.jo_times.work_for_visuals == 0
+				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
+		};
+		let _ = streak_update("perfect_morning", &perfect_morning_condition);
 
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
