@@ -67,7 +67,9 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 				midday: Midday::default(),
 				evening: Evening::default(),
 				sleep: Sleep::default(),
-				non_negotiables_done: None,
+				non_negotiables_done: 0,
+				jo_times: JoTimes::default(),
+				number_of_NOs: 0,
 			}
 		}
 	};
@@ -157,7 +159,6 @@ pub struct ManualOpen {
 struct Transcendential {
 	making_food: Option<usize>,
 	eating_food: Option<usize>,
-	jo_times: JoTimes,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -211,7 +212,9 @@ struct Day {
 	midday: Midday,
 	evening: Evening,
 	sleep: Sleep,
-	non_negotiables_done: Option<usize>, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
+	jo_times: JoTimes,
+	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
+	number_of_NOs: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -317,27 +320,13 @@ impl Day {
 			is_validated
 		};
 
-		let full_visuals_condition = |d: &Day| {
-			d.morning.transcendential.jo_times.full_visuals == 0
-				&& d.midday.transcendential.jo_times.full_visuals == 0
-				&& d.evening.transcendential.jo_times.full_visuals == 0
-		};
+		let full_visuals_condition = |d: &Day| d.jo_times.full_visuals == 0;
 		let no_jo_full_visuals = streak_update("no_jo_full_visuals", &full_visuals_condition);
 
-		let no_visuals_condition = |d: &Day| {
-			d.morning.transcendential.jo_times.no_visuals == 0
-				&& d.midday.transcendential.jo_times.no_visuals == 0
-				&& d.evening.transcendential.jo_times.no_visuals == 0
-				&& no_jo_full_visuals
-		};
+		let no_visuals_condition = |d: &Day| d.jo_times.no_visuals == 0 && no_jo_full_visuals;
 		let no_jo_no_visuals = streak_update("no_jo_no_visuals", &no_visuals_condition);
 
-		let work_for_visuals_condition = |d: &Day| {
-			d.morning.transcendential.jo_times.work_for_visuals == 0
-				&& d.midday.transcendential.jo_times.work_for_visuals == 0
-				&& d.evening.transcendential.jo_times.work_for_visuals == 0
-				&& no_jo_no_visuals
-		};
+		let work_for_visuals_condition = |d: &Day| d.jo_times.work_for_visuals == 0 && no_jo_no_visuals;
 		let _ = streak_update("no_jo_work_for_visuals", &work_for_visuals_condition);
 
 		let stable_sleep_condition = |d: &Day| {
@@ -356,12 +345,12 @@ impl Day {
 				&& d.morning.run_to_shower.is_some_and(|v| v <= 5)
 				&& d.morning.shower_to_breakfast_work_efficiency_percent_of_optimal.is_some_and(|v| v > 90)
 				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
-				&& d.morning.transcendential.jo_times.full_visuals == 0
-				&& d.morning.transcendential.jo_times.no_visuals == 0
-				&& d.morning.transcendential.jo_times.work_for_visuals == 0
 				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
 		};
 		let _ = streak_update("perfect_morning", &perfect_morning_condition);
+
+		let no_streak_condition = |d: &Day| d.number_of_NOs > 0;
+		let _ = streak_update("NOs_streak", &no_streak_condition);
 
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
