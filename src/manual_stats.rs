@@ -197,7 +197,7 @@ struct Evening {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 // removed the Option for ease of input, let's see how capable I am of always filling these in. Otherwise I'll have to add them back.
-struct JoTimes {
+struct JoMins {
 	full_visuals: usize,
 	no_visuals: usize,
 	work_for_visuals: usize,
@@ -212,7 +212,7 @@ struct Day {
 	midday: Midday,
 	evening: Evening,
 	sleep: Sleep,
-	jo_times: JoTimes,
+	jo_mins: JoMins,
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	number_of_NOs: usize,
 }
@@ -320,13 +320,13 @@ impl Day {
 			is_validated
 		};
 
-		let full_visuals_condition = |d: &Day| d.jo_times.full_visuals == 0;
+		let full_visuals_condition = |d: &Day| d.jo_mins.full_visuals == 0;
 		let no_jo_full_visuals = streak_update("no_jo_full_visuals", &full_visuals_condition);
 
-		let no_visuals_condition = |d: &Day| d.jo_times.no_visuals == 0 && no_jo_full_visuals;
+		let no_visuals_condition = |d: &Day| d.jo_mins.no_visuals == 0 && no_jo_full_visuals;
 		let no_jo_no_visuals = streak_update("no_jo_no_visuals", &no_visuals_condition);
 
-		let work_for_visuals_condition = |d: &Day| d.jo_times.work_for_visuals == 0 && no_jo_no_visuals;
+		let work_for_visuals_condition = |d: &Day| d.jo_mins.work_for_visuals == 0 && no_jo_no_visuals;
 		let _ = streak_update("no_jo_work_for_visuals", &work_for_visuals_condition);
 
 		let stable_sleep_condition = |d: &Day| {
