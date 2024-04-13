@@ -68,7 +68,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 				evening: Evening::default(),
 				sleep: Sleep::default(),
 				non_negotiables_done: 0,
-				jo_mins: JoTimes::default(),
+				jo_mins: JoMins::default(),
 				number_of_NOs: 0,
 			}
 		}
