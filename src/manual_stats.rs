@@ -60,17 +60,10 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 				ev_args.replace,
 				"The day object is not initialized, so `ev` argument must be provided with `-r --replace` flag"
 			);
-			Day {
-				date: date.clone(),
-				ev: ev_args.ev,
-				morning: Morning::default(),
-				midday: Midday::default(),
-				evening: Evening::default(),
-				sleep: Sleep::default(),
-				non_negotiables_done: 0,
-				jo_mins: JoMins::default(),
-				number_of_NOs: 0,
-			}
+			let mut d = Day::default();
+			d.ev = ev_args.ev;
+			d.date = date.clone();
+			d
 		}
 	};
 	day.update_pbs(&data_storage_dir, &config);
@@ -203,7 +196,7 @@ struct JoMins {
 	work_for_visuals: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 /// Unless specified otherwise, all times are in minutes
 struct Day {
 	date: String,
@@ -215,6 +208,7 @@ struct Day {
 	jo_mins: JoMins,
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	number_of_NOs: usize,
+	caffeine_only_during_work: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -351,6 +345,9 @@ impl Day {
 
 		let no_streak_condition = |d: &Day| d.number_of_NOs > 0;
 		let _ = streak_update("NOs_streak", &no_streak_condition);
+
+		let responsible_caffeine_condition = |d: &Day| d.caffeine_only_during_work == Some(true);
+		let _ = streak_update("responsible_caffeine", &responsible_caffeine_condition);
 
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
