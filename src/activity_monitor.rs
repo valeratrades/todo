@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::AppConfig;
 use anyhow::Result;
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use std::{
 use crate::MONITOR_PATH_APPENDIX;
 use crate::TOTALS_PATH_APPENDIX;
 
-pub fn start(config: Config) -> Result<()> {
+pub fn start(config: AppConfig) -> Result<()> {
 	let mut prev_activity_name = String::new();
 	let mut start_s = Utc::now().timestamp();
 	loop {
@@ -38,7 +38,7 @@ struct Activity {
 	end_s: i64,
 }
 
-fn get_activity(config: &Config) -> String {
+fn get_activity(config: &AppConfig) -> String {
 	let _ = std::fs::create_dir(&config.data_dir.join(MONITOR_PATH_APPENDIX));
 	let _ = std::fs::create_dir(&config.data_dir.join(TOTALS_PATH_APPENDIX));
 
@@ -98,7 +98,7 @@ fn get_activity(config: &Config) -> String {
 }
 
 /// Incredibly inefficient way of recording a new entry, because we load all the existing ones first.
-fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
+fn record_activity(config: &AppConfig, name: String, start_s: i64, end_s: i64) {
 	let save_dir = &config.data_dir.join(MONITOR_PATH_APPENDIX);
 
 	let record = Activity { name, start_s, end_s };
@@ -123,7 +123,7 @@ fn record_activity(config: &Config, name: String, start_s: i64, end_s: i64) {
 //-----------------------------------------------------------------------------
 
 //TODO!!!: change so it takes the target date instead. Once done, add a command to recompile all of the recorded days. \
-fn compile_yd_totals(config: &Config) {
+fn compile_yd_totals(config: &AppConfig) {
 	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(config.date_format.as_str()).to_string();
 	let yd_totals_file = (&config.data_dir.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
 	if yd_totals_file.exists() {
@@ -137,7 +137,7 @@ fn compile_yd_totals(config: &Config) {
 	};
 	let yd_activities: Vec<Activity> = serde_json::from_str(&file_contents).unwrap();
 
-	fn write_grand_total(yd_activities: Vec<Activity>, config: &Config) {
+	fn write_grand_total(yd_activities: Vec<Activity>, config: &AppConfig) {
 		let grand_total = Total::from_activities(yd_activities, &config.activity_monitor.delimitor);
 
 		let formatted_json = serde_json::to_string_pretty(&grand_total).unwrap();
@@ -146,7 +146,7 @@ fn compile_yd_totals(config: &Config) {
 	}
 	write_grand_total(yd_activities.clone(), &config);
 
-	fn compile_calendar(yd_activities: Vec<Activity>, config: &Config) {
+	fn compile_calendar(yd_activities: Vec<Activity>, config: &AppConfig) {
 		let mut calendar: Vec<(String, i64)> = Vec::new();
 
 		// iter over activities: from first found compile grand_total over next 15m. If it is above 7.5 -> store as (Total, start_timestamp)

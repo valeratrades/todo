@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-use crate::config::Config;
+use crate::config::AppConfig;
 use crate::utils;
 use anyhow::{anyhow, ensure, Result};
 use clap::Args;
@@ -14,7 +14,7 @@ use v_utils::io::OpenMode;
 static PBS_FILENAME: &'static str = ".pbs.json";
 
 use crate::MANUAL_PATH_APPENDIX;
-pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
+pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 	let _ = std::fs::create_dir(&data_storage_dir);
 
@@ -80,7 +80,7 @@ pub fn update_or_open(config: Config, args: ManualArgs) -> Result<()> {
 	Ok(())
 }
 
-fn process_manual_updates<T: AsRef<Path>>(path: T, config: &Config) -> Result<()> {
+fn process_manual_updates<T: AsRef<Path>>(path: T, config: &AppConfig) -> Result<()> {
 	if !path.as_ref().exists() {
 		return Err(anyhow!("File does not exist, the fuck you just did"));
 	}
@@ -218,7 +218,7 @@ struct Streak {
 }
 
 impl Day {
-	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &Config) {
+	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &AppConfig) {
 		fn announce_new_pb(new_value: usize, old_value: Option<usize>, name: &str) {
 			let old_value = match old_value {
 				Some(v) => v.to_string(),

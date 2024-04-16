@@ -5,7 +5,7 @@ mod manual_stats;
 mod timer;
 mod todos;
 pub mod utils;
-use config::Config;
+use config::AppConfig;
 use v_utils::io::ExpandedPath;
 
 use clap::{Args, Parser, Subcommand};
@@ -73,7 +73,7 @@ struct NoArgs {}
 fn main() {
 	let cli = Cli::parse();
 
-	let config = match Config::try_from(cli.config) {
+	let config = match AppConfig::new(cli.config) {
 		Ok(cfg) => cfg,
 		Err(e) => {
 			eprintln!("Error: {}", e);

@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::AppConfig;
 use crate::day_section::DaySection;
 use anyhow::{Context, Result};
 use std::fmt::{self, Display};
@@ -8,7 +8,7 @@ use clap::Args;
 use std::path::PathBuf;
 use tempfile::Builder;
 
-pub fn compile_quickfix(config: Config) -> Result<()> {
+pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 	let day_section = DaySection::build().unwrap();
 	let path: PathBuf = day_section_path(&config, &day_section);
 
@@ -68,7 +68,7 @@ Clear separation between tasks below 5m and above. Those below can be done whene
 	Ok(())
 }
 
-pub fn open_or_add(config: Config, flags: TodosFlags, name: Option<String>) -> Result<()> {
+pub fn open_or_add(config: AppConfig, flags: TodosFlags, name: Option<String>) -> Result<()> {
 	let day_section = flags.extract_day_section();
 
 	let mut path = day_section_path(&config, &day_section);
@@ -123,7 +123,7 @@ impl TodosFlags {
 	}
 }
 
-fn day_section_path<'a>(config: &'a Config, day_section: &'a DaySection) -> PathBuf {
+fn day_section_path<'a>(config: &'a AppConfig, day_section: &'a DaySection) -> PathBuf {
 	let todos_dir = config.todos.path.clone();
 
 	let path_appendix: &str = match day_section.to_owned() {

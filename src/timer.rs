@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::AppConfig;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use clap::Args;
@@ -13,7 +13,7 @@ use crate::ONGOING_PATH_APPENDIX;
 use crate::TIMED_PATH_APPENDIX;
 
 //TODO!!!!: make it possible to have multiple files in the state file, so it can be used as a fully fletched quickfix todo list.
-pub fn timing_the_task(config: Config, args: TimerArgs) -> Result<()> {
+pub fn timing_the_task(config: AppConfig, args: TimerArgs) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
 	let save_file = save_dir.join(format!("{}.json", Utc::now().format(&config.date_format)));
@@ -128,7 +128,7 @@ struct Record {
 	realised_minutes: u32,
 }
 
-fn save_result(config: &Config, mut completed: bool) -> Result<()> {
+fn save_result(config: &AppConfig, mut completed: bool) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
 	let save_file = save_dir.join(format!("{}.json", Utc::now().format(&config.date_format)));
@@ -188,7 +188,7 @@ fn save_result(config: &Config, mut completed: bool) -> Result<()> {
 	Ok(())
 }
 
-fn run(config: &Config) -> Result<()> {
+fn run(config: &AppConfig) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
 
