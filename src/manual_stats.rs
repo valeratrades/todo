@@ -209,6 +209,7 @@ struct Day {
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	number_of_NOs: usize,
 	caffeine_only_during_work: Option<bool>,
+	checked_messages_only_during_eating: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -348,6 +349,12 @@ impl Day {
 
 		let responsible_caffeine_condition = |d: &Day| d.caffeine_only_during_work == Some(true);
 		let _ = streak_update("responsible_caffeine", &responsible_caffeine_condition);
+
+		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_eating == Some(true);
+		let _ = streak_update("responsible_messengers", &responsible_messengers_condition);
+
+		let running_streak_condition = |d: &Day| d.morning.run.is_some_and(|v| v > 0);
+		let _ = streak_update("running_streak", &running_streak_condition);
 
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
