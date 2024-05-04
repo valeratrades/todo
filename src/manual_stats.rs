@@ -220,6 +220,7 @@ struct Streak {
 
 impl Day {
 	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &AppConfig) {
+		//TODO!!: fix error with adding extra brackets to ~/.data/personal/manual_stats/.pbs.json
 		fn announce_new_pb(new_value: usize, old_value: Option<usize>, name: &str) {
 			let old_value = match old_value {
 				Some(v) => v.to_string(),
