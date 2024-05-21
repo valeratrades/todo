@@ -4,12 +4,13 @@ use crate::utils;
 use anyhow::{anyhow, ensure, Result};
 use clap::Args;
 use clap::Subcommand;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use v_utils::io::OpenMode;
+use v_utils::{io::OpenMode, time::Timelike};
 
 static PBS_FILENAME: &'static str = ".pbs.json";
 
@@ -163,9 +164,9 @@ struct Sleep {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Morning {
-	alarm_to_run: Option<usize>,
+	alarm_to_run_M_colon_S: Option<Timelike>,
 	run: Option<usize>,
-	run_to_shower: Option<usize>,
+	run_to_shower_M_colon_S: Option<Timelike>,
 	shower_to_breakfast_work_efficiency_percent_of_optimal: Option<usize>,
 	#[serde(flatten)]
 	transcendential: Transcendential,
@@ -187,6 +188,14 @@ struct Evening {
 	#[serde(flatten)]
 	transcendential: Transcendential,
 }
+
+///// Accounts only for the time that is objectively wasted, aggregate positive ev situtations are not counted here.
+//#[derive(Serialize, Deserialize, Clone, Debug, Default, derive_new::new)]
+//struct Wasted {
+//	jo: usize,
+//	quazi_informational_content: usize,
+//
+//}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 // removed the Option for ease of input, let's see how capable I am of always filling these in. Otherwise I'll have to add them back.
@@ -210,6 +219,7 @@ struct Day {
 	number_of_NOs: usize,
 	caffeine_only_during_work: Option<bool>,
 	checked_messages_only_during_eating: Option<bool>,
+	number_of_rejections: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -221,7 +231,7 @@ struct Streak {
 impl Day {
 	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &AppConfig) {
 		//TODO!!: fix error with adding extra brackets to ~/.data/personal/manual_stats/.pbs.json
-		fn announce_new_pb(new_value: usize, old_value: Option<usize>, name: &str) {
+		fn announce_new_pb<T: std::fmt::Display>(new_value: &T, old_value: Option<&T>, name: &str) {
 			let old_value = match old_value {
 				Some(v) => v.to_string(),
 				None => "None".to_owned(),
@@ -238,40 +248,44 @@ impl Day {
 			Err(_) => serde_json::Value::Null,
 		};
 
-		let mut conditional_update = |metric: &str, new_value: usize, condition: fn(usize, usize) -> bool| {
+		//TODO!!!!!!!!: swtitch from usize to generic
+		fn conditional_update<T>(pbs_as_value: &mut serde_json::Value, metric: &str, new_value: T, condition: fn(&T, &T) -> bool)
+		where
+			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display,
+		{
 			let old_value = pbs_as_value
 				.get(metric)
-				.and_then(|v| v.as_u64())
-				.map(|v| Some(v as usize))
+				.and_then(|v| T::deserialize(v.clone()).ok())
+				.map(|v| Some(v))
 				.unwrap_or(None);
 
 			match old_value {
 				Some(v) => {
-					if condition(new_value, v) {
-						announce_new_pb(new_value, Some(v), metric);
-						pbs_as_value[metric] = serde_json::Value::from(new_value);
+					if condition(&new_value, &v) {
+						announce_new_pb(&new_value, Some(&v), metric);
+						pbs_as_value[metric] = serde_json::to_value(&v).unwrap();
 					} else {
-						pbs_as_value[metric] = serde_json::Value::from(v);
+						pbs_as_value[metric] = serde_json::to_value(&v).unwrap();
 					}
 				}
 				None => {
-					announce_new_pb(new_value, None, metric);
-					pbs_as_value[metric] = serde_json::Value::from(new_value);
+					announce_new_pb(&new_value, None, metric);
+					pbs_as_value[metric] = serde_json::to_value(new_value).unwrap();
 				}
 			}
-		};
+		}
 
 		if self.ev >= 0 {
-			conditional_update("ev", self.ev as usize, |new, old| new > old);
+			conditional_update(&mut pbs_as_value, "ev", self.ev, |new, old| new > old);
 		}
-		if let Some(new_alarm) = self.morning.alarm_to_run {
-			conditional_update("alarm_to_run", new_alarm, |new, old| new < old);
+		if let Some(new_alarm) = &self.morning.alarm_to_run_M_colon_S {
+			conditional_update(&mut pbs_as_value, "alarm_to_run", *new_alarm, |new, old| new < old);
 		}
-		if let Some(new_run) = self.morning.run_to_shower {
-			conditional_update("run_to_shower", new_run, |new, old| new < old);
+		if let Some(new_run) = &self.morning.run_to_shower_M_colon_S {
+			conditional_update(&mut pbs_as_value, "run_to_shower", *new_run, |new, old| new < old);
 		}
 		if let Some(new_hours_of_work) = self.midday.hours_of_work {
-			conditional_update("midday_hours_of_work", new_hours_of_work, |new, old| new > old);
+			conditional_update(&mut pbs_as_value, "midday_hours_of_work", new_hours_of_work, |new, old| new > old);
 		}
 
 		// Returns bool for convienience of recursing some of these
@@ -305,7 +319,7 @@ impl Day {
 					}
 				};
 				if new_streak.current > read_streak.pb {
-					announce_new_pb(new_streak.current, Some(read_streak.current), metric);
+					announce_new_pb(&new_streak.current, Some(&read_streak.current), metric);
 					new_streak.pb = new_streak.current;
 				}
 				pbs_as_value["streaks"][metric] = serde_json::to_value(new_streak).unwrap();
@@ -337,8 +351,8 @@ impl Day {
 		let _ = streak_update("nsdr", &nsdr_condition);
 
 		let perfect_morning_condition = |d: &Day| {
-			d.morning.alarm_to_run.is_some_and(|v| v < 10)
-				&& d.morning.run_to_shower.is_some_and(|v| v <= 5)
+			d.morning.alarm_to_run_M_colon_S.clone().is_some_and(|v| v.inner() < 10) //? is_some_and consumes self, why?
+				&& d.morning.run_to_shower_M_colon_S.clone().is_some_and(|v| v.inner() <= 5)
 				&& d.morning.shower_to_breakfast_work_efficiency_percent_of_optimal.is_some_and(|v| v > 90)
 				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
 				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
@@ -356,6 +370,9 @@ impl Day {
 
 		let running_streak_condition = |d: &Day| d.morning.run.is_some_and(|v| v > 0);
 		let _ = streak_update("running_streak", &running_streak_condition);
+
+		let rejection_streak_condition = |d: &Day| d.number_of_rejections > 0;
+		let _ = streak_update("rejection_streak", &rejection_streak_condition);
 
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
