@@ -23,8 +23,9 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	let filename = format!("{}.json", date);
 
 	let target_file_path = data_storage_dir.join(&filename);
-	let ev_args = match args.command {
-		ManualSubcommands::Open(open_args) => match open_args.pbs {
+
+	if let ManualSubcommands::Open(open_args) = &args.command {
+		match open_args.pbs {
 			false => {
 				if !target_file_path.exists() {
 					return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
@@ -36,33 +37,59 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				let pbs_path = data_storage_dir.join(PBS_FILENAME);
 				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Readonly);
 			}
-		},
-		ManualSubcommands::Ev(ev) => ev.to_validated()?,
-	};
+		}
+	}
 
 	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
 		Ok(s) => s,
 		Err(_) => "".to_owned(),
 	};
+
+	let ev_override = match &args.command {
+		ManualSubcommands::Ev(ev) => Some(ev.validate()?),
+		_ => None,
+	};
+
 	let day = match serde_json::from_str::<Day>(&file_contents) {
 		Ok(d) => {
-			let ev = match (ev_args.add, ev_args.subtract) {
-				(true, false) => d.ev + ev_args.ev,
-				(false, true) => d.ev - ev_args.ev,
-				(false, false) => ev_args.ev,
-				(true, true) => unreachable!(),
-			};
 			let mut d: Day = d;
-			d.ev = ev;
+
+			if let Some(ev_args) = &ev_override {
+				let ev = match (ev_args.add, ev_args.subtract) {
+					(true, false) => d.ev + ev_args.ev,
+					(false, true) => d.ev - ev_args.ev,
+					(false, false) => ev_args.ev,
+					(true, true) => unreachable!(),
+				};
+				d.ev = ev;
+			} else if let ManualSubcommands::CounterStep(step) = &args.command {
+				if step.cargo_watch {
+					d.counters.cargo_watch += 1;
+				}
+				if step.dev_runs {
+					d.counters.dev_runs += 1;
+				}
+			}
 			d
 		}
 		Err(_) => {
-			ensure!(
-				ev_args.replace,
-				"The day object is not initialized, so `ev` argument must be provided with `-r --replace` flag"
-			);
 			let mut d = Day::default();
-			d.ev = ev_args.ev;
+			if let Some(ev_args) = &ev_override {
+				ensure!(
+					ev_args.replace,
+					"The day object is not initialized, so `ev` argument must be provided with `-r --replace` flag"
+				);
+				d.ev = ev_args.ev;
+			} else if let ManualSubcommands::CounterStep(step) = args.command {
+				if step.cargo_watch {
+					d.counters.cargo_watch = 1;
+				}
+				if step.dev_runs {
+					d.counters.dev_runs = 1;
+				}
+				eprintln!("Initialized day object from a counter step. EV is set to 0. Don't forget to set it properly today.");
+			}
+
 			d.date = date.clone();
 			d
 		}
@@ -73,7 +100,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
-	if ev_args.open == true {
+	if ev_override.is_some_and(|ev_args| ev_args.open == true) {
 		v_utils::io::open(&target_file_path)?;
 		process_manual_updates(&target_file_path, &config)?;
 	}
@@ -101,6 +128,7 @@ pub struct ManualArgs {
 pub enum ManualSubcommands {
 	Ev(ManualEv),
 	Open(ManualOpen),
+	CounterStep(CounterStep),
 }
 #[derive(Args)]
 pub struct ManualEv {
@@ -116,7 +144,7 @@ pub struct ManualEv {
 }
 impl ManualEv {
 	//? This seems ugly. There has to be a way to do this natively with clap, specifically with the `conflicts_with` attribute
-	fn to_validated(&self) -> Result<Self> {
+	fn validate(&self) -> Result<Self> {
 		let replace = match self.add || self.subtract {
 			true => false,
 			false => self.replace,
@@ -143,11 +171,15 @@ pub struct ManualOpen {
 	pub pbs: bool,
 }
 
-//=============================================================================
-
-// So I'm assuming the PbTracker is actually a mirror of the Day struct, with fields set to their best ever values. Although: 1) What about the changes to the structs 2) Streaks, where the members could be multiple?
-
-// Basically only serialization to pb format is needed. Let's also flatten it, and require manual specification of the recorded name.
+#[derive(Args)]
+pub struct CounterStep {
+	/// Counter specifically for cargo_watch recompiles, as the metric is incocmpatible with workflow of other languages.
+	#[arg(long)]
+	pub cargo_watch: bool,
+	/// Counter of dev test runs of a code in any language.
+	#[arg(long)]
+	pub dev_runs: bool,
+}
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Transcendential {
@@ -192,17 +224,14 @@ struct Evening {
 ///// Accounts only for the time that is objectively wasted, aggregate positive ev situtations are not counted here.
 //#[derive(Serialize, Deserialize, Clone, Debug, Default, derive_new::new)]
 //struct Wasted {
-//	jo: usize,
+//	jofv: usize
 //	quazi_informational_content: usize,
-//
 //}
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-// removed the Option for ease of input, let's see how capable I am of always filling these in. Otherwise I'll have to add them back.
-struct JoMins {
-	full_visuals: usize,
-	no_visuals: usize,
-	work_for_visuals: usize,
+#[derive(Clone, Debug, Default, derive_new::new, Serialize, Deserialize)]
+struct Counters {
+	cargo_watch: usize,
+	dev_runs: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -214,7 +243,8 @@ struct Day {
 	midday: Midday,
 	evening: Evening,
 	sleep: Sleep,
-	jo_mins: JoMins,
+	counters: Counters,
+	jofv_mins: Option<usize>,    // other types are self-regulating or even net positive (when work for v)
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	number_of_NOs: usize,
 	caffeine_only_during_work: Option<bool>,
@@ -248,7 +278,6 @@ impl Day {
 			Err(_) => serde_json::Value::Null,
 		};
 
-		//TODO!!!!!!!!: swtitch from usize to generic
 		fn conditional_update<T>(pbs_as_value: &mut serde_json::Value, metric: &str, new_value: T, condition: fn(&T, &T) -> bool)
 		where
 			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display,
@@ -330,14 +359,8 @@ impl Day {
 			is_validated
 		};
 
-		let full_visuals_condition = |d: &Day| d.jo_mins.full_visuals == 0;
-		let no_jo_full_visuals = streak_update("no_jo_full_visuals", &full_visuals_condition);
-
-		let no_visuals_condition = |d: &Day| d.jo_mins.no_visuals == 0 && no_jo_full_visuals;
-		let no_jo_no_visuals = streak_update("no_jo_no_visuals", &no_visuals_condition);
-
-		let work_for_visuals_condition = |d: &Day| d.jo_mins.work_for_visuals == 0 && no_jo_no_visuals;
-		let _ = streak_update("no_jo_work_for_visuals", &work_for_visuals_condition);
+		let jofv_condition = |d: &Day| d.jofv_mins.is_some_and(|x| x == 0);
+		let _ = streak_update("no_jofv", &jofv_condition);
 
 		let stable_sleep_condition = |d: &Day| {
 			d.sleep.yd_to_bed_t_plus == Some(0) && d.sleep.from_bed_t_plus == Some(0) && d.sleep.from_bed_abs_diff_from_day_before == Some(0)
