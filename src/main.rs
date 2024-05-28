@@ -5,10 +5,9 @@ mod manual_stats;
 mod timer;
 mod todos;
 pub mod utils;
+use clap::{Args, Parser, Subcommand};
 use config::AppConfig;
 use v_utils::io::ExpandedPath;
-
-use clap::{Args, Parser, Subcommand};
 
 const MANUAL_PATH_APPENDIX: &'static str = "manual_stats/";
 const MONITOR_PATH_APPENDIX: &'static str = "activities_monitor/";
