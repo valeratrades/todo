@@ -41,7 +41,6 @@ mod tests {
 	use super::*;
 	use crate::config::AppConfig;
 	use chrono::TimeZone;
-	use v_utils::io::ExpandedPath;
 
 	fn init_test(waketime: &str, day_section_borders: &str, t: Option<(i32, u32, u32, u32, u32, u32)>) -> AppConfig {
 		std::env::set_var("WAKETIME", waketime);
@@ -52,7 +51,9 @@ mod tests {
 			crate::mocks::set_timestamp(mock_now.timestamp());
 		}
 
-		AppConfig::new(ExpandedPath::new("examples/config.toml".into())).unwrap()
+		let mut config = AppConfig::default();
+		config.date_format = "%Y-%m-%d".to_string();
+		config
 	}
 
 	#[test]

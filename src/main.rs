@@ -73,7 +73,7 @@ struct NoArgs {}
 fn main() {
 	let cli = Cli::parse();
 
-	let config = match AppConfig::new(cli.config) {
+	let config = match AppConfig::read(cli.config) {
 		Ok(cfg) => cfg,
 		Err(e) => {
 			eprintln!("Error: {}", e);
