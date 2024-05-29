@@ -1,6 +1,5 @@
 #![allow(clippy::get_first)]
 #![allow(clippy::len_zero)]
-#![feature(trait_alias)]
 
 mod activity_monitor;
 pub mod config;
