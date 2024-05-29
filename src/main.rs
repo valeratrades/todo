@@ -2,6 +2,7 @@ mod activity_monitor;
 pub mod config;
 pub mod day_section;
 mod manual_stats;
+pub mod mocks;
 mod timer;
 mod todos;
 pub mod utils;
