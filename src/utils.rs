@@ -19,14 +19,9 @@ pub fn same_day_buffer() -> chrono::TimeDelta {
 	let waketime = chrono::NaiveTime::parse_from_str(waketime.as_str(), "%H:%M").unwrap();
 
 	// I don't know what happened here, but I was getting the "used while borrowed"
-	let sleep_offset = std::env::var("DAY_SECTION_BORDERS")
-		.unwrap();
-	let sleep_offset = sleep_offset
-		.split(":")
-		.collect::<Vec<&str>>();
-	let sleep_offset = sleep_offset
-		.last()
-		.unwrap();
+	let sleep_offset = std::env::var("DAY_SECTION_BORDERS").unwrap();
+	let sleep_offset = sleep_offset.split(":").collect::<Vec<&str>>();
+	let sleep_offset = sleep_offset.last().unwrap();
 	let sleep_offset = sleep_offset.parse::<f64>().unwrap();
 	let sleep_offset = chrono::Duration::minutes((sleep_offset * 60.0) as i64);
 
@@ -50,12 +45,15 @@ mod tests {
 			crate::mocks::set_timestamp(mock_now.timestamp());
 		}
 
-		AppConfig { date_format: "%Y-%m-%d".to_string(), ..Default::default() }
+		AppConfig {
+			date_format: "%Y-%m-%d".to_string(),
+			..Default::default()
+		}
 	}
 
 	#[test]
 	fn test_same_day_buffer() {
-		let _config = init_test("05:00", "16", None);
+		let _config = init_test("05:00", "16", Some((2024, 5, 29, 12, 0, 0)));
 		let offset = same_day_buffer();
 
 		assert_eq!(offset, chrono::Duration::hours(3).checked_add(&chrono::Duration::minutes(0)).unwrap());
