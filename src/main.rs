@@ -28,7 +28,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
 	/// Opens the target path
-	///Ex
+	///  Ex
 	///```rust
 	///todo open -w
 	///```
@@ -39,13 +39,13 @@ enum Commands {
 	///where:
 	///- importance: 0->9, the higher the more important
 	///- difficulty: 0->9, the higher the more difficult
-	///Ex:
+	///  Ex:
 	///```rust
 	///todo add 2-3-test -n
 	///```
 	Add(todos::AddArgs),
 	/// Compile list of first priority tasks based on time of day
-	///Ex:
+	///  Ex:
 	///```rust
 	///todo quickfix
 	///```
@@ -57,7 +57,7 @@ enum Commands {
 	///```
 	Manual(manual_stats::ManualArgs),
 	/// Start a task with timer, then store error (to track improvement of your estimations of time spent on different task categories)
-	///Example Usage:
+	///  Ex:
 	///'''rust
 	///todo do start -t=15 -w --description==do-da-work
 	///. . . // start doing the task, then:
