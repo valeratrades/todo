@@ -1,6 +1,3 @@
-#![allow(clippy::get_first)]
-#![allow(clippy::len_zero)]
-
 mod activity_monitor;
 pub mod config;
 pub mod day_section;
