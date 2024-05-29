@@ -12,7 +12,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use v_utils::{io::OpenMode, time::Timelike};
 
-static PBS_FILENAME: &'static str = ".pbs.json";
+static PBS_FILENAME: &str = ".pbs.json";
 
 use crate::MANUAL_PATH_APPENDIX;
 pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {

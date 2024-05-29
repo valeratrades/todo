@@ -33,7 +33,7 @@ impl DaySection {
 		Ok(day_section)
 	}
 
-	pub fn description(&self) -> &'static str {
+	pub fn description(&self) -> &str {
 		match self {
 			DaySection::Morning => {
 				r#"
