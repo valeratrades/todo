@@ -97,10 +97,10 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	day.update_pbs(&data_storage_dir, &config);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
-	let mut file = OpenOptions::new().read(true).write(true).create(true).open(&target_file_path).unwrap();
+	let mut file = OpenOptions::new().read(true).write(true).truncate(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
-	if ev_override.is_some_and(|ev_args| ev_args.open == true) {
+	if ev_override.is_some_and(|ev_args| ev_args.open) {
 		v_utils::io::open(&target_file_path)?;
 		process_manual_updates(&target_file_path, &config)?;
 	}
@@ -307,15 +307,21 @@ impl Day {
 		if self.ev >= 0 {
 			conditional_update(&mut pbs_as_value, "ev", self.ev, |new, old| new > old);
 		}
+
 		if let Some(new_alarm) = &self.morning.alarm_to_run_M_colon_S {
 			conditional_update(&mut pbs_as_value, "alarm_to_run", *new_alarm, |new, old| new < old);
 		}
+
 		if let Some(new_run) = &self.morning.run_to_shower_M_colon_S {
 			conditional_update(&mut pbs_as_value, "run_to_shower", *new_run, |new, old| new < old);
 		}
+
 		if let Some(new_hours_of_work) = self.midday.hours_of_work {
 			conditional_update(&mut pbs_as_value, "midday_hours_of_work", new_hours_of_work, |new, old| new > old);
 		}
+
+		let new_cw_counter = self.counters.cargo_watch;
+		conditional_update(&mut pbs_as_value, "new_cw_counter", new_cw_counter, |new, old| new > old);
 
 		// Returns bool for convienience of recursing some of these
 		let mut streak_update = |metric: &str, condition: &dyn Fn(&Day) -> bool| -> bool {
@@ -374,8 +380,8 @@ impl Day {
 		let _ = streak_update("nsdr", &nsdr_condition);
 
 		let perfect_morning_condition = |d: &Day| {
-			d.morning.alarm_to_run_M_colon_S.clone().is_some_and(|v| v.inner() < 10) //? is_some_and consumes self, why?
-				&& d.morning.run_to_shower_M_colon_S.clone().is_some_and(|v| v.inner() <= 5)
+			d.morning.alarm_to_run_M_colon_S.is_some_and(|v| v.inner() < 10) //? is_some_and consumes self, why?
+				&& d.morning.run_to_shower_M_colon_S.is_some_and(|v| v.inner() <= 5)
 				&& d.morning.shower_to_breakfast_work_efficiency_percent_of_optimal.is_some_and(|v| v > 90)
 				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
 				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
@@ -400,7 +406,7 @@ impl Day {
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
 		let formatted_json = serde_json::to_string_pretty(&pbs_as_value).unwrap();
-		let mut file = OpenOptions::new().read(true).write(true).create(true).open(&pbs_path).unwrap();
+		let mut file = OpenOptions::new().read(true).write(true).truncate(true).open(&pbs_path).unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
 }

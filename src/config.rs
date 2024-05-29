@@ -38,7 +38,7 @@ impl AppConfig {
 		let settings: Self = settings.try_deserialize()?;
 
 		let _ = std::fs::create_dir_all(&settings.data_dir);
-		let _ = std::fs::create_dir_all(&settings.data_dir.join("tmp/"));
+		let _ = std::fs::create_dir_all(settings.data_dir.join("tmp/"));
 
 		Ok(settings)
 	}

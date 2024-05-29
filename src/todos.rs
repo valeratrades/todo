@@ -33,8 +33,8 @@ pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 
 	let mut quickfix_str = String::new();
 	let len = to_show_tasks.len();
-	for i in 0..len {
-		quickfix_str.push_str(&format!("{}", to_show_tasks[i]));
+	for (i, task) in to_show_tasks.iter().enumerate().take(len) {
+		quickfix_str.push_str(&format!("{}", task));
 		if i < len - 1 {
 			quickfix_str.push_str("# -----------------------------------------------------------------------------\n");
 		}
@@ -78,7 +78,7 @@ pub fn open_or_add(config: AppConfig, flags: TodosFlags, name: Option<String>) -
 		let _ = std::fs::File::create(&path).unwrap();
 	}
 
-	let mode = if flags.open == true { Some(OpenMode::Normal) } else { None };
+	let mode = if flags.open { Some(OpenMode::Normal) } else { None };
 	v_utils::io::sync_file_with_git(&path, mode)?;
 
 	Ok(())
@@ -211,7 +211,7 @@ fn partition_tasks(arr: &mut [Task], low: isize, high: isize) -> isize {
 			arr.swap(store_index as usize, last_index as usize);
 		}
 	}
-	arr.swap(store_index as usize, pivot as usize);
+	arr.swap(store_index as usize, pivot);
 	store_index
 }
 

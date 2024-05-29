@@ -10,7 +10,7 @@ pub fn format_date(days_back: usize, config: &AppConfig) -> String {
 	let date = Utc::now() - Duration::days(days_back as i64);
 	let offset = same_day_buffer();
 
-	(date - offset).format(&config.date_format.as_str()).to_string()
+	(date - offset).format(config.date_format.as_str()).to_string()
 }
 
 /// Diff of sleep time from 00:00 utc
@@ -32,8 +32,7 @@ pub fn same_day_buffer() -> chrono::TimeDelta {
 
 	let bedtime = waketime + sleep_offset;
 	let new_day = bedtime + chrono::Duration::hours(6);
-	let offset = new_day - chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-	offset
+	new_day - chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
 }
 
 #[cfg(test)]
@@ -51,9 +50,7 @@ mod tests {
 			crate::mocks::set_timestamp(mock_now.timestamp());
 		}
 
-		let mut config = AppConfig::default();
-		config.date_format = "%Y-%m-%d".to_string();
-		config
+		AppConfig { date_format: "%Y-%m-%d".to_string(), ..Default::default() }
 	}
 
 	#[test]

@@ -39,8 +39,8 @@ struct Activity {
 }
 
 fn get_activity(config: &AppConfig) -> String {
-	let _ = std::fs::create_dir(&config.data_dir.join(MONITOR_PATH_APPENDIX));
-	let _ = std::fs::create_dir(&config.data_dir.join(TOTALS_PATH_APPENDIX));
+	let _ = std::fs::create_dir(config.data_dir.join(MONITOR_PATH_APPENDIX));
+	let _ = std::fs::create_dir(config.data_dir.join(TOTALS_PATH_APPENDIX));
 
 	fn cmd<S>(command: S) -> Output
 	where
@@ -99,11 +99,11 @@ fn get_activity(config: &AppConfig) -> String {
 
 /// Incredibly inefficient way of recording a new entry, because we load all the existing ones first.
 fn record_activity(config: &AppConfig, name: String, start_s: i64, end_s: i64) {
-	let save_dir = &config.data_dir.join(MONITOR_PATH_APPENDIX);
+	let save_dir = config.data_dir.join(MONITOR_PATH_APPENDIX);
 
 	let record = Activity { name, start_s, end_s };
 
-	let date = Utc::now().format(&config.date_format.as_str()).to_string();
+	let date = Utc::now().format(config.date_format.as_str()).to_string();
 	let target_path = save_dir.join(&date);
 	let mut records: VecDeque<Activity> = match File::open(&target_path) {
 		Ok(mut file) => {
@@ -125,12 +125,12 @@ fn record_activity(config: &AppConfig, name: String, start_s: i64, end_s: i64) {
 //TODO!!!: change so it takes the target date instead. Once done, add a command to recompile all of the recorded days. \
 fn compile_yd_totals(config: &AppConfig) {
 	let date_yd = (Utc::now() - chrono::Duration::days(1)).format(config.date_format.as_str()).to_string();
-	let yd_totals_file = (&config.data_dir.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
+	let yd_totals_file = (config.data_dir.join(TOTALS_PATH_APPENDIX)).join(&date_yd);
 	if yd_totals_file.exists() {
 		return;
 	};
 
-	let yd_activities_file = (&config.data_dir.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
+	let yd_activities_file = (config.data_dir.join(MONITOR_PATH_APPENDIX)).join(&date_yd);
 	let file_contents = match std::fs::read_to_string(&yd_activities_file) {
 		Ok(c) => c,
 		Err(_) => "[]".to_owned(),
@@ -141,10 +141,10 @@ fn compile_yd_totals(config: &AppConfig) {
 		let grand_total = Total::from_activities(yd_activities, &config.activity_monitor.delimitor);
 
 		let formatted_json = serde_json::to_string_pretty(&grand_total).unwrap();
-		let mut file = std::fs::File::create(&config.data_dir.join(TOTALS_PATH_APPENDIX).join("Grand Total")).unwrap(); //NB: replaces the existing if any
+		let mut file = std::fs::File::create(config.data_dir.join(TOTALS_PATH_APPENDIX).join("Grand Total")).unwrap(); //NB: replaces the existing if any
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
-	write_grand_total(yd_activities.clone(), &config);
+	write_grand_total(yd_activities.clone(), config);
 
 	fn compile_calendar(yd_activities: Vec<Activity>, config: &AppConfig) {
 		let mut calendar: Vec<(String, i64)> = Vec::new();
@@ -222,7 +222,7 @@ fn compile_yd_totals(config: &AppConfig) {
 			}
 		});
 	}
-	compile_calendar(yd_activities.clone(), &config);
+	compile_calendar(yd_activities.clone(), config);
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -318,9 +318,9 @@ impl Total {
 
 	/// returns the full path of the most prominent activity.
 	/// to find, goes down the tree, and at each level takes the largest child.
-	fn find_largest(&self, mut collect_str: String, activities_delimiter: &String) -> String {
+	fn find_largest(&self, mut collect_str: String, _activities_delimiter: &String) -> String {
 		if self.children.len() == 0 {
-			return collect_str;
+			collect_str
 		} else {
 			let mut largest = &self.children[0];
 			for c in self.children.iter() {
@@ -330,10 +330,10 @@ impl Total {
 			}
 
 			if collect_str.len() > 0 {
-				collect_str = collect_str + " - ";
+				collect_str += " - ";
 			}
 			collect_str = collect_str + &largest.name;
-			return largest.find_largest(collect_str, activities_delimiter);
+			largest.find_largest(collect_str, _activities_delimiter)
 		}
 	}
 }

@@ -17,7 +17,7 @@ pub fn timing_the_task(config: AppConfig, args: TimerArgs) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
 	let save_file = save_dir.join(format!("{}.json", Utc::now().format(&config.date_format)));
-	let _ = std::fs::create_dir(&save_dir);
+	let _ = std::fs::create_dir(save_dir);
 
 	let success = match args.command {
 		TimerCommands::Start(start_args) => {
@@ -132,7 +132,7 @@ fn save_result(config: &AppConfig, mut completed: bool) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
 	let save_dir = &config.data_dir.join(TIMED_PATH_APPENDIX);
 	let save_file = save_dir.join(format!("{}.json", Utc::now().format(&config.date_format)));
-	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
+	let hard_stop_coeff = config.timer.hard_stop_coeff;
 
 	let mut file = File::open(state_file).unwrap();
 	let mut contents = String::new();
@@ -174,14 +174,10 @@ fn save_result(config: &AppConfig, mut completed: bool) -> Result<()> {
 	let _ = std::fs::remove_file(state_file);
 
 	std::thread::sleep(std::time::Duration::from_millis(300)); // wait for eww to process previous request if any.
-	if let Ok(eww_output) = Command::new("sh").arg("-c").arg("eww get todo_timer".to_owned()).output() {
+	if let Ok(eww_output) = Command::new("sh").arg("-c").arg("eww get todo_timer").output() {
 		let todo_timer = String::from_utf8_lossy(&eww_output.stdout).trim().to_string();
 		if !todo_timer.starts_with("Out") {
-			let _ = Command::new("sh")
-				.arg("-c")
-				.arg("eww update todo_timer=None".to_owned())
-				.output()
-				.unwrap();
+			let _ = Command::new("sh").arg("-c").arg("eww update todo_timer=None").output().unwrap();
 		}
 	}
 
@@ -190,7 +186,7 @@ fn save_result(config: &AppConfig, mut completed: bool) -> Result<()> {
 
 fn run(config: &AppConfig) -> Result<()> {
 	let state_file = &config.data_dir.join(ONGOING_PATH_APPENDIX);
-	let hard_stop_coeff = config.timer.hard_stop_coeff.clone();
+	let hard_stop_coeff = config.timer.hard_stop_coeff;
 
 	let task: Ongoing = {
 		if state_file.exists() {
@@ -212,11 +208,11 @@ fn run(config: &AppConfig) -> Result<()> {
 		}
 
 		let now_s = Utc::now().timestamp();
-		let e_diff = estimated_s as i64 - now_s as i64;
-		let h_diff = hard_stop_s as i64 - now_s as i64;
+		let e_diff = estimated_s as i64 - now_s;
+		let h_diff = hard_stop_s as i64 - now_s;
 		let description = {
 			if task.description.as_str() == "" {
-				format!("")
+				String::new()
 			} else {
 				format!("_{}", task.description)
 			}
