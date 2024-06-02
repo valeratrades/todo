@@ -97,7 +97,14 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	day.update_pbs(&data_storage_dir, &config);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
-	let mut file = OpenOptions::new().read(true).write(true).truncate(true).open(&target_file_path).unwrap();
+	dbg!(&target_file_path);
+	let mut file = OpenOptions::new()
+		.read(true)
+		.write(true)
+		.create(true)
+		.truncate(true)
+		.open(&target_file_path)
+		.unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
@@ -110,7 +117,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 
 fn process_manual_updates<T: AsRef<Path>>(path: T, config: &AppConfig) -> Result<()> {
 	if !path.as_ref().exists() {
-		return Err(anyhow!("File does not exist, the fuck you just did"));
+		return Err(anyhow!("File does not exist, likely because you manually changed something."));
 	}
 	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
 	day.update_pbs(path.as_ref().parent().unwrap(), config);
@@ -250,6 +257,7 @@ struct Day {
 	caffeine_only_during_work: Option<bool>,
 	checked_messages_only_during_eating: Option<bool>,
 	number_of_rejections: usize,
+	phone_locked_away: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -321,7 +329,7 @@ impl Day {
 		}
 
 		let new_cw_counter = self.counters.cargo_watch;
-		conditional_update(&mut pbs_as_value, "new_cw_counter", new_cw_counter, |new, old| new > old);
+		conditional_update(&mut pbs_as_value, "cw_counter", new_cw_counter, |new, old| new > old);
 
 		// Returns bool for convienience of recursing some of these
 		let mut streak_update = |metric: &str, condition: &dyn Fn(&Day) -> bool| -> bool {
@@ -403,10 +411,19 @@ impl Day {
 		let rejection_streak_condition = |d: &Day| d.number_of_rejections > 0;
 		let _ = streak_update("rejection_streak", &rejection_streak_condition);
 
+		let locked_phone_streak_condition = |d: &Day| d.phone_locked_away;
+		let _ = streak_update("locked_phone_streak", &locked_phone_streak_condition);
+
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
 		let formatted_json = serde_json::to_string_pretty(&pbs_as_value).unwrap();
-		let mut file = OpenOptions::new().read(true).write(true).truncate(true).open(&pbs_path).unwrap();
+		let mut file = OpenOptions::new()
+			.read(true)
+			.write(true)
+			.create(true)
+			.truncate(true)
+			.open(&pbs_path)
+			.unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
 }
