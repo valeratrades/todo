@@ -1,12 +1,13 @@
 use crate::config::AppConfig;
 use crate::day_section::DaySection;
+use crate::manual_stats::{Day, Repercussions};
+use crate::utils;
 use anyhow::{Context, Result};
-use std::fmt::{self, Display};
-use v_utils::io::OpenMode;
-
 use clap::Args;
+use std::fmt::{self, Display};
 use std::path::PathBuf;
 use tempfile::Builder;
+use v_utils::io::OpenMode;
 
 pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 	let day_section = DaySection::build().unwrap();
@@ -39,6 +40,14 @@ pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 			quickfix_str.push_str("# -----------------------------------------------------------------------------\n");
 		}
 	}
+
+	let repercussions: Repercussions;
+	{
+		let date = utils::format_date(0, &config);
+		let day = Day::load(&date, &config).ok();
+		repercussions = Repercussions::from_day(day);
+	}
+
 	quickfix_str.push_str(&format!(
 		r#"
 # =============================================================================
@@ -48,9 +57,15 @@ pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 
 # General
 
-Clear separation between tasks below 5m and above. Those below can be done whenever, those not only in assigned time intervals.
+Clear separation between tasks below 5m and above. Those below can be done whenever, those not - only in assigned time intervals.
+
+# Repercussions
+
+With current state of the day, the following repercussions will be applied:
+{}
 "#,
-		day_section.description()
+		day_section.description(),
+		repercussions
 	));
 
 	let tmp_file = Builder::new().suffix(".pdf").tempfile()?;

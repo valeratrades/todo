@@ -16,13 +16,9 @@ static PBS_FILENAME: &str = ".pbs.json";
 
 use crate::MANUAL_PATH_APPENDIX;
 pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
-	let data_storage_dir: PathBuf = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
-	let _ = std::fs::create_dir(&data_storage_dir);
-
 	let date = utils::format_date(args.days_back, &config);
-	let filename = format!("{}.json", date);
 
-	let target_file_path = data_storage_dir.join(&filename);
+	let target_file_path = Day::path(&date, &config);
 
 	if let ManualSubcommands::Open(open_args) = &args.command {
 		match open_args.pbs {
@@ -34,23 +30,18 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				return process_manual_updates(&target_file_path, &config);
 			}
 			true => {
-				let pbs_path = data_storage_dir.join(PBS_FILENAME);
+				let pbs_path = target_file_path.parent().unwrap().join(PBS_FILENAME);
 				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Readonly);
 			}
 		}
 	}
-
-	let file_contents: String = match std::fs::read_to_string(&target_file_path) {
-		Ok(s) => s,
-		Err(_) => "".to_owned(),
-	};
 
 	let ev_override = match &args.command {
 		ManualSubcommands::Ev(ev) => Some(ev.validate()?),
 		_ => None,
 	};
 
-	let day = match serde_json::from_str::<Day>(&file_contents) {
+	let day = match Day::load(&date, &config) {
 		Ok(d) => {
 			let mut d: Day = d;
 
@@ -71,9 +62,10 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				}
 			}
 			d
-		}
+		},
 		Err(_) => {
 			let mut d = Day::default();
+			//? should this not be a match?
 			if let Some(ev_args) = &ev_override {
 				ensure!(
 					ev_args.replace,
@@ -90,14 +82,13 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				eprintln!("Initialized day object from a counter step. EV is set to 0. Don't forget to set it properly today.");
 			}
 
-			d.date = date.clone();
+			d.date = date.to_owned();
 			d
-		}
+		},
 	};
-	day.update_pbs(&data_storage_dir, &config);
+	day.update_pbs(&target_file_path.parent().unwrap(), &config);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
-	dbg!(&target_file_path);
 	let mut file = OpenOptions::new()
 		.read(true)
 		.write(true)
@@ -178,7 +169,7 @@ pub struct ManualOpen {
 	pub pbs: bool,
 }
 
-#[derive(Args)]
+#[derive(Args, Copy, Default, Clone, Debug, Serialize, Deserialize, derive_new::new)]
 pub struct CounterStep {
 	/// Counter specifically for cargo_watch recompiles, as the metric is incocmpatible with workflow of other languages.
 	#[arg(long)]
@@ -188,20 +179,20 @@ pub struct CounterStep {
 	pub dev_runs: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct Transcendential {
 	making_food: Option<usize>,
 	eating_food: Option<usize>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct Sleep {
 	yd_to_bed_t_plus: Option<i32>,
 	from_bed_t_plus: Option<i32>,
 	from_bed_abs_diff_from_day_before: Option<i32>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
 	run: Option<usize>,
@@ -212,7 +203,7 @@ struct Morning {
 	breakfast_to_work: Option<usize>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 // could be called `_8h`
 struct Midday {
 	hours_of_work: Option<usize>,
@@ -220,7 +211,7 @@ struct Midday {
 	transcendential: Transcendential,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct Evening {
 	focus_meditation: usize, // fixed at 13m under current sota, but why not keep it flexible
 	nsdr: usize,
@@ -241,9 +232,9 @@ struct Counters {
 	dev_runs: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 /// Unless specified otherwise, all times are in minutes
-struct Day {
+pub struct Day {
 	date: String,
 	ev: i32,
 	morning: Morning,
@@ -267,6 +258,21 @@ struct Streak {
 }
 
 impl Day {
+	pub fn path(date: &str, config: &AppConfig) -> PathBuf {
+		let data_storage_dir = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
+		let _ = std::fs::create_dir(&data_storage_dir);
+		data_storage_dir.join(&format!("{}.json", date))
+	}
+	pub fn load(date: &str, config: &AppConfig) -> Result<Self> {
+		let target_file_path = Day::path(&date, &config);
+		let file_contents: String = match std::fs::read_to_string(&target_file_path) {
+			Ok(s) => s,
+			Err(_) => "".to_owned(),
+		};
+
+		Ok(serde_json::from_str::<Day>(&file_contents)?)
+	}
+
 	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &AppConfig) {
 		//TODO!!: fix error with adding extra brackets to ~/.data/personal/manual_stats/.pbs.json
 		fn announce_new_pb<T: std::fmt::Display>(new_value: &T, old_value: Option<&T>, name: &str) {
@@ -425,5 +431,51 @@ impl Day {
 			.open(&pbs_path)
 			.unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
+	}
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Immediate punishment for not meating day's standards
+pub struct Repercussions {
+	sleep_on_the_floor: bool,
+}
+impl Default for Repercussions {
+	fn default() -> Self {
+		Self { sleep_on_the_floor: true }
+	}
+}
+impl Repercussions {
+	pub fn from_day(maybe_day: Option<Day>) -> Self {
+		match maybe_day {
+			Some(day) => {
+				let mut repercussions = Self::default();
+
+				if day.ev >= 100 {
+					repercussions.sleep_on_the_floor = false;
+				}
+
+				repercussions
+			}
+			None => Self::default(),
+		}
+	}
+}
+impl std::fmt::Display for Repercussions {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		let mut repercussions = vec![];
+		if self.sleep_on_the_floor {
+			repercussions.push("	- Sleep on the floor\n");
+		}
+
+		match repercussions.len() {
+			0 => write!(f, "None"),
+			_ => {
+				let mut s = "Reperecussions:\n".to_owned();
+				for r in repercussions {
+					s.push_str(r);
+				}
+				write!(f, "{s}")
+			}
+		}
 	}
 }
