@@ -62,7 +62,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				}
 			}
 			d
-		},
+		}
 		Err(_) => {
 			let mut d = Day::default();
 			//? should this not be a match?
@@ -84,7 +84,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 
 			d.date = date.to_owned();
 			d
-		},
+		}
 	};
 	day.update_pbs(&target_file_path.parent().unwrap(), &config);
 
@@ -197,7 +197,7 @@ struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
 	run: Option<usize>,
 	run_to_shower_M_colon_S: Option<Timelike>,
-	shower_to_breakfast_work_efficiency_percent_of_optimal: Option<usize>,
+	quality_of_math_done: Option<f64>,
 	#[serde(flatten)]
 	transcendential: Transcendential,
 	breakfast_to_work: Option<usize>,
@@ -263,6 +263,7 @@ impl Day {
 		let _ = std::fs::create_dir(&data_storage_dir);
 		data_storage_dir.join(&format!("{}.json", date))
 	}
+
 	pub fn load(date: &str, config: &AppConfig) -> Result<Self> {
 		let target_file_path = Day::path(&date, &config);
 		let file_contents: String = match std::fs::read_to_string(&target_file_path) {
@@ -390,13 +391,16 @@ impl Day {
 		let meditation_condition = |d: &Day| d.evening.focus_meditation > 0;
 		let _ = streak_update("focus_meditation", &meditation_condition);
 
+		let math_condition = |d: &Day| d.morning.quality_of_math_done.is_some_and(|v| v > 0.);
+		let _ = streak_update("math", &math_condition);
+
 		let nsdr_condition = |d: &Day| d.evening.nsdr > 0;
 		let _ = streak_update("nsdr", &nsdr_condition);
 
 		let perfect_morning_condition = |d: &Day| {
 			d.morning.alarm_to_run_M_colon_S.is_some_and(|v| v.inner() < 10) //? is_some_and consumes self, why?
 				&& d.morning.run_to_shower_M_colon_S.is_some_and(|v| v.inner() <= 5)
-				&& d.morning.shower_to_breakfast_work_efficiency_percent_of_optimal.is_some_and(|v| v > 90)
+				&& d.morning.quality_of_math_done.is_some_and(|v| v >= 0.6827 )
 				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
 				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
 		};
