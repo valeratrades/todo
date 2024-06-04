@@ -298,7 +298,7 @@ impl Day {
 
 		fn conditional_update<T>(pbs_as_value: &mut serde_json::Value, metric: &str, new_value: T, condition: fn(&T, &T) -> bool)
 		where
-			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display,
+			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display + std::fmt::Debug,
 		{
 			let old_value = pbs_as_value
 				.get(metric)
@@ -307,12 +307,12 @@ impl Day {
 				.unwrap_or(None);
 
 			match old_value {
-				Some(v) => {
-					if condition(&new_value, &v) {
-						announce_new_pb(&new_value, Some(&v), metric);
-						pbs_as_value[metric] = serde_json::to_value(&v).unwrap();
+				Some(old) => {
+					if condition(&new_value, &old) {
+						announce_new_pb(&new_value, Some(&old), metric);
+						pbs_as_value[metric] = serde_json::to_value(&new_value).unwrap();
 					} else {
-						pbs_as_value[metric] = serde_json::to_value(&v).unwrap();
+						pbs_as_value[metric] = serde_json::to_value(&old).unwrap();
 					}
 				}
 				None => {
@@ -430,7 +430,6 @@ impl Day {
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
 		let formatted_json = serde_json::to_string_pretty(&pbs_as_value).unwrap();
-		dbg!(&formatted_json);
 		let mut file = OpenOptions::new()
 			.read(true)
 			.write(true)
