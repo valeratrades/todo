@@ -10,7 +10,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use v_utils::{io::OpenMode, time::Timelike};
+use v_utils::{
+	io::{OpenMode, Percent},
+	time::Timelike,
+};
 
 static PBS_FILENAME: &str = ".pbs.json";
 
@@ -197,7 +200,7 @@ struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
 	run: Option<usize>,
 	run_to_shower_M_colon_S: Option<Timelike>,
-	quality_of_math_done: Option<f64>,
+	quality_of_math_done: Option<Percent>,
 	#[serde(flatten)]
 	transcendential: Transcendential,
 	breakfast_to_work: Option<usize>,
@@ -391,7 +394,7 @@ impl Day {
 		let meditation_condition = |d: &Day| d.evening.focus_meditation > 0;
 		let _ = streak_update("focus_meditation", &meditation_condition);
 
-		let math_condition = |d: &Day| d.morning.quality_of_math_done.is_some_and(|v| v > 0.);
+		let math_condition = |d: &Day| d.morning.quality_of_math_done.is_some_and(|q| q > 0.);
 		let _ = streak_update("math", &math_condition);
 
 		let nsdr_condition = |d: &Day| d.evening.nsdr > 0;
@@ -400,7 +403,7 @@ impl Day {
 		let perfect_morning_condition = |d: &Day| {
 			d.morning.alarm_to_run_M_colon_S.is_some_and(|v| v.inner() < 10) //? is_some_and consumes self, why?
 				&& d.morning.run_to_shower_M_colon_S.is_some_and(|v| v.inner() <= 5)
-				&& d.morning.quality_of_math_done.is_some_and(|v| v >= 0.6827 )
+				&& d.morning.quality_of_math_done.is_some_and(|q| q >= 0.6827 )
 				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
 				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
 		};
@@ -454,7 +457,7 @@ impl Repercussions {
 			Some(day) => {
 				let mut repercussions = Self::default();
 
-				if day.ev >= 100 {
+				if day.morning.quality_of_math_done.is_some_and(|q| q >= 0.2) {
 					repercussions.sleep_on_the_floor = false;
 				}
 
