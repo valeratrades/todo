@@ -248,8 +248,8 @@ pub struct Day {
 	jofv_mins: Option<usize>,    // other types are self-regulating or even net positive (when work for v)
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	number_of_NOs: usize,
-	caffeine_only_during_work: Option<bool>,
-	checked_messages_only_during_eating: Option<bool>,
+	caffeine_only_during_work: bool,
+	checked_messages_only_during_eating: bool,
 	number_of_rejections: usize,
 	phone_locked_away: bool,
 }
@@ -412,10 +412,10 @@ impl Day {
 		let no_streak_condition = |d: &Day| d.number_of_NOs > 0;
 		let _ = streak_update("NOs_streak", &no_streak_condition);
 
-		let responsible_caffeine_condition = |d: &Day| d.caffeine_only_during_work == Some(true);
+		let responsible_caffeine_condition = |d: &Day| d.caffeine_only_during_work == true;
 		let _ = streak_update("responsible_caffeine", &responsible_caffeine_condition);
 
-		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_eating == Some(true);
+		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_eating == true;
 		let _ = streak_update("responsible_messengers", &responsible_messengers_condition);
 
 		let running_streak_condition = |d: &Day| d.morning.run.is_some_and(|v| v > 0);
@@ -430,11 +430,12 @@ impl Day {
 		pbs_as_value["streaks"]["__last_date_processed"] = serde_json::Value::from(yd_date);
 
 		let formatted_json = serde_json::to_string_pretty(&pbs_as_value).unwrap();
+		dbg!(&formatted_json);
 		let mut file = OpenOptions::new()
 			.read(true)
 			.write(true)
 			.create(true)
-			.truncate(true)
+			.truncate(true) //? what the hell does this do?
 			.open(&pbs_path)
 			.unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
