@@ -198,7 +198,7 @@ struct Sleep {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
-	run: Option<usize>,
+	run: usize,
 	run_to_shower_M_colon_S: Option<Timelike>,
 	quality_of_math_done: Option<Percent>,
 	#[serde(flatten)]
@@ -330,8 +330,8 @@ impl Day {
 			conditional_update(&mut pbs_as_value, "alarm_to_run", *new_alarm, |new, old| new < old);
 		}
 
-		if let Some(new_run) = &self.morning.run_to_shower_M_colon_S {
-			conditional_update(&mut pbs_as_value, "run_to_shower", *new_run, |new, old| new < old);
+		if let Some(new_run_to_shower) = &self.morning.run_to_shower_M_colon_S {
+			conditional_update(&mut pbs_as_value, "run_to_shower", *new_run_to_shower, |new, old| new < old);
 		}
 
 		if let Some(new_hours_of_work) = self.midday.hours_of_work {
@@ -418,7 +418,7 @@ impl Day {
 		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_eating == true;
 		let _ = streak_update("responsible_messengers", &responsible_messengers_condition);
 
-		let running_streak_condition = |d: &Day| d.morning.run.is_some_and(|v| v > 0);
+		let running_streak_condition = |d: &Day| d.morning.run > 0;
 		let _ = streak_update("running_streak", &running_streak_condition);
 
 		let rejection_streak_condition = |d: &Day| d.number_of_rejections > 0;
