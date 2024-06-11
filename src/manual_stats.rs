@@ -198,7 +198,7 @@ struct Sleep {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
-	run: usize,
+	run: bool,
 	run_to_shower_M_colon_S: Option<Timelike>,
 	quality_of_math_done: Option<Percent>,
 	#[serde(flatten)]
@@ -418,7 +418,7 @@ impl Day {
 		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_eating == true;
 		let _ = streak_update("responsible_messengers", &responsible_messengers_condition);
 
-		let running_streak_condition = |d: &Day| d.morning.run > 0;
+		let running_streak_condition = |d: &Day| d.morning.run == true;
 		let _ = streak_update("running_streak", &running_streak_condition);
 
 		let rejection_streak_condition = |d: &Day| d.number_of_rejections > 0;
