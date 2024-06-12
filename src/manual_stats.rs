@@ -339,7 +339,7 @@ impl Day {
 		}
 
 		let new_cw_counter = self.counters.cargo_watch;
-		conditional_update(&mut pbs_as_value, "cw_counter", new_cw_counter, |new, old| new >= old + 10);
+		conditional_update(&mut pbs_as_value, "cw_counter", new_cw_counter, |new, old| *new >= old + 10); // 10-step increments to prevent spam
 
 		// Returns bool for convienience of recursing some of these
 		let mut streak_update = |metric: &str, condition: &dyn Fn(&Day) -> bool| -> bool {
