@@ -249,7 +249,7 @@ pub struct Day {
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	number_of_NOs: usize,
 	caffeine_only_during_work: bool,
-	checked_messages_only_during_eating: bool,
+	checked_messages_only_during_social_window: bool,
 	number_of_rejections: usize,
 	phone_locked_away: bool,
 }
@@ -415,7 +415,7 @@ impl Day {
 		let responsible_caffeine_condition = |d: &Day| d.caffeine_only_during_work == true;
 		let _ = streak_update("responsible_caffeine", &responsible_caffeine_condition);
 
-		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_eating == true;
+		let responsible_messengers_condition = |d: &Day| d.checked_messages_only_during_social_window == true;
 		let _ = streak_update("responsible_messengers", &responsible_messengers_condition);
 
 		let running_streak_condition = |d: &Day| d.morning.run == true;
