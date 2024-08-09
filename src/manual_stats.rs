@@ -34,7 +34,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 			}
 			true => {
 				let pbs_path = target_file_path.parent().unwrap().join(PBS_FILENAME);
-				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Readonly);
+				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Read);
 			}
 		}
 	}
