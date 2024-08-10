@@ -247,7 +247,7 @@ pub struct Day {
 	counters: Counters,
 	jofv_mins: Option<usize>,    // other types are self-regulating or even net positive (when work for v)
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
-	number_of_NOs: usize,
+	percent_focused: Percent,
 	caffeine_only_during_work: bool,
 	checked_messages_only_during_social_window: bool,
 	number_of_rejections: usize,
@@ -409,8 +409,8 @@ impl Day {
 		};
 		let _ = streak_update("perfect_morning", &perfect_morning_condition);
 
-		let no_streak_condition = |d: &Day| d.number_of_NOs > 0;
-		let _ = streak_update("NOs_streak", &no_streak_condition);
+		let marafon_focus_condition = |d: &Day| d.percent_focused > 0.5;
+		let _ = streak_update("NOs_streak", &marafon_focus_condition);
 
 		let responsible_caffeine_condition = |d: &Day| d.caffeine_only_during_work == true;
 		let _ = streak_update("responsible_caffeine", &responsible_caffeine_condition);
