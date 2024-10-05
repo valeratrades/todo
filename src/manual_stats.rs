@@ -1,3 +1,4 @@
+#![allow(clippy::bool_comparison)] // harder to read otherwise
 #![allow(non_snake_case)]
 use crate::config::AppConfig;
 use crate::utils;
@@ -22,6 +23,12 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	let date = utils::format_date(args.days_back, &config);
 
 	let target_file_path = Day::path(&date, &config);
+
+	if let ManualSubcommands::PrintEv(_) = &args.command {
+		let day = Day::load(&date, &config)?;
+		println!("{}", day.ev);
+		return Ok(());
+	}
 
 	if let ManualSubcommands::Open(open_args) = &args.command {
 		match open_args.pbs {
@@ -82,14 +89,14 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				if step.dev_runs {
 					d.counters.dev_runs = 1;
 				}
-				eprintln!("Initialized day object from a counter step. EV is set to 0. Don't forget to set it properly today.");
+				eprintln!("Initialized day object automatically. EV is set to 0. Don't forget to set it properly today.");
 			}
 
 			d.date = date.to_owned();
 			d
 		}
 	};
-	day.update_pbs(&target_file_path.parent().unwrap(), &config);
+	day.update_pbs(target_file_path.parent().unwrap(), &config);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new()
@@ -129,6 +136,7 @@ pub struct ManualArgs {
 pub enum ManualSubcommands {
 	Ev(ManualEv),
 	Open(ManualOpen),
+	PrintEv(Print),
 	CounterStep(CounterStep),
 }
 #[derive(Args)]
@@ -171,6 +179,9 @@ pub struct ManualOpen {
 	#[arg(short, long)]
 	pub pbs: bool,
 }
+
+#[derive(Args)]
+pub struct Print {}
 
 #[derive(Args, Copy, Default, Clone, Debug, Serialize, Deserialize, derive_new::new)]
 pub struct CounterStep {
@@ -264,11 +275,11 @@ impl Day {
 	pub fn path(date: &str, config: &AppConfig) -> PathBuf {
 		let data_storage_dir = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
 		let _ = std::fs::create_dir(&data_storage_dir);
-		data_storage_dir.join(&format!("{}.json", date))
+		data_storage_dir.join(format!("{}.json", date))
 	}
 
 	pub fn load(date: &str, config: &AppConfig) -> Result<Self> {
-		let target_file_path = Day::path(&date, &config);
+		let target_file_path = Day::path(date, config);
 		let file_contents: String = match std::fs::read_to_string(&target_file_path) {
 			Ok(s) => s,
 			Err(_) => "".to_owned(),
@@ -343,7 +354,7 @@ impl Day {
 
 		// Returns bool for convienience of recursing some of these
 		let mut streak_update = |metric: &str, condition: &dyn Fn(&Day) -> bool| -> bool {
-			let load_streaks_from = data_storage_dir.as_ref().join(&format!("{}.json", yd_date));
+			let load_streaks_from = data_storage_dir.as_ref().join(format!("{}.json", yd_date));
 			let yd_streaks_source = match std::fs::read_to_string(&load_streaks_from) {
 				Ok(s) => Some(serde_json::from_str::<Day>(&s).unwrap()),
 				Err(_) => None,
