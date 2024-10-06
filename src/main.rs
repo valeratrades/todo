@@ -1,7 +1,9 @@
+#![allow(clippy::len_zero)]
 mod activity_monitor;
 pub mod config;
 pub mod day_section;
 mod manual_stats;
+mod milestones;
 pub mod mocks;
 mod timer;
 mod todos;
@@ -64,8 +66,10 @@ enum Commands {
 	///todo do done
 	///'''
 	Timer(timer::TimerArgs),
+	/// Operations with milestones (1d, 1w, 1M, 1Q, 1y)
+	Milestones(milestones::MilestonesArgs),
 	/// Start monitoring user activities
-	Monitor(NoArgs),
+	Monitor,
 }
 #[derive(Args)]
 struct NoArgs {}
@@ -92,7 +96,8 @@ fn main() {
 		Commands::Quickfix(_) => todos::compile_quickfix(config),
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
 		Commands::Timer(timer_args) => timer::timing_the_task(config, timer_args),
-		Commands::Monitor(_) => activity_monitor::start(config),
+		Commands::Monitor => activity_monitor::start(config),
+		Commands::Milestones(milestones_args) => milestones::get_milestone(config, milestones_args),
 	};
 
 	match success {

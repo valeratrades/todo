@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use anyhow::{anyhow, Result};
+use color_eyre::eyre::{eyre, Result};
 use chrono::prelude::*;
 use clap::Args;
 use clap::Subcommand;
@@ -22,7 +22,7 @@ pub fn timing_the_task(config: AppConfig, args: TimerArgs) -> Result<()> {
 	let success = match args.command {
 		TimerCommands::Start(start_args) => {
 			if start_args.time > 90 {
-				return Err(anyhow!(
+				return Err(eyre!(
 					"Provided time is too large. Cut your task into smaller parts. Anything above 90m does not make sense."
 				));
 			}

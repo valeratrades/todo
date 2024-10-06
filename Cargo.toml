@@ -5,20 +5,24 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lints.clippy]
-get_first = "allow"
-len_zero = "allow"
+float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should be allowed
+#get_first = "allow" # const fn, so actually more performant
+len_zero = "allow" # `.empty()` is O(1) but on &str only
+undocumented_unsafe_blocks = "warn"
+tabs_in_doc_comments = "allow"
 
 [dependencies]
-anyhow = "^1.0.86"
-chrono = "^0.4.38"
-clap = { version = "^4.5.14", features = ["derive"] }
+chrono = { version = "^0.4.38", features = ["serde"] }
+clap = { version = "^4.5.19", features = ["derive"] }
 config = "^0.14.0"
 google-calendar = "^0.7.0"
 pandoc = "^0.8.11"
-reqwest = { version = "^0.12.5", features = ["json"] }
-serde = { version = "^1.0.205", features = ["derive"] }
-serde_json = { version = "^1.0.122", features = ["std"] }
-tempfile = "^3.12.0"
-tokio = { version = "^1.39.2", features = ["rt", "rt-multi-thread"] }
-v_utils = { version = "^1.4.3", features = ["io"] }
-derive-new = "0.6.0"
+reqwest = { version = "^0.12.8", features = ["blocking", "json"] }
+serde = { version = "^1.0.210", features = ["derive"] }
+serde_json = { version = "^1.0.128", features = ["std"] }
+tempfile = "^3.13.0"
+tokio = { version = "^1.40.0", features = ["rt", "rt-multi-thread"] }
+v_utils = { version = "^1.7.4", features = ["io", "macros", "trades"] }
+derive-new = "^0"
+color-eyre = "0.6.3"
+thiserror = "1.0.64"

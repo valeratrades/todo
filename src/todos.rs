@@ -2,8 +2,8 @@ use crate::config::AppConfig;
 use crate::day_section::DaySection;
 use crate::manual_stats::{Day, Repercussions};
 use crate::utils;
-use anyhow::{Context, Result};
 use clap::Args;
+use color_eyre::eyre::{eyre, Context as _, Report, Result};
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use tempfile::Builder;
@@ -164,20 +164,20 @@ struct Task {
 	split: TaskSplit,
 }
 impl TryFrom<PathBuf> for Task {
-	type Error = anyhow::Error;
+	type Error = Report;
 
 	fn try_from(path: PathBuf) -> Result<Self> {
 		let filename = path
 			.file_name()
-			.ok_or_else(|| anyhow::anyhow!("Filename not found in path"))?
+			.ok_or_else(|| eyre!("Filename not found in path"))?
 			.to_str()
-			.ok_or_else(|| anyhow::anyhow!("Filename is not valid UTF-8"))?;
+			.ok_or_else(|| eyre!("Filename is not valid UTF-8"))?;
 		let split: Vec<_> = filename.split('-').collect();
 
 		let formatting_error: String = format!("Error: Incorrect Task Format\nWant: \"3-4-my-task.md\"\nGot: {}", filename);
 
 		if split.len() < 3 || split[0].len() != 1 || split[1].len() != 1 {
-			return Err(anyhow::anyhow!(formatting_error.clone()));
+			return Err(eyre!(formatting_error.clone()));
 		}
 
 		let importance: u8 = split[0].parse().with_context(|| formatting_error.clone())?;

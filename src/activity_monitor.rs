@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use anyhow::Result;
+use color_eyre::eyre::Result;
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

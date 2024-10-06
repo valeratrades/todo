@@ -1,4 +1,4 @@
-use anyhow::Result;
+use color_eyre::eyre::Result;
 use serde::Deserialize;
 use std::path::PathBuf;
 use v_utils::io::ExpandedPath;
@@ -7,6 +7,7 @@ use v_utils::macros::MyConfigPrimitives;
 #[derive(Debug, Default, derive_new::new, Clone, MyConfigPrimitives)]
 pub struct AppConfig {
 	pub data_dir: PathBuf,
+	pub github_token: String,
 	pub date_format: String,
 	pub todos: Todos,
 	pub timer: Timer,

@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 use crate::config::AppConfig;
 use crate::utils;
-use anyhow::{anyhow, ensure, Result};
+use color_eyre::eyre::{eyre, ensure, Result};
 use clap::Args;
 use clap::Subcommand;
 use serde::de::DeserializeOwned;
@@ -34,7 +34,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 		match open_args.pbs {
 			false => {
 				if !target_file_path.exists() {
-					return Err(anyhow!("Tried to open ev file of a day that was not initialized"));
+					return Err(eyre!("Tried to open ev file of a day that was not initialized"));
 				}
 				v_utils::io::open(&target_file_path)?;
 				return process_manual_updates(&target_file_path, &config);
@@ -118,7 +118,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 
 fn process_manual_updates<T: AsRef<Path>>(path: T, config: &AppConfig) -> Result<()> {
 	if !path.as_ref().exists() {
-		return Err(anyhow!("File does not exist, likely because you manually changed something."));
+		return Err(eyre!("File does not exist, likely because you manually changed something."));
 	}
 	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
 	day.update_pbs(path.as_ref().parent().unwrap(), config);
@@ -137,6 +137,7 @@ pub enum ManualSubcommands {
 	Ev(ManualEv),
 	Open(ManualOpen),
 	PrintEv(Print),
+	LastUpdate(LastUpdate),
 	CounterStep(CounterStep),
 }
 #[derive(Args)]
@@ -159,10 +160,10 @@ impl ManualEv {
 			false => self.replace,
 		};
 		if self.add && self.subtract {
-			return Err(anyhow!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
+			return Err(eyre!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
 		}
 		if !self.add && !self.subtract && !self.replace {
-			return Err(anyhow!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
+			return Err(eyre!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
 		}
 		Ok(Self {
 			ev: self.ev,
@@ -182,6 +183,10 @@ pub struct ManualOpen {
 
 #[derive(Args)]
 pub struct Print {}
+
+#[derive(Args)]
+//TODO: print minutes since last update. Count updates from cli and ones that were made via `open` command
+pub struct LastUpdate {}
 
 #[derive(Args, Copy, Default, Clone, Debug, Serialize, Deserialize, derive_new::new)]
 pub struct CounterStep {
