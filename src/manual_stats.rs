@@ -1,22 +1,21 @@
 #![allow(clippy::bool_comparison)] // harder to read otherwise
 #![allow(non_snake_case)]
-use crate::config::AppConfig;
-use crate::utils;
-use clap::Args;
-use clap::Subcommand;
-use color_eyre::eyre::bail;
-use color_eyre::eyre::{ensure, eyre, Result};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
-use std::path::PathBuf;
+use std::{
+	fs::OpenOptions,
+	io::Write,
+	path::{Path, PathBuf},
+};
+
+use clap::{Args, Subcommand};
+use color_eyre::eyre::{bail, ensure, eyre, Result};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use v_utils::{
 	io::{OpenMode, Percent},
 	time::Timelike,
 };
 use xattr::FileExt as _;
+
+use crate::{config::AppConfig, utils};
 
 static PBS_FILENAME: &str = ".pbs.json";
 
@@ -91,10 +90,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 			let mut d = Day::default();
 			//? should this not be a match?
 			if let Some(ev_args) = &ev_override {
-				ensure!(
-					ev_args.replace,
-					"The day object is not initialized, so `ev` argument must be provided with `-r --replace` flag"
-				);
+				ensure!(ev_args.replace, "The day object is not initialized, so `ev` argument must be provided with `-r --replace` flag");
 				d.ev = ev_args.ev;
 			} else if let ManualSubcommands::CounterStep(step) = args.command {
 				if step.cargo_watch {
@@ -113,13 +109,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	day.update_pbs(target_file_path.parent().unwrap(), &config);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
-	let mut file = OpenOptions::new()
-		.read(true)
-		.write(true)
-		.create(true)
-		.truncate(true)
-		.open(&target_file_path)
-		.unwrap();
+	let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
@@ -332,23 +322,17 @@ impl Day {
 
 		fn conditional_update<T>(pbs_as_value: &mut serde_json::Value, metric: &str, new_value: T, condition: fn(&T, &T) -> bool)
 		where
-			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display + std::fmt::Debug,
-		{
-			let old_value = pbs_as_value
-				.get(metric)
-				.and_then(|v| T::deserialize(v.clone()).ok())
-				.map(|v| Some(v))
-				.unwrap_or(None);
+			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display + std::fmt::Debug, {
+			let old_value = pbs_as_value.get(metric).and_then(|v| T::deserialize(v.clone()).ok()).map(|v| Some(v)).unwrap_or(None);
 
 			match old_value {
-				Some(old) => {
+				Some(old) =>
 					if condition(&new_value, &old) {
 						announce_new_pb(&new_value, Some(&old), metric);
 						pbs_as_value[metric] = serde_json::to_value(&new_value).unwrap();
 					} else {
 						pbs_as_value[metric] = serde_json::to_value(&old).unwrap();
-					}
-				}
+					},
 				None => {
 					announce_new_pb(&new_value, None, metric);
 					pbs_as_value[metric] = serde_json::to_value(new_value).unwrap();
@@ -400,10 +384,7 @@ impl Day {
 						current: read_streak.current + 1,
 					}
 				} else {
-					Streak {
-						pb: read_streak.pb,
-						current: 0,
-					}
+					Streak { pb: read_streak.pb, current: 0 }
 				};
 				if new_streak.current > read_streak.pb {
 					announce_new_pb(&new_streak.current, Some(&read_streak.current), metric);
@@ -420,9 +401,7 @@ impl Day {
 		let jofv_condition = |d: &Day| d.jofv_mins.is_some_and(|x| x == 0);
 		let _ = streak_update("no_jofv", &jofv_condition);
 
-		let stable_sleep_condition = |d: &Day| {
-			d.sleep.yd_to_bed_t_plus == Some(0) && d.sleep.from_bed_t_plus == Some(0) && d.sleep.from_bed_abs_diff_from_day_before == Some(0)
-		};
+		let stable_sleep_condition = |d: &Day| d.sleep.yd_to_bed_t_plus == Some(0) && d.sleep.from_bed_t_plus == Some(0) && d.sleep.from_bed_abs_diff_from_day_before == Some(0);
 		let _ = streak_update("stable_sleep", &stable_sleep_condition);
 
 		let meditation_condition = |d: &Day| d.evening.focus_meditation > 0;

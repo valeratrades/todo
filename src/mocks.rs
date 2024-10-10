@@ -1,5 +1,6 @@
-use chrono::DateTime;
 use std::cell::Cell;
+
+use chrono::DateTime;
 
 thread_local! {
 	static TIMESTAMP: Cell<i64> = const { Cell::new(0) };

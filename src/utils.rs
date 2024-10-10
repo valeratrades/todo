@@ -1,10 +1,10 @@
-#[cfg(test)]
-use crate::mocks::Utc;
+use chrono::Duration;
 #[cfg(not(test))]
 use chrono::Utc;
 
 use crate::config::AppConfig;
-use chrono::Duration;
+#[cfg(test)]
+use crate::mocks::Utc;
 
 pub fn format_date(days_back: usize, config: &AppConfig) -> String {
 	let date = Utc::now() - Duration::days(days_back as i64);
@@ -32,9 +32,10 @@ pub fn same_day_buffer() -> chrono::TimeDelta {
 
 #[cfg(test)]
 mod tests {
+	use chrono::TimeZone;
+
 	use super::*;
 	use crate::config::AppConfig;
-	use chrono::TimeZone;
 
 	fn init_test(waketime: &str, day_section_borders: &str, t: Option<(i32, u32, u32, u32, u32, u32)>) -> AppConfig {
 		std::env::set_var("WAKETIME", waketime);

@@ -1,16 +1,16 @@
-use crate::config::AppConfig;
-use color_eyre::eyre::{eyre, Result};
-use chrono::prelude::*;
-use clap::Args;
-use clap::Subcommand;
-use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::process::Command;
+use std::{
+	collections::VecDeque,
+	fs::File,
+	io::{Read, Write},
+	process::Command,
+};
 
-use crate::ONGOING_PATH_APPENDIX;
-use crate::TIMED_PATH_APPENDIX;
+use chrono::prelude::*;
+use clap::{Args, Subcommand};
+use color_eyre::eyre::{eyre, Result};
+use serde::{Deserialize, Serialize};
+
+use crate::{config::AppConfig, ONGOING_PATH_APPENDIX, TIMED_PATH_APPENDIX};
 
 //TODO!!!!: make it possible to have multiple files in the state file, so it can be used as a fully fletched quickfix todo list.
 pub fn timing_the_task(config: AppConfig, args: TimerArgs) -> Result<()> {
@@ -22,9 +22,7 @@ pub fn timing_the_task(config: AppConfig, args: TimerArgs) -> Result<()> {
 	let success = match args.command {
 		TimerCommands::Start(start_args) => {
 			if start_args.time > 90 {
-				return Err(eyre!(
-					"Provided time is too large. Cut your task into smaller parts. Anything above 90m does not make sense."
-				));
+				return Err(eyre!("Provided time is too large. Cut your task into smaller parts. Anything above 90m does not make sense."));
 			}
 
 			let timestamp_s = Utc::now().timestamp() as u32;
@@ -226,11 +224,7 @@ fn run(config: &AppConfig) -> Result<()> {
 			format!("{:02}:{:02}{}", e_diff / 60, e_diff % 60, description)
 		};
 
-		let _ = Command::new("sh")
-			.arg("-c")
-			.arg(format!("eww update todo_timer=\"{}\"", value))
-			.output()
-			.unwrap();
+		let _ = Command::new("sh").arg("-c").arg(format!("eww update todo_timer=\"{}\"", value)).output().unwrap();
 		if value.starts_with("Out") {
 			save_result(config, false)?;
 			std::process::exit(0);

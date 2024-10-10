@@ -1,18 +1,17 @@
-use crate::config::AppConfig;
-use color_eyre::eyre::Result;
-use chrono::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::{
+	collections::VecDeque,
 	ffi::OsStr,
+	fs::File,
+	io::{Read, Write},
 	process::{Command, Output},
 };
 
-use crate::MONITOR_PATH_APPENDIX;
-use crate::TOTALS_PATH_APPENDIX;
+use chrono::prelude::*;
+use color_eyre::eyre::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::{config::AppConfig, MONITOR_PATH_APPENDIX, TOTALS_PATH_APPENDIX};
 
 pub fn start(config: AppConfig) -> Result<()> {
 	let mut prev_activity_name = String::new();
@@ -44,8 +43,7 @@ fn get_activity(config: &AppConfig) -> String {
 
 	fn cmd<S>(command: S) -> Output
 	where
-		S: AsRef<OsStr>,
-	{
+		S: AsRef<OsStr>, {
 		let output = Command::new("sh").arg("-c").arg(command).output().unwrap();
 		output
 	}
@@ -156,10 +154,7 @@ fn compile_yd_totals(config: &AppConfig) {
 			if a.start_s > period_end {
 				let period_total = Total::from_activities(over_period.clone(), &config.activity_monitor.delimitor);
 				if period_total.time_s > (7.5 * 60.0 + 0.5) as i64 {
-					calendar.push((
-						period_total.find_largest("".to_owned(), &config.activity_monitor.delimitor),
-						period_end - 15 * 60,
-					));
+					calendar.push((period_total.find_largest("".to_owned(), &config.activity_monitor.delimitor), period_end - 15 * 60));
 				}
 
 				period_end = a.start_s + 15 * 60;
@@ -195,10 +190,7 @@ fn compile_yd_totals(config: &AppConfig) {
 						"timeZone": "UTC"
 					}
 				});
-				let url = format!(
-					"https://www.googleapis.com/calendar/v3/calendars/{}/events",
-					config.activity_monitor.calendar_id.clone()
-				);
+				let url = format!("https://www.googleapis.com/calendar/v3/calendars/{}/events", config.activity_monitor.calendar_id.clone());
 
 				let handle = client
 					.post(url)
@@ -213,10 +205,7 @@ fn compile_yd_totals(config: &AppConfig) {
 				match handle.await {
 					Ok(_) => {}
 					Err(e) => {
-						std::process::Command::new("echo")
-							.arg(format!("{} >> /home/v/logs/activity_monitor.log", e))
-							.output()
-							.unwrap();
+						std::process::Command::new("echo").arg(format!("{} >> /home/v/logs/activity_monitor.log", e)).output().unwrap();
 					}
 				};
 			}
@@ -297,11 +286,7 @@ impl Total {
 			}
 			if split.len() > 2 {
 				let l2_name = split[2].to_owned();
-				let l2_index = match grand_total.children[l0_index].children[l1_index]
-					.children
-					.iter()
-					.position(|t| t.name == l2_name)
-				{
+				let l2_index = match grand_total.children[l0_index].children[l1_index].children.iter().position(|t| t.name == l2_name) {
 					Some(index) => index,
 					None => {
 						grand_total.children[l0_index].children[l1_index].children.push(Total::new(l2_name));

@@ -1,5 +1,4 @@
-use chrono::DateTime;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::Args;
 use color_eyre::eyre::Result;
 use reqwest::blocking::Client;
@@ -72,10 +71,7 @@ pub fn get_milestone(config: AppConfig, args: MilestonesArgs) -> Result<()> {
 		}
 		None => {
 			let milestone_titles = milestones.iter().map(|m| m.title.clone()).collect::<Vec<String>>();
-			println!(
-				"Milestone not found, here are all the existing milestones:\n{}",
-				milestone_titles.join("\n")
-			);
+			println!("Milestone not found, here are all the existing milestones:\n{}", milestone_titles.join("\n"));
 		}
 	}
 

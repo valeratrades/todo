@@ -1,5 +1,5 @@
-use color_eyre::eyre::Result;
 use chrono::prelude::*;
+use color_eyre::eyre::Result;
 
 #[derive(Debug)]
 struct Waketime {
@@ -35,7 +35,7 @@ impl DaySection {
 
 	pub fn description(&self) -> &str {
 		match self {
-			DaySection::Morning => {
+			DaySection::Morning =>
 				r#"
 # Morning
 for physical things
@@ -66,9 +66,8 @@ Can be asked, but not requested.
 
 ### Remember
 > There are no shortcuts for you, Valera
-"#
-			}
-			DaySection::Work => {
+"#,
+			DaySection::Work =>
 				r#"
 # Work
 For Necessary things.
@@ -93,9 +92,8 @@ Turned off fully, and placed inside a mailbox if any urges arise.
 
 ### Remember
 > It's not going to be fun. You will feel tired, bored, at times physically suffering. You must say "no" to everything your whole life. Your existence is optimising for pressing keys in correct order, sitting at a desk 14 hours a day. This is the cost of greatness.
-"#
-			}
-			DaySection::Evening => {
+"#,
+			DaySection::Evening =>
 				r#"
 # Evening
 fun and reflection
@@ -115,14 +113,12 @@ Can be asked, but not requested.
 
 ### Remember
 > Iteration Speed
-"#
-			}
-			DaySection::Night => {
+"#,
+			DaySection::Night =>
 				r#"
 # Night
 ## SLEEP
-"#
-			}
+"#,
 		}
 	}
 }
@@ -169,10 +165,6 @@ impl From<String> for DaySectionBorders {
 		let morning_end: i32 = parse(split[0]);
 		let work_end: i32 = parse(split[1]);
 		let evening_end: i32 = parse(split[2]);
-		DaySectionBorders {
-			morning_end,
-			work_end,
-			evening_end,
-		}
+		DaySectionBorders { morning_end, work_end, evening_end }
 	}
 }

@@ -1,13 +1,19 @@
-use crate::config::AppConfig;
-use crate::day_section::DaySection;
-use crate::manual_stats::{Day, Repercussions};
-use crate::utils;
+use std::{
+	fmt::{self, Display},
+	path::PathBuf,
+};
+
 use clap::Args;
 use color_eyre::eyre::{eyre, Context as _, Report, Result};
-use std::fmt::{self, Display};
-use std::path::PathBuf;
 use tempfile::Builder;
 use v_utils::io::OpenMode;
+
+use crate::{
+	config::AppConfig,
+	day_section::DaySection,
+	manual_stats::{Day, Repercussions},
+	utils,
+};
 
 pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 	let day_section = DaySection::build().unwrap();
@@ -75,10 +81,7 @@ With current state of the day, the following repercussions will be applied:
 	p.set_output(pandoc::OutputKind::File(tmp_path.clone()));
 	p.execute()?;
 
-	let _status = std::process::Command::new("sh")
-		.arg("-c")
-		.arg(format!("zathura {}", tmp_path.display()))
-		.status()?;
+	let _status = std::process::Command::new("sh").arg("-c").arg(format!("zathura {}", tmp_path.display())).status()?;
 
 	Ok(())
 }
