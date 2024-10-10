@@ -2,9 +2,10 @@
 #![allow(non_snake_case)]
 use crate::config::AppConfig;
 use crate::utils;
-use color_eyre::eyre::{eyre, ensure, Result};
 use clap::Args;
 use clap::Subcommand;
+use color_eyre::eyre::bail;
+use color_eyre::eyre::{ensure, eyre, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
@@ -28,6 +29,17 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 		let day = Day::load(&date, &config)?;
 		println!("{}", day.ev);
 		return Ok(());
+	}
+
+	if let ManualSubcommands::LastUpdateHours(_) = &args.command {
+		let metadata = match std::fs::metadata(&target_file_path) {
+			Ok(m) => m,
+			Err(_) => bail!("Day object not initialized"),
+		};
+		let last_update = metadata.modified().unwrap();
+		let now = std::time::SystemTime::now();
+		let full_hours_ago = now.duration_since(last_update).unwrap().as_secs() / 3600;
+		println!("{full_hours_ago}");
 	}
 
 	if let ManualSubcommands::Open(open_args) = &args.command {
@@ -134,14 +146,16 @@ pub struct ManualArgs {
 }
 #[derive(Subcommand)]
 pub enum ManualSubcommands {
-	Ev(ManualEv),
-	Open(ManualOpen),
-	PrintEv(Print),
-	LastUpdate(LastUpdate),
-	CounterStep(CounterStep),
+	/// All evokations will be considered as updates in the `last-update` command, even if we write exact same values.
+	Ev(EvArgs),
+	Open(OpenArgs),
+	PrintEv(PrintArgs),
+	/// Full hours since last update
+	LastUpdateHours(LastUpdateArgs),
+	CounterStep(CounterStepArgs),
 }
 #[derive(Args)]
-pub struct ManualEv {
+pub struct EvArgs {
 	pub ev: i32,
 	#[arg(short, long)]
 	pub open: bool,
@@ -152,7 +166,7 @@ pub struct ManualEv {
 	#[arg(short, long, default_value = "true")]
 	pub replace: bool,
 }
-impl ManualEv {
+impl EvArgs {
 	//? This seems ugly. There has to be a way to do this natively with clap, specifically with the `conflicts_with` attribute
 	fn validate(&self) -> Result<Self> {
 		let replace = match self.add || self.subtract {
@@ -176,20 +190,20 @@ impl ManualEv {
 }
 
 #[derive(Args)]
-pub struct ManualOpen {
+pub struct OpenArgs {
 	#[arg(short, long)]
 	pub pbs: bool,
 }
 
 #[derive(Args)]
-pub struct Print {}
+pub struct PrintArgs;
 
 #[derive(Args)]
 //TODO: print minutes since last update. Count updates from cli and ones that were made via `open` command
-pub struct LastUpdate {}
+pub struct LastUpdateArgs;
 
 #[derive(Args, Copy, Default, Clone, Debug, Serialize, Deserialize, derive_new::new)]
-pub struct CounterStep {
+pub struct CounterStepArgs {
 	/// Counter specifically for cargo_watch recompiles, as the metric is incocmpatible with workflow of other languages.
 	#[arg(long)]
 	pub cargo_watch: bool,
