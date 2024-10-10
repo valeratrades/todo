@@ -16,6 +16,7 @@ use v_utils::{
 	io::{OpenMode, Percent},
 	time::Timelike,
 };
+use xattr::FileExt as _;
 
 static PBS_FILENAME: &str = ".pbs.json";
 
@@ -25,28 +26,28 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 
 	let target_file_path = Day::path(&date, &config);
 
-	if let ManualSubcommands::PrintEv(_) = &args.command {
-		let day = Day::load(&date, &config)?;
-		println!("{}", day.ev);
-		return Ok(());
-	}
-
-	if let ManualSubcommands::LastUpdateHours(_) = &args.command {
-		let metadata = match std::fs::metadata(&target_file_path) {
-			Ok(m) => m,
-			Err(_) => bail!("Day object not initialized"),
-		};
-		let last_update = metadata.modified().unwrap();
-		let now = std::time::SystemTime::now();
-		let full_hours_ago = now.duration_since(last_update).unwrap().as_secs() / 3600;
-		println!("{full_hours_ago}");
-	}
-
-	if let ManualSubcommands::Open(open_args) = &args.command {
-		match open_args.pbs {
+	match &args.command {
+		ManualSubcommands::PrintEv(_) => {
+			let day = Day::load(&date, &config)?;
+			println!("{}", day.ev);
+			return Ok(());
+		}
+		ManualSubcommands::LastEvUpdateHours(_) => {
+			let metadata = match std::fs::metadata(&target_file_path) {
+				Ok(m) => m,
+				Err(_) => bail!("Day object not initialized"),
+			};
+			let last_update = metadata.modified().unwrap();
+			let now = std::time::SystemTime::now();
+			let full_hours_ago = now.duration_since(last_update).unwrap().as_secs() / 3600;
+			println!("{full_hours_ago}");
+			dbg!(&now.duration_since(last_update).unwrap().as_millis());
+			return Ok(());
+		}
+		ManualSubcommands::Open(open_args) => match open_args.pbs {
 			false => {
 				if !target_file_path.exists() {
-					return Err(eyre!("Tried to open ev file of a day that was not initialized"));
+					bail!("Tried to open ev file of a day that was not initialized");
 				}
 				v_utils::io::open(&target_file_path)?;
 				return process_manual_updates(&target_file_path, &config);
@@ -55,7 +56,8 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				let pbs_path = target_file_path.parent().unwrap().join(PBS_FILENAME);
 				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Pager);
 			}
-		}
+		},
+		ManualSubcommands::Ev(_) | ManualSubcommands::CounterStep(_) => {}
 	}
 
 	let ev_override = match &args.command {
@@ -130,9 +132,12 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 
 fn process_manual_updates<T: AsRef<Path>>(path: T, config: &AppConfig) -> Result<()> {
 	if !path.as_ref().exists() {
-		return Err(eyre!("File does not exist, likely because you manually changed something."));
+		bail!("File does not exist, likely because you manually changed something.");
 	}
-	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+
+	let mut file = OpenOptions::new().read(true).write(true).truncate(false).open(&path)?;
+	let day: Day = serde_json::from_reader(&file)?;
+	file.set_xattr("ev.last_changed", chrono::Utc::now().to_rfc3339().as_bytes()).unwrap();
 	day.update_pbs(path.as_ref().parent().unwrap(), config);
 	Ok(())
 }
@@ -146,12 +151,12 @@ pub struct ManualArgs {
 }
 #[derive(Subcommand)]
 pub enum ManualSubcommands {
-	/// All evokations will be considered as updates in the `last-update` command, even if we write exact same values.
+	/// All evokations will be considered as updates in the `last-ev-update` command, even if we write exact same values.
 	Ev(EvArgs),
 	Open(OpenArgs),
 	PrintEv(PrintArgs),
 	/// Full hours since last update
-	LastUpdateHours(LastUpdateArgs),
+	LastEvUpdateHours(LastEvUpdateArgs),
 	CounterStep(CounterStepArgs),
 }
 #[derive(Args)]
@@ -174,10 +179,10 @@ impl EvArgs {
 			false => self.replace,
 		};
 		if self.add && self.subtract {
-			return Err(eyre!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
+			bail!("Exactly one of 'add', 'subtract', or 'replace' must be specified.");
 		}
 		if !self.add && !self.subtract && !self.replace {
-			return Err(eyre!("Exactly one of 'add', 'subtract', or 'replace' must be specified."));
+			bail!("Exactly one of 'add', 'subtract', or 'replace' must be specified.");
 		}
 		Ok(Self {
 			ev: self.ev,
@@ -199,8 +204,7 @@ pub struct OpenArgs {
 pub struct PrintArgs;
 
 #[derive(Args)]
-//TODO: print minutes since last update. Count updates from cli and ones that were made via `open` command
-pub struct LastUpdateArgs;
+pub struct LastEvUpdateArgs;
 
 #[derive(Args, Copy, Default, Clone, Debug, Serialize, Deserialize, derive_new::new)]
 pub struct CounterStepArgs {
