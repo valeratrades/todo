@@ -1,13 +1,14 @@
 #![allow(clippy::bool_comparison)] // harder to read otherwise
 #![allow(non_snake_case)]
 use std::{
-	fs::OpenOptions,
+	fs::{self, OpenOptions},
 	io::Write,
+	os::unix::fs::PermissionsExt as _,
 	path::{Path, PathBuf},
 };
 
 use clap::{Args, Subcommand};
-use color_eyre::eyre::{bail, ensure, eyre, Result};
+use color_eyre::eyre::{bail, ensure, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use v_utils::{
 	io::{OpenMode, Percent},
@@ -32,15 +33,17 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 			return Ok(());
 		}
 		ManualSubcommands::LastEvUpdateHours(_) => {
-			let metadata = match std::fs::metadata(&target_file_path) {
+			let file = match std::fs::File::open(&target_file_path) {
 				Ok(m) => m,
 				Err(_) => bail!("Day object not initialized"),
 			};
-			let last_update = metadata.modified().unwrap();
-			let now = std::time::SystemTime::now();
-			let full_hours_ago = now.duration_since(last_update).unwrap().as_secs() / 3600;
+			let last_update_tag = file.get_xattr("user.last_ev_change").unwrap().unwrap();
+			let last_update_str = String::from_utf8_lossy(&last_update_tag).into_owned();
+			let last_update_dt = chrono::DateTime::parse_from_rfc3339(&last_update_str).unwrap().with_timezone(&chrono::Utc);
+
+			let now = chrono::Utc::now();
+			let full_hours_ago = now.signed_duration_since(last_update_dt).num_hours();
 			println!("{full_hours_ago}");
-			dbg!(&now.duration_since(last_update).unwrap().as_millis());
 			return Ok(());
 		}
 		ManualSubcommands::Open(open_args) => match open_args.pbs {
@@ -111,6 +114,10 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
+	fs::set_permissions(&target_file_path, fs::Permissions::from_mode(0o666))?;
+	if !matches!(&args.command, &ManualSubcommands::CounterStep(_)) {
+		file.set_xattr("user.last_ev_change", chrono::Utc::now().to_rfc3339().as_bytes())?;
+	}
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
 		v_utils::io::open(&target_file_path)?;
@@ -124,10 +131,7 @@ fn process_manual_updates<T: AsRef<Path>>(path: T, config: &AppConfig) -> Result
 	if !path.as_ref().exists() {
 		bail!("File does not exist, likely because you manually changed something.");
 	}
-
-	let mut file = OpenOptions::new().read(true).write(true).truncate(false).open(&path)?;
-	let day: Day = serde_json::from_reader(&file)?;
-	file.set_xattr("ev.last_changed", chrono::Utc::now().to_rfc3339().as_bytes()).unwrap();
+	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
 	day.update_pbs(path.as_ref().parent().unwrap(), config);
 	Ok(())
 }
@@ -310,7 +314,7 @@ impl Day {
 			};
 			let announcement = format!("New pb on {}! ({} -> {})", name, old_value, new_value);
 			println!("{}", announcement);
-			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap();
+			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap().wait().unwrap();
 		}
 
 		let pbs_path = data_storage_dir.as_ref().join(PBS_FILENAME);
