@@ -1,17 +1,35 @@
+use std::str::FromStr as _;
+
 use chrono::{DateTime, Utc};
-use clap::Args;
+use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use v_utils::trades::{Timeframe, TimeframeDesignator};
+use v_utils::{
+	io::ExpandedPath,
+	trades::{Timeframe, TimeframeDesignator},
+};
 
 use crate::config::AppConfig;
 
 static MIN_DISTANCE_HOURS: usize = 8;
+lazy_static::lazy_static! {
+	static ref HEALTHCHECK_PATH: ExpandedPath = ExpandedPath::from_str("~/.local/run/todo/milestones_healthcheck.status").unwrap();
+}
 
 #[derive(Args)]
 pub struct MilestonesArgs {
-	pub tf: Timeframe,
+	#[command(subcommand)]
+	command: MilestonesCommands,
+}
+
+#[derive(Subcommand)]
+pub enum MilestonesCommands {
+	Get {
+		tf: Timeframe,
+	},
+	/// Ensures all milestones up to date, writes "OK" to ~/.local/run/todo/milestones_healthcheck.status if so.
+	Healthcheck,
 }
 
 #[derive(Deserialize, Debug)]
@@ -23,30 +41,19 @@ struct Milestone {
 	description: Option<String>,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("Milestone is missing due_on date")]
-struct MissingDueOn {}
-
-#[derive(Debug, thiserror::Error)]
-#[error(
-	"Milestone is outdated (due_on: {due_on})\ntry moving it to a later date. Must be at least {} hours away from `Utc::now()`",
-	MIN_DISTANCE_HOURS
-)]
-struct MilestoneOutdated {
-	due_on: DateTime<Utc>,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("Requested milestone on minute-designated timeframe (`m`). You likely meant to request Monthly (`M`).")]
-struct MinuteMilestone {
-	requested_tf: Timeframe,
-}
-
-pub fn get_milestone(config: AppConfig, args: MilestonesArgs) -> Result<()> {
-	if args.tf.designator == TimeframeDesignator::Minutes {
-		return Err(MinuteMilestone { requested_tf: args.tf }.into());
+pub fn milestones_command(config: AppConfig, args: MilestonesArgs) -> Result<()> {
+	match args.command {
+		MilestonesCommands::Get { tf } => {
+			let retrieved_milestones = request_milestones(&config)?;
+			let milestone = get_milestone(tf, &retrieved_milestones)?;
+			println!("{milestone}");
+			Ok(())
+		}
+		MilestonesCommands::Healthcheck => healthcheck(&config),
 	}
+}
 
+fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 	let todos_url_output = std::process::Command::new("git")
 		.args(["config", "--get", "remote.origin.url"])
 		.current_dir(&config.todos.path)
@@ -66,24 +73,136 @@ pub fn get_milestone(config: AppConfig, args: MilestonesArgs) -> Result<()> {
 		.send()?;
 
 	let milestones = res.json::<Vec<Milestone>>()?;
-	match milestones.iter().find(|m| m.title == args.tf.to_string()) {
+	Ok(milestones)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Error on `{requested_tf}` milestone: {source}")]
+struct GetMilestoneError {
+	requested_tf: Timeframe,
+	#[source]
+	source: MilestoneError,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum MilestoneError {
+	#[error("Milestone is missing due_on date")]
+	MissingDueOn,
+
+	#[error(
+		"Milestone is outdated (due_on: {due_on}). Try moving it to a later date. Must be at least {} hours away from `Utc::now()`",
+		MIN_DISTANCE_HOURS
+	)]
+	MilestoneOutdated { due_on: DateTime<Utc> },
+
+	#[error("Requested milestone on minute-designated timeframe (`m`). You likely meant to request Monthly (`M`).")]
+	MinuteMilestone,
+
+	#[error("Milestone not found. Here are all the existing milestones:\n{existing_milestones:?}")]
+	MilestoneNotFound { existing_milestones: Vec<String> },
+
+	#[error("Missing description")]
+	MissingDescription,
+}
+
+fn get_milestone(tf: Timeframe, retrieved_milestones: &[Milestone]) -> Result<String, GetMilestoneError> {
+	if tf.designator == TimeframeDesignator::Minutes {
+		return Err(GetMilestoneError {
+			requested_tf: tf,
+			source: MilestoneError::MinuteMilestone,
+		});
+	}
+
+	match retrieved_milestones.iter().find(|m| m.title == tf.to_string()) {
 		Some(milestone) => {
-			let due_on = milestone.due_on.as_ref().ok_or(MissingDueOn {})?;
+			let due_on = milestone.due_on.as_ref().ok_or(GetMilestoneError {
+				requested_tf: tf,
+				source: MilestoneError::MissingDueOn,
+			})?;
 
 			let diff = due_on.signed_duration_since(Utc::now());
 			if diff.num_hours() < MIN_DISTANCE_HOURS as i64 {
-				return Err(MilestoneOutdated { due_on: *due_on }.into());
+				return Err(GetMilestoneError {
+					requested_tf: tf,
+					source: MilestoneError::MilestoneOutdated { due_on: *due_on },
+				});
 			}
 
-			if let Some(description) = &milestone.description {
-				println!("{}", description);
+			match milestone.description.clone() {
+				Some(description) => Ok(description),
+				None => Err(GetMilestoneError {
+					requested_tf: tf,
+					source: MilestoneError::MissingDescription,
+				}),
 			}
 		}
 		None => {
-			let milestone_titles = milestones.iter().map(|m| m.title.clone()).collect::<Vec<String>>();
-			println!("Milestone not found, here are all the existing milestones:\n{}", milestone_titles.join("\n"));
+			let milestone_titles = retrieved_milestones.iter().map(|m| m.title.clone()).collect::<Vec<String>>();
+			Err(GetMilestoneError {
+				requested_tf: tf,
+				source: MilestoneError::MilestoneNotFound {
+					existing_milestones: milestone_titles,
+				},
+			})
+		}
+	}
+}
+
+static KEY_MILESTONES: [Timeframe; 6] = [
+	Timeframe {
+		designator: TimeframeDesignator::Days,
+		n: 1,
+	},
+	Timeframe {
+		designator: TimeframeDesignator::Weeks,
+		n: 1,
+	},
+	Timeframe {
+		designator: TimeframeDesignator::Months,
+		n: 1,
+	},
+	Timeframe {
+		designator: TimeframeDesignator::Quarters,
+		n: 1,
+	},
+	Timeframe {
+		designator: TimeframeDesignator::Years,
+		n: 1,
+	},
+	Timeframe {
+		designator: TimeframeDesignator::Years,
+		n: 5,
+	},
+];
+
+fn healthcheck(config: &AppConfig) -> Result<()> {
+	let retrieved_milestones = request_milestones(config)?;
+	let results = KEY_MILESTONES
+		.iter()
+		.map(|tf| get_milestone(*tf, &retrieved_milestones))
+		.collect::<Vec<Result<String, GetMilestoneError>>>();
+
+	let mut health = String::new();
+	for result in results {
+		match result {
+			Ok(_) => {}
+			Err(e) => {
+				if !health.is_empty() {
+					health.push('\n');
+				}
+				health.push_str(&e.to_string());
+			}
 		}
 	}
 
+	match health.is_empty() {
+		true => health = "OK".to_string(),
+		false => {
+			println!("{health}");
+		}
+	}
+
+	std::fs::create_dir_all(HEALTHCHECK_PATH.0.parent().unwrap()).unwrap();
+	std::fs::write(&*HEALTHCHECK_PATH, health).unwrap();
 	Ok(())
 }

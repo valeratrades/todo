@@ -97,7 +97,7 @@ fn main() {
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
 		Commands::Timer(timer_args) => timer::timing_the_task(config, timer_args),
 		Commands::Monitor => activity_monitor::start(config),
-		Commands::Milestones(milestones_args) => milestones::get_milestone(config, milestones_args),
+		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command),
 	};
 
 	match success {
