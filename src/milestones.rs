@@ -3,7 +3,7 @@ use clap::Args;
 use color_eyre::eyre::Result;
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use v_utils::trades::Timeframe;
+use v_utils::trades::{Timeframe, TimeframeDesignator};
 
 use crate::config::AppConfig;
 
@@ -36,7 +36,17 @@ struct MilestoneOutdated {
 	due_on: DateTime<Utc>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("Requested milestone on minute-designated timeframe (`m`). You likely meant to request Monthly (`M`).")]
+struct MinuteMilestone {
+	requested_tf: Timeframe,
+}
+
 pub fn get_milestone(config: AppConfig, args: MilestonesArgs) -> Result<()> {
+	if args.tf.designator == TimeframeDesignator::Minutes {
+		return Err(MinuteMilestone { requested_tf: args.tf }.into());
+	}
+
 	let todos_url_output = std::process::Command::new("git")
 		.args(["config", "--get", "remote.origin.url"])
 		.current_dir(&config.todos.path)
