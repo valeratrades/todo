@@ -198,7 +198,6 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 	if health.is_empty() {
 		health = "OK".to_string();
 	}
-	health.push('\n');
 	println!("{health}");
 
 	std::fs::create_dir_all(HEALTHCHECK_PATH.0.parent().unwrap()).unwrap();
