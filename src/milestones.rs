@@ -12,7 +12,6 @@ use v_utils::{
 
 use crate::config::AppConfig;
 
-static MIN_DISTANCE_HOURS: usize = 8;
 lazy_static::lazy_static! {
 	static ref HEALTHCHECK_PATH: ExpandedPath = ExpandedPath::from_str("~/.local/run/todo/milestones_healthcheck.status").unwrap();
 }
@@ -89,10 +88,7 @@ enum MilestoneError {
 	#[error("Milestone is missing due_on date")]
 	MissingDueOn,
 
-	#[error(
-		"Milestone is outdated (due_on: {due_on}). Try moving it to a later date. Must be at least {} hours away from `Utc::now()`",
-		MIN_DISTANCE_HOURS
-	)]
+	#[error("Milestone is outdated (due_on: {due_on}). Try moving it to a later date.")]
 	MilestoneOutdated { due_on: DateTime<Utc> },
 
 	#[error("Requested milestone on minute-designated timeframe (`m`). You likely meant to request Monthly (`M`).")]
@@ -121,7 +117,7 @@ fn get_milestone(tf: Timeframe, retrieved_milestones: &[Milestone]) -> Result<St
 			})?;
 
 			let diff = due_on.signed_duration_since(Utc::now());
-			if diff.num_hours() < MIN_DISTANCE_HOURS as i64 {
+			if diff.num_hours() < 0 {
 				return Err(GetMilestoneError {
 					requested_tf: tf,
 					source: MilestoneError::MilestoneOutdated { due_on: *due_on },
