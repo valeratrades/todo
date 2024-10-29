@@ -38,6 +38,13 @@ impl AppConfig {
 		let settings: config::Config = builder.build()?;
 		let settings: Self = settings.try_deserialize()?;
 
+		if !settings.todos.path.exists() {
+			return Err(config::ConfigError::Message(format!(
+				"Configured 'todos' directory does not exist: {}",
+				settings.todos.path.display()
+			)));
+		}
+
 		let _ = std::fs::create_dir_all(&settings.data_dir);
 		let _ = std::fs::create_dir_all(settings.data_dir.join("tmp/"));
 
