@@ -9,9 +9,6 @@ use v_utils::trades::{Timeframe, TimeframeDesignator};
 
 use crate::config::AppConfig;
 
-//lazy_static::lazy_static! {
-//	static ref HEALTHCHECK_PATH: ExpandedPath = ExpandedPath::from_str("~/.local/run/todo/milestones_healthcheck.status").unwrap();
-//}
 pub static HEALTHCHECK_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Args)]
@@ -25,7 +22,7 @@ pub enum MilestonesCommands {
 	Get {
 		tf: Timeframe,
 	},
-	/// Ensures all milestones up to date, writes "OK" to ~/.local/run/todo/milestones_healthcheck.status if so.
+	/// Ensures all milestones up to date, if yes - writes "OK" to $XDG_DATA_HOME/todo/milestones_healthcheck.status
 	Healthcheck,
 }
 
@@ -170,10 +167,7 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 ];
 
 fn healthcheck(config: &AppConfig) -> Result<()> {
-	let healthcheck_path = HEALTHCHECK_PATH
-		.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap())
-		.join("todo")
-		.join("healthcheck.status");
+	let healthcheck_path = HEALTHCHECK_PATH.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join("todo").join("healthcheck.status"));
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
 		.iter()
