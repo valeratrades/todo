@@ -1,20 +1,18 @@
-use std::str::FromStr as _;
+use std::{path::PathBuf, sync::OnceLock};
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use v_utils::{
-	io::ExpandedPath,
-	trades::{Timeframe, TimeframeDesignator},
-};
+use v_utils::trades::{Timeframe, TimeframeDesignator};
 
 use crate::config::AppConfig;
 
-lazy_static::lazy_static! {
-	static ref HEALTHCHECK_PATH: ExpandedPath = ExpandedPath::from_str("~/.local/run/todo/milestones_healthcheck.status").unwrap();
-}
+//lazy_static::lazy_static! {
+//	static ref HEALTHCHECK_PATH: ExpandedPath = ExpandedPath::from_str("~/.local/run/todo/milestones_healthcheck.status").unwrap();
+//}
+pub static HEALTHCHECK_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Args)]
 pub struct MilestonesArgs {
@@ -172,6 +170,10 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 ];
 
 fn healthcheck(config: &AppConfig) -> Result<()> {
+	let healthcheck_path = HEALTHCHECK_PATH
+		.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap())
+		.join("todo")
+		.join("healthcheck.status");
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
 		.iter()
@@ -196,7 +198,7 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 	}
 	println!("{health}");
 
-	std::fs::create_dir_all(HEALTHCHECK_PATH.0.parent().unwrap()).unwrap();
-	std::fs::write(&*HEALTHCHECK_PATH, health).unwrap();
+	std::fs::create_dir_all(healthcheck_path.parent().unwrap()).unwrap();
+	std::fs::write(healthcheck_path, health).unwrap();
 	Ok(())
 }
