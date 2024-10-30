@@ -228,7 +228,6 @@ struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
 	run: bool,
 	run_to_shower_M_colon_S: Option<Timelike>,
-	quality_of_math_done: Option<Percent>,
 	#[serde(flatten)]
 	transcendential: Transcendential,
 	breakfast_to_work: Option<usize>,
@@ -277,6 +276,7 @@ pub struct Day {
 	non_negotiables_done: usize, // currently having 2 non-negotiables set for each day; but don't want to fix the value to that range, in case it changes.
 	percent_focused: Percent,
 	caffeine_only_during_work: bool,
+	math_hours: Option<f64>,
 	checked_messages_only_during_social_window: bool,
 	number_of_rejections: usize,
 	phone_locked_away: bool,
@@ -411,7 +411,7 @@ impl Day {
 		let meditation_condition = |d: &Day| d.evening.focus_meditation > 0;
 		let _ = streak_update("focus_meditation", &meditation_condition);
 
-		let math_condition = |d: &Day| d.morning.quality_of_math_done.is_some_and(|q| q > 0.);
+		let math_condition = |d: &Day| d.math_hours.is_some_and(|q| q > 0.);
 		let _ = streak_update("math", &math_condition);
 
 		let nsdr_condition = |d: &Day| d.evening.nsdr > 0;
@@ -420,7 +420,6 @@ impl Day {
 		let perfect_morning_condition = |d: &Day| {
 			d.morning.alarm_to_run_M_colon_S.is_some_and(|v| v.inner() < 10) //? is_some_and consumes self, why?
 				&& d.morning.run_to_shower_M_colon_S.is_some_and(|v| v.inner() <= 5)
-				&& d.morning.quality_of_math_done.is_some_and(|q| q >= 0.6827 )
 				&& d.morning.transcendential.eating_food.is_some_and(|v| v < 20)
 				&& d.morning.breakfast_to_work.is_some_and(|v| v <= 5)
 		};
