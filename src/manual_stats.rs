@@ -473,7 +473,7 @@ impl Repercussions {
 			Some(day) => {
 				let mut repercussions = Self::default();
 
-				if day.morning.quality_of_math_done.is_some_and(|q| q >= 0.2) {
+				if day.math_hours.is_some_and(|h| h >= 0.5) {
 					repercussions.sleep_on_the_floor = false;
 				}
 
