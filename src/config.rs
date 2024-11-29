@@ -45,10 +45,9 @@ impl AppConfig {
 			)));
 		}
 
-		if !std::env::var("XDG_STATE_HOME").is_ok() {
+		if std::env::var("XDG_STATE_HOME").is_err() {
 			eprintln!("warning: XDG_STATE_HOME is not set, pointing it to ~/.local/state");
 			std::env::set_var("XDG_STATE_HOME", "~/.local/state");
-			let _ = std::fs::create_dir_all("~/.local/state");
 		}
 
 		let _ = std::fs::create_dir_all(&settings.data_dir);

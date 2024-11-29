@@ -1,11 +1,13 @@
+use std::str::FromStr;
+
 use chrono::Duration;
 #[cfg(not(test))]
 use chrono::Utc;
-use std::str::FromStr;
+use color_eyre::eyre::{bail, Report, Result};
+
 use crate::config::AppConfig;
 #[cfg(test)]
 use crate::mocks::Utc;
-use color_eyre::eyre::{Report, Result, bail};
 
 pub fn format_date(days_back: usize, config: &AppConfig) -> String {
 	let date = Utc::now() - Duration::days(days_back as i64);
@@ -23,19 +25,23 @@ pub struct DaySectionBorders {
 }
 impl std::str::FromStr for DaySectionBorders {
 	type Err = Report;
+
 	fn from_str(borders_str: &str) -> Result<Self> {
 		let mut vec_offsets = Vec::with_capacity(3);
-		for s in borders_str.split(":").into_iter() {
+		for s in borders_str.split(":") {
 			vec_offsets.push(s.parse::<f32>()?);
 		}
 		if vec_offsets.len() == 3 {
-			Ok(Self { morning_end: vec_offsets[0], day_end: vec_offsets[1], evening_end: vec_offsets[2] })
+			Ok(Self {
+				morning_end: vec_offsets[0],
+				day_end: vec_offsets[1],
+				evening_end: vec_offsets[2],
+			})
 		} else {
 			bail!("invalid dimensions");
 		}
 	}
 }
-
 
 /// Diff of sleep time from 00:00 utc
 pub fn same_day_buffer() -> chrono::TimeDelta {
