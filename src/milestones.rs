@@ -167,7 +167,7 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 ];
 
 fn healthcheck(config: &AppConfig) -> Result<()> {
-	let healthcheck_path = HEALTHCHECK_PATH.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join("todo").join("healthcheck.status"));
+	let healthcheck_path = HEALTHCHECK_PATH.get_or_init(|| std::env::var("XDG_STATE_HOME").map(PathBuf::from).unwrap().join("todo").join("healthcheck.status"));
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
 		.iter()
