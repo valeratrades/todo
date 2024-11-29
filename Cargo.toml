@@ -23,7 +23,7 @@ serde = { version = "^1.0.215", features = ["derive"] }
 serde_json = { version = "^1.0.133", features = ["std"] }
 tempfile = "^3.14.0"
 tokio = { version = "^1.41.1", features = ["rt", "rt-multi-thread"] }
-v_utils = { version = "^1.9.1", features = ["io", "macros", "trades"] }
+v_utils = { version = "^1.10.0", features = ["io", "macros", "trades"] }
 derive-new = "^0"
 color-eyre = "0.6.3"
 thiserror = "2.0.3"
