@@ -146,11 +146,7 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 	},
 	Timeframe {
 		designator: TimeframeDesignator::Weeks,
-		n: 1,
-	},
-	Timeframe {
-		designator: TimeframeDesignator::Months,
-		n: 1,
+		n: 2,
 	},
 	Timeframe {
 		designator: TimeframeDesignator::Quarters,
@@ -162,7 +158,11 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 	},
 	Timeframe {
 		designator: TimeframeDesignator::Years,
-		n: 5,
+		n: 3,
+	},
+	Timeframe {
+		designator: TimeframeDesignator::Years,
+		n: 7,
 	},
 ];
 
