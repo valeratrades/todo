@@ -5,7 +5,6 @@ pub mod day_section;
 mod manual_stats;
 mod milestones;
 pub mod mocks;
-mod timer;
 mod todos;
 pub mod utils;
 use clap::{Args, Parser, Subcommand};
@@ -15,8 +14,6 @@ use v_utils::io::ExpandedPath;
 const MANUAL_PATH_APPENDIX: &str = "manual_stats/";
 const MONITOR_PATH_APPENDIX: &str = "activities_monitor/";
 const TOTALS_PATH_APPENDIX: &str = "activities_totals/";
-const ONGOING_PATH_APPENDIX: &str = "tmp/timer_ongoing.json";
-const TIMED_PATH_APPENDIX: &str = "timed_tasks/";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -58,14 +55,6 @@ enum Commands {
 	///todo manual -d1 --ev 420 -o
 	///```
 	Manual(manual_stats::ManualArgs),
-	/// Start a task with timer, then store error (to track improvement of your estimations of time spent on different task categories)
-	///  Ex:
-	///'''rust
-	///todo do start -t=15 -w --description==do-da-work
-	///. . . // start doing the task, then:
-	///todo do done
-	///'''
-	Timer(timer::TimerArgs),
 	/// Operations with milestones (1d, 1w, 1M, 1Q, 1y)
 	Milestones(milestones::MilestonesArgs),
 	/// Start monitoring user activities
@@ -95,7 +84,6 @@ fn main() {
 		Commands::Add(add_args) => todos::open_or_add(config, add_args.shared, Some(add_args.name)),
 		Commands::Quickfix(_) => todos::compile_quickfix(config),
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
-		Commands::Timer(timer_args) => timer::timing_the_task(config, timer_args),
 		Commands::Monitor => activity_monitor::start(config),
 		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command),
 	};
