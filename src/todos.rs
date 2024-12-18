@@ -1,3 +1,8 @@
+// Adaptation ideas:
+//- leave quickfix, have it suggest tasks to be included into the next sprint from the thematic bucket. Or/and have it suggest tasks for the next day, given what's left in the ongoing sprint.
+//- flags: allow any, if doesn't exist, create new bucket for it if `-c` is provided.
+//- TaskSplit: rewrite to use {importance, difficulty per unit of time, estimated time}
+
 use std::{
 	fmt::{self, Display},
 	path::PathBuf,
