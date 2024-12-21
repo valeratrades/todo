@@ -23,8 +23,6 @@ pub enum Command {
 	Pop,
 	/// Full list of blockers down from the main task
 	List,
-	/// Get last blocker only
-	Top,
 }
 
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
@@ -48,10 +46,6 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::List => {
 			println!("{}", blockers.join("\n"));
 		}
-		Command::Top => match blockers.last() {
-			Some(last) => println!("{}", last),
-			None => println!(),
-		},
 	};
 	Ok(())
 }
