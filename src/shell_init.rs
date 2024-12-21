@@ -3,7 +3,7 @@ use derive_more::derive::{Display, FromStr};
 
 use crate::config::AppConfig;
 
-static EXE_NAME: &str = "todos";
+static EXE_NAME: &str = "todo";
 
 #[derive(Clone, Debug, Args)]
 pub struct ShellInitArgs {
