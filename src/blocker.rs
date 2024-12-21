@@ -23,8 +23,8 @@ pub enum Command {
 	Pop,
 	/// Full list of blockers down from the main task
 	List,
-	/// Remove all items
-	Clear,
+	/// Just open the \`blockers\` file with $EDITOR. Text as interface.
+	Open,
 }
 
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
@@ -48,8 +48,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::List => {
 			println!("{}", blockers.join("\n"));
 		}
-		Command::Clear => {
-			std::fs::write(&blocker_path, "")?;
+		Command::Open => {
+			v_utils::io::open(&blocker_path)?;
 		}
 	};
 	Ok(())
