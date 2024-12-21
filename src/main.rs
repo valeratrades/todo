@@ -5,6 +5,7 @@ pub mod day_section;
 mod manual_stats;
 mod milestones;
 pub mod mocks;
+mod shell_init;
 mod todos;
 pub mod utils;
 use clap::{Args, Parser, Subcommand};
@@ -59,6 +60,8 @@ enum Commands {
 	Milestones(milestones::MilestonesArgs),
 	/// Start monitoring user activities
 	Monitor,
+	/// Shell aliases and hooks. Usage: `todos init <shell> | source`
+	Init(shell_init::ShellInitArgs),
 }
 #[derive(Args)]
 struct NoArgs {}
@@ -86,6 +89,10 @@ fn main() {
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
 		Commands::Monitor => activity_monitor::start(config),
 		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command),
+		Commands::Init(args) => {
+			shell_init::output(config, args);
+			Ok(())
+		}
 	};
 
 	match success {

@@ -1,0 +1,55 @@
+use clap::Args;
+use derive_more::derive::{Display, FromStr};
+
+use crate::config::AppConfig;
+
+static EXE_NAME: &str = "todos";
+
+#[derive(Clone, Debug, Args)]
+pub struct ShellInitArgs {
+	shell: Shell,
+}
+#[derive(Debug, Clone, Copy, Display, FromStr)]
+enum Shell {
+	Dash,
+	Bash,
+	Zsh,
+	Fish,
+}
+
+impl Shell {
+	fn aliases(&self, exe_name: &str) -> String {
+		format!(
+			r#"
+# {exe_name}s-manual
+alias tm="{exe_name} manual"
+# can't make alaises for `tm ev -a` and `tm ev -s` because of possibility of `-d<x>` flag. And they are short enough already, calm down.
+
+# {exe_name}s-{exe_name}s
+alias tdo="{exe_name} open"
+alias tda="{exe_name} add"
+
+# {exe_name}s-blocker
+alias tdp="{exe_name} blocker pop"
+alias tdb="{exe_name} blocker add"
+alias tdbs="{exe_name} blocker list"
+"#
+		)
+	}
+
+	fn hooks(&self) -> String {
+		"".to_owned()
+	}
+}
+
+pub fn output(_settings: AppConfig, args: ShellInitArgs) {
+	let shell = args.shell;
+	let s = format!(
+		r#"{}
+{}"#,
+		shell.aliases(EXE_NAME),
+		shell.hooks()
+	);
+
+	println!("{s}");
+}
