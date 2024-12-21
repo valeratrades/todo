@@ -1,5 +1,6 @@
 #![allow(clippy::len_zero)]
 mod activity_monitor;
+mod blockers;
 pub mod config;
 pub mod day_section;
 mod manual_stats;
@@ -62,6 +63,8 @@ enum Commands {
 	Monitor,
 	/// Shell aliases and hooks. Usage: `todos init <shell> | source`
 	Init(shell_init::ShellInitArgs),
+	/// Blockers tree
+	Blockers(blockers::BlockersArgs),
 }
 #[derive(Args)]
 struct NoArgs {}
@@ -93,6 +96,7 @@ fn main() {
 			shell_init::output(config, args);
 			Ok(())
 		}
+		Commands::Blockers(args) => blockers::main(config, args),
 	};
 
 	match success {
