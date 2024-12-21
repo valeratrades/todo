@@ -16,7 +16,10 @@ use v_utils::{
 };
 use xattr::FileExt as _;
 
-use crate::{config::AppConfig, utils};
+use crate::{
+	config::{AppConfig, DATA_DIR},
+	utils,
+};
 
 static PBS_FILENAME: &str = ".pbs.json";
 
@@ -290,7 +293,7 @@ struct Streak {
 
 impl Day {
 	pub fn path(date: &str, config: &AppConfig) -> PathBuf {
-		let data_storage_dir = config.data_dir.clone().join(MANUAL_PATH_APPENDIX);
+		let data_storage_dir = DATA_DIR.clone().get().unwrap().join(MANUAL_PATH_APPENDIX);
 		let _ = std::fs::create_dir(&data_storage_dir);
 		data_storage_dir.join(format!("{}.json", date))
 	}

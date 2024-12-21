@@ -1,12 +1,13 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::OnceLock};
 
 use color_eyre::eyre::Result;
 use serde::Deserialize;
 use v_utils::{io::ExpandedPath, macros::MyConfigPrimitives};
 
+pub static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 #[derive(Debug, Default, derive_new::new, Clone, MyConfigPrimitives)]
 pub struct AppConfig {
-	pub data_dir: PathBuf,
 	pub github_token: String,
 	pub date_format: String,
 	pub todos: Todos,
@@ -49,9 +50,14 @@ impl AppConfig {
 			eprintln!("warning: XDG_STATE_HOME is not set, pointing it to ~/.local/state");
 			std::env::set_var("XDG_STATE_HOME", "~/.local/state");
 		}
+		if std::env::var("XDG_DATA_HOME").is_err() {
+			eprintln!("warning: XDG_DATA_HOME is not set, pointing it to ~/.local/share");
+			std::env::set_var("XDG_DATA_HOME", "~/.local/share");
+		}
 
-		let _ = std::fs::create_dir_all(&settings.data_dir);
-		let _ = std::fs::create_dir_all(settings.data_dir.join("tmp/"));
+		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap());
+		let _ = std::fs::create_dir_all(data_dir);
+		let _ = std::fs::create_dir_all(data_dir.join("tmp/"));
 
 		Ok(settings)
 	}

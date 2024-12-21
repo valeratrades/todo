@@ -20,6 +20,7 @@ use crate::{
 	utils,
 };
 
+#[deprecated(note = "In the process of rewriting to work with 2w-splits instead")]
 pub fn compile_quickfix(config: AppConfig) -> Result<()> {
 	let day_section = DaySection::build().unwrap();
 	let path: PathBuf = day_section_path(&config, &day_section);
