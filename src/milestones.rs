@@ -22,7 +22,8 @@ pub enum MilestonesCommands {
 	Get {
 		tf: Timeframe,
 	},
-	/// Ensures all milestones up to date, if yes - writes "OK" to $XDG_DATA_HOME/todo/milestones_healthcheck.status
+	/// Ensures all milestones up to date, if yes - writes "OK" to $XDG_DATA_HOME/todo/healthcheck.status
+	/// Can get outdated easily, so printed output of the command is prepended with the filename
 	Healthcheck,
 }
 
@@ -190,7 +191,7 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 	if health.is_empty() {
 		health = "OK".to_string();
 	}
-	println!("{health}");
+	println!("{}\n{health}", healthcheck_path.display());
 
 	std::fs::create_dir_all(healthcheck_path.parent().unwrap()).unwrap();
 	std::fs::write(healthcheck_path, health).unwrap();
