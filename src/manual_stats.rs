@@ -292,9 +292,9 @@ struct Streak {
 }
 
 impl Day {
-	pub fn path(date: &str, config: &AppConfig) -> PathBuf {
-		let data_storage_dir = DATA_DIR.clone().get().unwrap().join(MANUAL_PATH_APPENDIX);
-		let _ = std::fs::create_dir(&data_storage_dir);
+	pub fn path(date: &str, _config: &AppConfig) -> PathBuf {
+		let data_storage_dir = DATA_DIR.get().unwrap().join(MANUAL_PATH_APPENDIX);
+		let _ = std::fs::create_dir_all(&data_storage_dir);
 		data_storage_dir.join(format!("{}.json", date))
 	}
 
