@@ -43,7 +43,6 @@ enum Commands {
 	///```rust
 	///todo add 2-3-test -n
 	///```
-//TODO!: make default command
 	Add(todos::AddArgs),
 	/// Compile list of first priority tasks based on time of day
 	///  Ex:

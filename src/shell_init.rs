@@ -1,4 +1,5 @@
-use clap::Args;
+use clap::{Args, CommandFactory};
+use clap_complete::Shell as ClapShell;
 use derive_more::derive::{Display, FromStr};
 
 use crate::config::AppConfig;
@@ -37,6 +38,24 @@ alias tdbs="{exe_name} blocker list"
 		)
 	}
 
+	fn to_clap_shell(self) -> ClapShell {
+		match self {
+			Shell::Dash => ClapShell::Bash, // Dash uses Bash completions
+			Shell::Bash => ClapShell::Bash,
+			Shell::Zsh => ClapShell::Zsh,
+			Shell::Fish => ClapShell::Fish,
+		}
+	}
+
+	fn completions(&self) -> String {
+		let mut cmd = crate::Cli::command(); // Generate the Clap `Command` for your app
+		let mut buffer = Vec::new();
+		let shell = self.to_clap_shell();
+		clap_complete::generate(shell, &mut cmd, EXE_NAME, &mut buffer);
+
+		String::from_utf8(buffer).unwrap_or_else(|_| String::from("# Failed to generate completions"))
+	}
+
 	fn hooks(&self) -> String {
 		"".to_owned()
 	}
@@ -46,8 +65,10 @@ pub fn output(_settings: AppConfig, args: ShellInitArgs) {
 	let shell = args.shell;
 	let s = format!(
 		r#"{}
+{}
 {}"#,
 		shell.aliases(EXE_NAME),
+		shell.completions(),
 		shell.hooks()
 	);
 
