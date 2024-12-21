@@ -32,6 +32,7 @@ alias tda="{exe_name} add"
 alias tdp="{exe_name} blocker pop"
 alias tdb="{exe_name} blocker add"
 alias tdbs="{exe_name} blocker list"
+alias tdbo="{exe_name} blocker open"
 "#
 		)
 	}
