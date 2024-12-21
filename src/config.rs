@@ -55,7 +55,7 @@ impl AppConfig {
 			std::env::set_var("XDG_DATA_HOME", "~/.local/share");
 		}
 
-		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap());
+		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join("todos/"));
 		let _ = std::fs::create_dir_all(data_dir);
 		let _ = std::fs::create_dir_all(data_dir.join("tmp/"));
 
