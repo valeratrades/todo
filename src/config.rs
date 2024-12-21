@@ -5,6 +5,8 @@ use serde::Deserialize;
 use v_utils::{io::ExpandedPath, macros::MyConfigPrimitives};
 
 pub static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+pub static STATE_DIR: OnceLock<PathBuf> = OnceLock::new();
+pub static EXE_NAME: &str = "todo";
 
 #[derive(Debug, Default, derive_new::new, Clone, MyConfigPrimitives)]
 pub struct AppConfig {
@@ -50,13 +52,17 @@ impl AppConfig {
 			eprintln!("warning: XDG_STATE_HOME is not set, pointing it to ~/.local/state");
 			std::env::set_var("XDG_STATE_HOME", "~/.local/state");
 		}
+		let state_dir = STATE_DIR.get_or_init(|| std::env::var("XDG_STATE_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
+		let _ = std::fs::create_dir_all(state_dir);
+
+
 		if std::env::var("XDG_DATA_HOME").is_err() {
 			eprintln!("warning: XDG_DATA_HOME is not set, pointing it to ~/.local/share");
 			std::env::set_var("XDG_DATA_HOME", "~/.local/share");
 		}
-
-		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join("todos/"));
+		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
 		let _ = std::fs::create_dir_all(data_dir);
+		//TODO!: move things that use this to drop this to STATE_DIR or RUNTIME_DIR \
 		let _ = std::fs::create_dir_all(data_dir.join("tmp/"));
 
 		Ok(settings)

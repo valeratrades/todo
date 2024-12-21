@@ -2,9 +2,7 @@ use clap::{Args, CommandFactory};
 use clap_complete::Shell as ClapShell;
 use derive_more::derive::{Display, FromStr};
 
-use crate::config::AppConfig;
-
-static EXE_NAME: &str = "todo";
+use crate::config::{AppConfig, EXE_NAME};
 
 #[derive(Clone, Debug, Args)]
 pub struct ShellInitArgs {

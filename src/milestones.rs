@@ -7,9 +7,9 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use v_utils::trades::{Timeframe, TimeframeDesignator};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, DATA_DIR};
 
-pub static HEALTHCHECK_PATH: OnceLock<PathBuf> = OnceLock::new();
+pub static HEALTHCHECK_FILENAME: &str = "healthcheck.status";
 
 #[derive(Args)]
 pub struct MilestonesArgs {
@@ -167,7 +167,7 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 ];
 
 fn healthcheck(config: &AppConfig) -> Result<()> {
-	let healthcheck_path = HEALTHCHECK_PATH.get_or_init(|| std::env::var("XDG_STATE_HOME").map(PathBuf::from).unwrap().join("todo").join("healthcheck.status"));
+	let healthcheck_path = DATA_DIR.get().unwrap().join(HEALTHCHECK_FILENAME);
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
 		.iter()
