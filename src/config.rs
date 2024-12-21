@@ -62,8 +62,6 @@ impl AppConfig {
 		}
 		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
 		let _ = std::fs::create_dir_all(data_dir);
-		//TODO!: move things that use this to drop this to STATE_DIR or RUNTIME_DIR \
-		let _ = std::fs::create_dir_all(data_dir.join("tmp/"));
 
 		Ok(settings)
 	}
