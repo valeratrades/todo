@@ -124,7 +124,6 @@ pub struct TodosFlags {
 	#[arg(long, short)]
 	sprints: Option<String>,
 	/// Add tasks to named section of `conditional` (Mutually exclusive with `sprints`). Default is `other`.
-	//TODO!!!!: shouldn't require `<importance>-<difficulty>` prefix, on the contrary - here should error if it's provided.
 	#[arg(long, short)]
 	conditional: bool,
 	/// Create the parenting section if it doesn't exist.
@@ -135,11 +134,11 @@ pub struct TodosFlags {
 	pub open: bool,
 }
 
-fn section_path<'a>(config: &AppConfig, flags: &TodosFlags) -> Result<PathBuf> {
+fn section_path(config: &AppConfig, flags: &TodosFlags) -> Result<PathBuf> {
 	let todos_dir = config.todos.path.clone();
 
 	let from_root = match (flags.sprints.as_ref(), flags.conditional) {
-		(Some(name), false) => name,
+		(Some(name), false) => &format!("sprints/{name}"),
 		(None, true) => "conditional",
 		(None, false) => "other",
 		(Some(_), true) => bail!("Flags `sprints` and `conditional` are mutually exclusive."),
