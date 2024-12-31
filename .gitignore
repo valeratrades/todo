@@ -19,6 +19,10 @@ commit_message
 ## Vim
 *.sw[po]
 
+## Nix
+result/
+.direnv/
+
 ## MacOS
 .DS_Store
 *.dylib
