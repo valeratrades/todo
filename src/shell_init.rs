@@ -23,6 +23,8 @@ impl Shell {
 # {exe_name}s-manual
 alias tm="{exe_name} manual"
 # can't make alaises for `tm ev -a` and `tm ev -s` because of possibility of `-d<x>` flag. And they are short enough already, calm down.
+alias tma="tm ev -a" #lol
+alias tms="tm ev -s"
 
 # {exe_name}s-{exe_name}s
 alias tdo="{exe_name} open"
