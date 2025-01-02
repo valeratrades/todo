@@ -19,12 +19,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run tokei and save output to json file
+      - name: Generate Tokei output
         uses: taiki-e/install-action@v2
         with:
           tool: tokei
-
-      - name: Generate Tokei output
         run: tokei -o json > tokei_output.json
 
       - name: Install jq
