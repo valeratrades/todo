@@ -4,9 +4,10 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
+    workflow-parts.url = "github:valeratrades/.github?dir=.github/workflows/nix-parts";
   };
 
-  outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, ... }:
+  outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, workflow-parts, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = builtins.trace "flake.nix sourced" [ (import rust-overlay) ];
@@ -21,7 +22,7 @@
             };
           };
         };
-        generatedContents = (import ./.github/workflows/ci.nix) { inherit pkgs; };
+        generatedContents = (import ./.github/workflows/ci.nix) { inherit pkgs workflow-parts; };
       in
       {
         packages =

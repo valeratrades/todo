@@ -1,4 +1,5 @@
 { pkgs
+, workflow-parts
 , ...
 }:
 (pkgs.formats.yaml { }).generate "" {
@@ -13,22 +14,16 @@
     ];
   };
 
-  (import ../shared.nix);
+  #imports = [ workflow-parts.shared { inherit pkgs; } ];
 
   jobs = {
-    tokei = import ../tokei.nix;
-
-    tests = import ../test.nix;
-
-    doc = import ../doc.nix;
-
-    miri = import ../miri.nix;
-
-    clippy = import ../clippy.nix;
-
-    machete = import ../machete.nix;
-
-    sort = import ../sort.nix;
+    tokei = import workflow-parts.tokei { inherit pkgs; };
+    tests = import workflow-parts.tests { inherit pkgs; };
+    doc = import workflow-parts.doc { inherit pkgs; };
+    miri = import workflow-parts.miri { inherit pkgs; };
+    clippy = import workflow-parts.clippy { inherit pkgs; };
+    machete = import workflow-parts.machete { inherit pkgs; };
+    sort = import workflow-parts.sort { inherit pkgs; };
   };
 
   #env = {

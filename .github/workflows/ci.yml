@@ -1,8 +1,3 @@
-env:
-  CARGO_INCREMENTAL: '0'
-  CARGO_NET_RETRY: '10'
-  RUSTUP_MAX_RETRIES: '10'
-  RUST_BACKTRACE: short
 jobs:
   clippy:
     if: github.event_name != 'pull_request'
@@ -35,8 +30,9 @@ jobs:
       with:
         tool: cargo-machete
     - name: Cargo Machete
-      run: "cargo machete\nexit_code=$?\nif [ $exit_code = 0 ]; then\n  echo \"Found\
-        \ unused dependencies\"\n  exit $exit_code\nfi\n"
+      run: "\t\t\t\t\t\tcargo machete\n\t\t\t\t\t\texit_code=$?\n\t\t\t\t\t\tif [\
+        \ $exit_code = 0 ]; then\n\t\t\t\t\t\t\techo \"Found unused dependencies\"\
+        \n\t\t\t\t\t\t\texit $exit_code\n\t\t\t\t\t\tfi\n\t\t\t"
   miri:
     if: needs.pre_ci.outputs.continue
     name: Miri
@@ -50,8 +46,6 @@ jobs:
         MIRIFLAGS: -Zmiri-strict-provenance
       run: cargo miri test
     timeout-minutes: 45
-  pre_ci:
-    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
   sort:
     name: Cargo Sorted
     runs-on: ubuntu-latest
@@ -65,7 +59,7 @@ jobs:
       run: "cargo sort -wc\nexit_code=$?\nif [ $exit_code != 0 ]; then\n  echo \"\
         Cargo.toml is not sorted. Run \\`cargo sort -w\\` to fix it.\"\n  exit $exit_code\n\
         fi\n"
-  test:
+  tests:
     if: needs.pre_ci.outputs.continue
     name: Rust ${{matrix.rust}}
     needs: pre_ci
@@ -106,16 +100,15 @@ jobs:
     - name: Install jq
       run: sudo apt-get install -y jq
     - name: Check Rust comments
-      run: "comments=$(jq '.Rust.comments' tokei_output.json)\ncode=$(jq '.Rust.code'\
-        \ tokei_output.json)\nif [ $((comments * 10)) -ge $code ]; then\n  echo \"\
-        Number of comments should be less than 10% of code\"\n  exit 1\nelse\n  echo\
-        \ \"Check passed: Number of comments is less than 10% of code\"\nfi\n"
-name: CI
+      run: "\t\t\t\t\t\tcomments=$(jq '.Rust.comments' tokei_output.json)\n\t\t\t\t\
+        \t\tcode=$(jq '.Rust.code' tokei_output.json)\n\t\t\t\t\t\tif [ $((comments\
+        \ * 10)) -ge $code ]; then\n\t\t\t\t\t\t\techo \"Number of comments should\
+        \ be less than 10% of code\"\n\t\t\t\t\t\t\texit 1\n\t\t\t\t\t\telse\n\t\t\
+        \t\t\t\t\techo \"Check passed: Number of comments is less than 10% of code\"\
+        \n\t\t\t\t\t\tfi\n\t\t\t"
 'on':
   pull_request: {}
   push: {}
   schedule:
   - cron: 0 0 1 * *
   workflow_dispatch: {}
-permissions:
-  contents: read
