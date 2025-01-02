@@ -5,7 +5,7 @@ let
     tokei = import workflow-parts.shared.tokei { inherit pkgs; };
   };
   rust-base = import workflow-parts.rust.base { inherit pkgs; };
-  rustc-versions = [ "nightly" "1.74.0" ];
+  rustc-versions = [ "nightly" "nightly-2024-10-10" ];
   rust-jobs = {
     tests = import workflow-parts.rust.tests { inherit rustc-versions; };
     doc = import workflow-parts.rust.doc { inherit pkgs; };
