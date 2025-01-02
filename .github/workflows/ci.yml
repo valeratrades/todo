@@ -18,12 +18,16 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Install tokei
-      uses: cargo-bins/cargo-binstall@main
-      with:
-        tool: tokei
+    #- name: Install tokei
+    #  uses: cargo-bins/cargo-binstall@main
+    #  with:
+    #    tool: tokei
 
     - name: Run tokei and save output to json file
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tokei
+
       run: tokei -o json > tokei_output.json
 
     - name: Install jq
