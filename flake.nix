@@ -22,7 +22,7 @@
             };
           };
         };
-        generatedContents = (import ./.github/workflows/ci.nix) { inherit pkgs workflow-parts; };
+        workflowContents = (import ./.github/workflows/ci.nix) { inherit pkgs workflow-parts; };
       in
       {
         packages =
@@ -48,8 +48,8 @@
 
         devShells.default = with pkgs; mkShell {
           shellHook = checks.pre-commit-check.shellHook + ''
-            rm -f ./.github/workflows/ci.yml
-            cp ${generatedContents} ./.github/workflows/ci.yml
+            rm -f ./.github/workflows/errors.yml; cp ${workflowContents.errors} ./.github/workflows/errors.yml
+            rm -f ./.github/workflows/warnings.yml; cp ${workflowContents.warnings} ./.github/workflows/warnings.yml
           '';
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           packages = [

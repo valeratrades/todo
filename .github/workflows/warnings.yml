@@ -1,40 +1,38 @@
-name: Warnings
-
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
 jobs:
+  clippy:
+    if: github.event_name != 'pull_request'
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@clippy
+    - run: cargo clippy --tests -- -Dwarnings
+    timeout-minutes: 45
   tokei:
     name: Reasonable Amount of Comments
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Run tokei and save output to json file
-        uses: taiki-e/install-action@v2
-        with:
-          tool: tokei
-
-      - name: Generate Tokei output
-        run: tokei -o json > tokei_output.json
-
-      - name: Install jq
-        run: sudo apt-get install -y jq
-
-      - name: Check Rust comments
-        run: |
-          comments=$(jq '.Rust.comments' tokei_output.json)
-          code=$(jq '.Rust.code' tokei_output.json)
-          if [ $((comments * 10)) -ge $code ]; then
-            echo "Number of comments should be less than 10% of code"
-            exit 1
-          else
-            echo "Check passed: Number of comments is less than 10% of code"
-          fi
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Installation
+      uses: taiki-e/install-action@v2
+      with:
+        tool: tokei
+    - name: Generate Tokei output
+      run: tokei -o json > tokei_output.json
+    - name: Install jq
+      run: sudo apt-get install -y jq
+    - name: Check Rust comments
+      run: "\t\t\t\t\t\tcomments=$(jq '.Rust.comments' tokei_output.json)\n\t\t\t\t\
+        \t\tcode=$(jq '.Rust.code' tokei_output.json)\n\t\t\t\t\t\tif [ $((comments\
+        \ * 10)) -ge $code ]; then\n\t\t\t\t\t\t\techo \"Number of comments should\
+        \ be less than 10% of code\"\n\t\t\t\t\t\t\texit 1\n\t\t\t\t\t\telse\n\t\t\
+        \t\t\t\t\techo \"Check passed: Number of comments is less than 10% of code\"\
+        \n\t\t\t\t\t\tfi\n\t\t\t"
+name: Warnings
+'on':
+  pull_request: {}
+  push: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
