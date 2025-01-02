@@ -35,11 +35,34 @@ pub struct Timer {
 }
 
 impl AppConfig {
-	pub fn read(path: ExpandedPath) -> Result<Self, config::ConfigError> {
-		let builder = config::Config::builder().add_source(config::File::with_name(&path.to_string()));
+	pub fn read(path: Option<ExpandedPath>) -> Result<Self, config::ConfigError> {
+		let mut builder = config::Config::builder().add_source(config::Environment::default());
+		let settings: Self = match path {
+			Some(path) => {
+				let builder = builder.add_source(config::File::with_name(&path.to_string()).required(true));
+				builder.build()?.try_deserialize()?
+			}
+			None => {
+				let app_name = env!("CARGO_PKG_NAME");
+				let config_dir = env!("XDG_CONFIG_HOME");
+				let locations = [
+					format!("{config_dir}/{app_name}"),
+					format!("{config_dir}/{app_name}/config"), //
+				];
+				for location in locations.iter() {
+					builder = builder.add_source(config::File::with_name(location).required(false));
+				}
+				let raw: config::Config = builder.build()?;
 
-		let settings: config::Config = builder.build()?;
-		let settings: Self = settings.try_deserialize()?;
+				match raw.try_deserialize() {
+					Ok(settings) => settings,
+					Err(e) => {
+						eprintln!("Config file does not exist or is invalid:");
+						return Err(e);
+					}
+				}
+			}
+		};
 
 		if !settings.todos.path.exists() {
 			return Err(config::ConfigError::Message(format!(
@@ -54,7 +77,6 @@ impl AppConfig {
 		}
 		let state_dir = STATE_DIR.get_or_init(|| std::env::var("XDG_STATE_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
 		let _ = std::fs::create_dir_all(state_dir);
-
 
 		if std::env::var("XDG_DATA_HOME").is_err() {
 			eprintln!("warning: XDG_DATA_HOME is not set, pointing it to ~/.local/share");

@@ -11,7 +11,6 @@ mod todos;
 pub mod utils;
 use clap::{Args, Parser, Subcommand};
 use config::AppConfig;
-use v_utils::io::ExpandedPath;
 
 const MANUAL_PATH_APPENDIX: &str = "manual_stats/";
 const MONITOR_PATH_APPENDIX: &str = "activities_monitor/";
@@ -22,8 +21,8 @@ const TOTALS_PATH_APPENDIX: &str = "activities_totals/";
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
-	#[arg(long, default_value = "~/.config/todo.toml")]
-	config: ExpandedPath,
+	#[arg(long)]
+	config: Option<v_utils::io::ExpandedPath>,
 }
 
 #[derive(Subcommand)]
