@@ -42,10 +42,10 @@ jobs:
             echo "Check passed: Number of comments is less than 10% of code"
           fi
 
-#
-#  pre_ci:
-#    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
-#
+
+  pre_ci:
+    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
+
 #  test:
 #    name: Rust ${{matrix.rust}}
 #    needs: pre_ci
@@ -115,27 +115,26 @@ jobs:
 #      - uses: dtolnay/rust-toolchain@clippy
 #      - run: cargo clippy --tests -- -Dwarnings #-Dclippy::all #-Dclippy::pedantic
 #
-#  machete:
-#    name: Unused Dependencies
-#    runs-on: ubuntu-latest
-#
-#    steps:
-#    - name: Install cargo-machete
-#      run: |
-#        cargo install cargo-machete
-#
-#    - name: Cargo Machete
-#      run: |
-#        cargo machete
-#        exit_code=$?
-#        if [ $exit_code = 0 ]; then
-#          echo "Found unused dependencies"
-#          exit $exit_code
-#        fi
-#
-#env:
-#  #RUSTFLAGS: -Dwarnings
-#  CARGO_INCREMENTAL: 0 # on large changes this just bloats ./target
-#  RUST_BACKTRACE: short
-#  CARGO_NET_RETRY: 10
-#  RUSTUP_MAX_RETRIES: 10
+  machete:
+    name: Unused Dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Cargo Machete
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-machete
+      run: |
+        cargo machete
+        exit_code=$?
+        if [ $exit_code = 0 ]; then
+          echo "Found unused dependencies"
+          exit $exit_code
+        fi
+
+env:
+  #RUSTFLAGS: -Dwarnings
+  CARGO_INCREMENTAL: 0 # on large changes this just bloats ./target
+  RUST_BACKTRACE: short
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
