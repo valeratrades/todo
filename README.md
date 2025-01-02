@@ -5,6 +5,8 @@
 [<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/valeratrades/todo/ci.yml?branch=master&style=for-the-badge&style=flat-square" height="20">](https://github.com/valeratrades/todo/actions?query=branch%3Amaster) <!--NB: Won't find it if repo is private-->
 [![Lines Of Code](https://tokei.rs/b1/github/valeratrades/todo?category=code)](https://github.com/valeratrades/todo/src)
 
+[<img alt="ci warnings" src="https://img.shields.io/github/actions/workflow/status/valeratrades/todo/warnings.yml?branch=master&style=for-the-badge&style=flat-square" height="20">](https://github.com/valeratrades/todo/actions?query=branch%3Amaster) <!--NB: Won't find it if repo is private-->
+
 All notes, todos and life stats tracking in one place; organised with nothing but markdown and nvim
 
 ### Note to self
