@@ -1,3 +1,8 @@
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_NET_RETRY: '10'
+  RUSTUP_MAX_RETRIES: '10'
+  RUST_BACKTRACE: short
 jobs:
   clippy:
     if: github.event_name != 'pull_request'
@@ -112,3 +117,5 @@ jobs:
   schedule:
   - cron: 0 0 1 * *
   workflow_dispatch: {}
+permissions:
+  contents: read

@@ -1,21 +1,6 @@
-{ pkgs
-, workflow-parts
-, ...
-}:
-(pkgs.formats.yaml { }).generate "" {
-  on = {
-    push = { };
-    pull_request = { };
-    workflow_dispatch = { };
-    schedule = [
-      {
-        cron = "0 0 1 * *"; # Runs at midnight on the 1st day of every month
-      }
-    ];
-  };
-
-  #imports = [ workflow-parts.shared { inherit pkgs; } ];
-
+{ pkgs, workflow-parts, ... }:
+let
+  shared = import workflow-parts.shared { inherit pkgs; };
   jobs = {
     tokei = import workflow-parts.tokei { inherit pkgs; };
     tests = import workflow-parts.tests { inherit pkgs; };
@@ -25,8 +10,16 @@
     machete = import workflow-parts.machete { inherit pkgs; };
     sort = import workflow-parts.sort { inherit pkgs; };
   };
-
-  #env = {
-  #  RUSTFLAGS = "-Dwarnings";
-  #};
-}
+  base = {
+    on = {
+      push = { };
+      pull_request = { };
+      workflow_dispatch = { };
+      schedule = [{ cron = "0 0 1 * *"; }];
+    };
+  };
+in
+(pkgs.formats.yaml { }).generate "" (pkgs.lib.recursiveUpdate base {
+  inherit jobs;
+  inherit (shared) env permissions;
+})
