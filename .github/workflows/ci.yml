@@ -51,6 +51,8 @@ jobs:
         MIRIFLAGS: -Zmiri-strict-provenance
       run: cargo miri test
     timeout-minutes: 45
+  pre_ci:
+    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
   sort:
     name: Cargo Sorted
     runs-on: ubuntu-latest
@@ -111,6 +113,7 @@ jobs:
         \ be less than 10% of code\"\n\t\t\t\t\t\t\texit 1\n\t\t\t\t\t\telse\n\t\t\
         \t\t\t\t\techo \"Check passed: Number of comments is less than 10% of code\"\
         \n\t\t\t\t\t\tfi\n\t\t\t"
+name: CI
 'on':
   pull_request: {}
   push: {}

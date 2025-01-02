@@ -20,6 +20,6 @@ let
   };
 in
 (pkgs.formats.yaml { }).generate "" (pkgs.lib.recursiveUpdate base {
-  inherit jobs;
-  inherit (shared) env permissions;
+  inherit (shared) env permissions name;
+  jobs = pkgs.lib.recursiveUpdate shared.jobs jobs;
 })
