@@ -86,7 +86,7 @@
         }
         {
           name = "Enable type layout randomization";
-          run = "echo RUSTFLAGS=${RUSTFLAGS}\\ -Zrandomize-layout\\ --cfg=exhaustive >> $GITHUB_ENV";
+          run = "echo RUSTFLAGS=\${RUSTFLAGS}\\ -Zrandomize-layout\\ --cfg=exhaustive >> $GITHUB_ENV";
           "if" = "matrix.rust == 'nightly'";
         }
         # not sure why dtolnay has this

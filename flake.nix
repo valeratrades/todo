@@ -49,7 +49,8 @@
           shellHook = checks.pre-commit-check.shellHook + ''
             echo "Generating TOML configuration..."
             #cp -f ${generatedContents} ./tmp/test.yaml
-            cp -f ${generatedContents} ./.github/workflows/ci.yml
+            rm -f ./.github/workflows/ci.yml
+            cp ${generatedContents} ./.github/workflows/ci.yml
           '';
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           packages = [
