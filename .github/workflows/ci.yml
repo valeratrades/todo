@@ -90,7 +90,7 @@ jobs:
       matrix:
         rust:
         - nightly
-        - stable
+        - 1.74.0
     timeout-minutes: 45
   tokei:
     name: Reasonable Amount of Comments
