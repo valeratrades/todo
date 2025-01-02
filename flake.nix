@@ -21,6 +21,7 @@
             };
           };
         };
+        generatedContents = (import ./.github/workflows/ci.nix) { inherit pkgs; };
       in
       {
         packages =
@@ -45,14 +46,18 @@
           };
 
         devShells.default = with pkgs; mkShell {
-          inherit (checks.pre-commit-check) shellHook;
+          shellHook = checks.pre-commit-check.shellHook + ''
+            echo "Generating TOML configuration..."
+            #cp -f ${generatedContents} ./tmp/test.yaml
+            cp -f ${generatedContents} ./.github/workflows/ci.yml
+          '';
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           packages = [
             mold-wrapped
             openssl
             pkg-config
             (rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml)
-          ];
+          ] ++ checks.pre-commit-check.enabledPackages;
         };
       }
     );
