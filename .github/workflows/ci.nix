@@ -2,8 +2,6 @@
 , ...
 }:
 (pkgs.formats.yaml { }).generate "" {
-  name = "CI";
-
   on = {
     push = { };
     pull_request = { };
@@ -15,14 +13,10 @@
     ];
   };
 
-  permissions.contents = "read";
+  (import ../shared.nix);
 
   jobs = {
     tokei = import ../tokei.nix;
-
-    pre_ci = {
-      uses = "valeratrades/.github/.github/workflows/pre_ci.yml@master";
-    };
 
     tests = import ../test.nix;
 
@@ -37,11 +31,7 @@
     sort = import ../sort.nix;
   };
 
-  env = {
-    #RUSTFLAGS = "-Dwarnings";
-    CARGO_INCREMENTAL = "0"; # on large changes this just bloats ./target
-    RUST_BACKTRACE = "short";
-    CARGO_NET_RETRY = "10";
-    RUSTUP_MAX_RETRIES = "10";
-  };
+  #env = {
+  #  RUSTFLAGS = "-Dwarnings";
+  #};
 }
