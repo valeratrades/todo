@@ -43,15 +43,15 @@
         name = "Check Rust comments";
         # TODO: Generalize to other languages. Dynamically determine the most used language in the repo (excluding markdown, Jupyter, etc.).
         run = ''
-          				 comments=$(jq '.Rust.comments' tokei_output.json)
-          				 code=$(jq '.Rust.code' tokei_output.json)
-          				 if [ $((comments * 10)) -ge $code ]; then
-          					 echo "Number of comments should be less than 10% of code"
-          					 exit 1
-          				 else
-          					 echo "Check passed: Number of comments is less than 10% of code"
-          				 fi
-          				'';
+          comments=$(jq '.Rust.comments' tokei_output.json)
+          code=$(jq '.Rust.code' tokei_output.json)
+          if [ $((comments * 10)) -ge $code ]; then
+            echo "Number of comments should be less than 10% of code"
+            exit 1
+          else
+            echo "Check passed: Number of comments is less than 10% of code"
+          fi
+        '';
       }
     ];
   };
