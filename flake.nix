@@ -3,9 +3,10 @@
     nixpkgs.url      = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url  = "github:numtide/flake-utils";
+		pre-commit-hooks.url = "github:cachix/git-hooks.nix";
   };
 
-  outputs = { nixpkgs, rust-overlay, flake-utils, ... }:
+  outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = builtins.trace "flake.nix sourced" [ (import rust-overlay) ];
@@ -35,6 +36,15 @@
 						};
 					};
 
+						checks = {
+					pre-commit-check = pre-commit-hooks.lib.${system}.run {
+						src = ./.;
+						hooks = {
+							nixpkgs-fmt.enable = true;
+						};
+					};
+				};
+
         devShells.default = with pkgs; mkShell {
 					stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           packages = [
@@ -43,6 +53,9 @@
             pkg-config
             (rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml)
           ];
+					 shellHook = ''
+            echo "Run pre-commit-check with: nix run .#pre-commit-check"
+          '';
         };
       }
     );
