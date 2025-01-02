@@ -1,14 +1,17 @@
 { pkgs, workflow-parts, ... }:
 let
-  shared = import workflow-parts.shared { inherit pkgs; };
-  jobs = {
-    tokei = import workflow-parts.tokei { inherit pkgs; };
-    tests = import workflow-parts.tests { inherit pkgs; };
-    doc = import workflow-parts.doc { inherit pkgs; };
-    miri = import workflow-parts.miri { inherit pkgs; };
-    clippy = import workflow-parts.clippy { inherit pkgs; };
-    machete = import workflow-parts.machete { inherit pkgs; };
-    sort = import workflow-parts.sort { inherit pkgs; };
+  shared-base = import workflow-parts.shared.base { inherit pkgs; };
+  shared-jobs = {
+    tokei = import workflow-parts.shared.tokei { inherit pkgs; };
+  };
+  rust-base = import workflow-parts.rust.base { inherit pkgs; };
+  rust-jobs = {
+    tests = import workflow-parts.rust.tests { inherit pkgs; };
+    doc = import workflow-parts.rust.doc { inherit pkgs; };
+    miri = import workflow-parts.rust.miri { inherit pkgs; };
+    clippy = import workflow-parts.rust.clippy { inherit pkgs; };
+    machete = import workflow-parts.rust.machete { inherit pkgs; };
+    sort = import workflow-parts.rust.sort { inherit pkgs; };
   };
   base = {
     on = {
@@ -20,6 +23,7 @@ let
   };
 in
 (pkgs.formats.yaml { }).generate "" (pkgs.lib.recursiveUpdate base {
-  inherit (shared) env permissions name;
-  jobs = pkgs.lib.recursiveUpdate shared.jobs jobs;
+  inherit (shared-base) permissions name;
+  inherit (rust-base) env;
+  jobs = pkgs.lib.recursiveUpdate (pkgs.lib.recursiveUpdate shared-jobs rust-base.jobs) rust-jobs;
 })

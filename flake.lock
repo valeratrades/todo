@@ -185,11 +185,11 @@
     "workflow-parts": {
       "locked": {
         "dir": ".github/workflows/nix-parts",
-        "lastModified": 1735848785,
-        "narHash": "sha256-yFOrX58VMYU1cxpgNWTWGL4tTdRU3f+MKIz/VWfTkuM=",
+        "lastModified": 1735851222,
+        "narHash": "sha256-J6bK6UkTKZKJ5pF0u72YB6MzIBtOz0pQ5Ezad+fUMvI=",
         "owner": "valeratrades",
         "repo": ".github",
-        "rev": "f5892b3202cfd8a4ff580fef5d4a6a77b9bd01a9",
+        "rev": "501e607cc0aa8ff56a63ce87a7ed4c32332eddf6",
         "type": "github"
       },
       "original": {
