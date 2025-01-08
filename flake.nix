@@ -19,6 +19,22 @@
             src = ./.;
             hooks = {
               nixpkgs-fmt.enable = true;
+              rustfmt.enable = true;
+
+
+              ##TODO!!!: configure using https://github.com/cachix/git-hooks.nix?tab=readme-ov-file#custom-hooks
+              # In reality right now it's just copying over thinks from file_snippet presets
+              test = {
+                enable = true;
+                #entry = ''notify-send "Test hook goes brrrr" -t 999999'';
+                files = "Cargo.toml";
+                entry =
+                  let
+                    shared_flags = /*--grouped*/''--order package,dependencies,dev-dependencies,build-dependencies,features'';
+                  in
+                  ''cargo sort --workspace ${shared_flags} || cargo sort ${shared_flags}'';
+                stages = [ "pre-commit" ];
+              };
             };
           };
         };
@@ -28,9 +44,16 @@
         packages =
           let
             manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
+            rust = (pkgs.rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml);
+            rustc = rust;
+            cargo = rust;
+            stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
+            rustPlatform = pkgs.makeRustPlatform {
+              inherit rustc cargo stdenv;
+            };
           in
           {
-            default = pkgs.rustPlatform.buildRustPackage rec {
+            default = rustPlatform.buildRustPackage rec {
               pname = manifest.name;
               version = manifest.version;
 
@@ -40,6 +63,7 @@
               ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
               env.PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+              #stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
               cargoLock.lockFile = ./Cargo.lock;
               src = pkgs.lib.cleanSource ./.;
@@ -47,11 +71,11 @@
           };
 
         devShells.default = with pkgs; mkShell {
+          inherit stdenv;
           shellHook = checks.pre-commit-check.shellHook + ''
             rm -f ./.github/workflows/errors.yml; cp ${workflowContents.errors} ./.github/workflows/errors.yml
             rm -f ./.github/workflows/warnings.yml; cp ${workflowContents.warnings} ./.github/workflows/warnings.yml
           '';
-          stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           packages = [
             mold-wrapped
             openssl
