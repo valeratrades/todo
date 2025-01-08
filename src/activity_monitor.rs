@@ -46,7 +46,8 @@ fn get_activity(config: &AppConfig) -> String {
 
 	fn cmd<S>(command: S) -> Output
 	where
-		S: AsRef<OsStr>, {
+		S: AsRef<OsStr>,
+	{
 		let output = Command::new("sh").arg("-c").arg(command).output().unwrap();
 		output
 	}

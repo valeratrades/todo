@@ -44,10 +44,13 @@ impl AppConfig {
 			}
 			None => {
 				let app_name = env!("CARGO_PKG_NAME");
-				let config_dir = env!("XDG_CONFIG_HOME");
+				let app_name = env!("CARGO_PKG_NAME");
+				let xdg_dirs = xdg::BaseDirectories::with_prefix(app_name).unwrap();
+				let xdg_conf_dir = xdg_dirs.get_config_home().parent().unwrap().display().to_string();
+
 				let locations = [
-					format!("{config_dir}/{app_name}"),
-					format!("{config_dir}/{app_name}/config"), //
+					format!("{xdg_conf_dir}/{app_name}"),
+					format!("{xdg_conf_dir}/{app_name}/config"), //
 				];
 				for location in locations.iter() {
 					builder = builder.add_source(config::File::with_name(location).required(false));

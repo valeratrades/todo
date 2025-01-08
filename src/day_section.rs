@@ -35,7 +35,7 @@ impl DaySection {
 
 	pub fn description(&self) -> &str {
 		match self {
-			DaySection::Morning =>
+			DaySection::Morning => {
 				r#"
 # Morning
 for physical things
@@ -66,8 +66,9 @@ Can be asked, but not requested.
 
 ### Remember
 > There are no shortcuts for you, Valera
-"#,
-			DaySection::Work =>
+"#
+			}
+			DaySection::Work => {
 				r#"
 # Work
 For Necessary things.
@@ -92,8 +93,9 @@ Turned off fully, and placed inside a mailbox if any urges arise.
 
 ### Remember
 > It's not going to be fun. You will feel tired, bored, at times physically suffering. You must say "no" to everything your whole life. Your existence is optimising for pressing keys in correct order, sitting at a desk 14 hours a day. This is the cost of greatness.
-"#,
-			DaySection::Evening =>
+"#
+			}
+			DaySection::Evening => {
 				r#"
 # Evening
 fun and reflection
@@ -113,12 +115,14 @@ Can be asked, but not requested.
 
 ### Remember
 > Iteration Speed
-"#,
-			DaySection::Night =>
+"#
+			}
+			DaySection::Night => {
 				r#"
 # Night
 ## SLEEP
-"#,
+"#
+			}
 		}
 	}
 }
