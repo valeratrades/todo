@@ -2648,6 +2648,7 @@ dependencies = [
  "tokio",
  "v_utils",
  "xattr",
+ "xdg",
 ]
 
 [[package]]
