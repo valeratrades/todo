@@ -11,6 +11,7 @@ mod todos;
 pub mod utils;
 use clap::{Args, Parser, Subcommand};
 use config::AppConfig;
+use v_utils::clientside;
 
 const MANUAL_PATH_APPENDIX: &str = "manual_stats/";
 const MONITOR_PATH_APPENDIX: &str = "activities_monitor/";
@@ -69,6 +70,7 @@ enum Commands {
 struct NoArgs {}
 
 fn main() {
+	clientside!();
 	let cli = Cli::parse();
 
 	let config = match AppConfig::read(cli.config) {

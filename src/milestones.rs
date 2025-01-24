@@ -1,9 +1,6 @@
-use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
-use color_eyre::eyre::Result;
 use reqwest::blocking::Client;
-use serde::Deserialize;
-use v_utils::trades::{Timeframe, TimeframeDesignator};
+use v_utils::prelude::*;
 
 use crate::config::{AppConfig, DATA_DIR};
 
@@ -64,6 +61,7 @@ fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 		.header("User-Agent", "Rust GitHub Client")
 		.header("Authorization", format!("token {}", config.github_token))
 		.send()?;
+	info!(?res);
 
 	let milestones = res.json::<Vec<Milestone>>()?;
 	Ok(milestones)

@@ -11,7 +11,8 @@ use clap::{Args, Subcommand};
 use color_eyre::eyre::{bail, ensure, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use v_utils::{
-	io::{OpenMode, Percent},
+	Percent,
+	io::OpenMode,
 	time::Timelike,
 };
 use xattr::FileExt as _;
