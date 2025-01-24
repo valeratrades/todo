@@ -20,7 +20,7 @@ commit_message
 *.sw[po]
 
 ## Nix
-result/
+**/result/
 .direnv/
 
 ## MacOS
