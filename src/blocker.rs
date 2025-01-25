@@ -50,15 +50,14 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::List => {
 			println!("{}", blockers.join("\n"));
 		}
-		Command::Current => {
+		Command::Current =>
 			if let Some(last) = blockers.last() {
 				const MAX_LEN: usize = 70;
 				match last.len() {
-					0..=MAX_LEN=> println!("{}", last),
+					0..=MAX_LEN => println!("{}", last),
 					_ => println!("{}...", &last[..(MAX_LEN - 3)]),
 				}
-			}
-		}
+			},
 		Command::Open => {
 			v_utils::io::open(&blocker_path)?;
 		}

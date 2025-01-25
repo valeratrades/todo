@@ -10,11 +10,7 @@ use std::{
 use clap::{Args, Subcommand};
 use color_eyre::eyre::{bail, ensure, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use v_utils::{
-	Percent,
-	io::OpenMode,
-	time::Timelike,
-};
+use v_utils::{io::OpenMode, time::Timelike, Percent};
 use xattr::FileExt as _;
 
 use crate::{
@@ -330,19 +326,17 @@ impl Day {
 
 		fn conditional_update<T>(pbs_as_value: &mut serde_json::Value, metric: &str, new_value: T, condition: fn(&T, &T) -> bool)
 		where
-			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display + std::fmt::Debug,
-		{
+			T: Serialize + DeserializeOwned + PartialEq + Clone + std::fmt::Display + std::fmt::Debug, {
 			let old_value = pbs_as_value.get(metric).and_then(|v| T::deserialize(v.clone()).ok()).map(|v| Some(v)).unwrap_or(None);
 
 			match old_value {
-				Some(old) => {
+				Some(old) =>
 					if condition(&new_value, &old) {
 						announce_new_pb(&new_value, Some(&old), metric);
 						pbs_as_value[metric] = serde_json::to_value(&new_value).unwrap();
 					} else {
 						pbs_as_value[metric] = serde_json::to_value(&old).unwrap();
-					}
-				}
+					},
 				None => {
 					announce_new_pb(&new_value, None, metric);
 					pbs_as_value[metric] = serde_json::to_value(new_value).unwrap();
