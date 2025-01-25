@@ -47,6 +47,7 @@
               ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
               env.PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
+              env.RUSTFLAGS = "--cfg tokio_unstable -Z threads=8 -C link-arg=-fuse-ld=mold";
               #stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
               cargoLock.lockFile = ./Cargo.lock;
