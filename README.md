@@ -9,6 +9,8 @@
 
 All notes, todos and life stats tracking in one place; organised with nothing but markdown and nvim
 
+Note that things in the `todos/` are semantically links. By default of this implementation they go to the contents of the corresponding .md file with description, but nothing is preventing from creating eg "go-through-issues-on-v_exchanges-git.md", which is an empty file, but is within model, as it references a clear todo scope.
+
 ### Note to self
 I am not going to make cli commands for special cases
 I am not going to make cli commands for special cases
