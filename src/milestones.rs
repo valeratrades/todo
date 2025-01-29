@@ -5,6 +5,7 @@ use v_utils::prelude::*;
 use crate::config::{AppConfig, DATA_DIR};
 
 pub static HEALTHCHECK_FILENAME: &str = "healthcheck.status";
+pub static SPRINT_HEADER_FILEHAME: &str = "sprint_header.md";
 
 #[derive(Args)]
 pub struct MilestonesArgs {
@@ -67,7 +68,7 @@ fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 	Ok(milestones)
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone, PartialEq)]
 #[error("Error on `{requested_tf}` milestone: {source}")]
 struct GetMilestoneError {
 	requested_tf: Timeframe,
@@ -75,7 +76,7 @@ struct GetMilestoneError {
 	source: MilestoneError,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone, PartialEq)]
 enum MilestoneError {
 	#[error("Milestone is missing due_on date")]
 	MissingDueOn,
@@ -94,7 +95,7 @@ enum MilestoneError {
 }
 
 fn get_milestone(tf: Timeframe, retrieved_milestones: &[Milestone]) -> Result<String, GetMilestoneError> {
-	if tf.designator == TimeframeDesignator::Minutes {
+	if tf.designator() == TimeframeDesignator::Minutes {
 		return Err(GetMilestoneError {
 			requested_tf: tf,
 			source: MilestoneError::MinuteMilestone,
@@ -137,42 +138,30 @@ fn get_milestone(tf: Timeframe, retrieved_milestones: &[Milestone]) -> Result<St
 }
 
 static KEY_MILESTONES: [Timeframe; 6] = [
-	Timeframe {
-		designator: TimeframeDesignator::Days,
-		n: 1,
-	},
-	Timeframe {
-		designator: TimeframeDesignator::Weeks,
-		n: 2,
-	},
-	Timeframe {
-		designator: TimeframeDesignator::Quarters,
-		n: 1,
-	},
-	Timeframe {
-		designator: TimeframeDesignator::Years,
-		n: 1,
-	},
-	Timeframe {
-		designator: TimeframeDesignator::Years,
-		n: 3,
-	},
-	Timeframe {
-		designator: TimeframeDesignator::Years,
-		n: 7,
-	},
+	Timeframe::from_naive(1, TimeframeDesignator::Days),
+	Timeframe::from_naive(2, TimeframeDesignator::Weeks),
+	Timeframe::from_naive(1, TimeframeDesignator::Quarters),
+	Timeframe::from_naive(1, TimeframeDesignator::Years),
+	Timeframe::from_naive(3, TimeframeDesignator::Years),
+	Timeframe::from_naive(7, TimeframeDesignator::Years),
 ];
 
 fn healthcheck(config: &AppConfig) -> Result<()> {
-	let healthcheck_path = DATA_DIR.get().unwrap().join(HEALTHCHECK_FILENAME);
+	use std::fs;
+
+	let share_dir = share_dir!();
+
+	let healthcheck_path = share_dir.join(HEALTHCHECK_FILENAME);
+
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
 		.iter()
 		.map(|tf| get_milestone(*tf, &retrieved_milestones))
 		.collect::<Vec<Result<String, GetMilestoneError>>>();
+{
 
 	let mut health = String::new();
-	for result in results {
+	for result in &results {
 		match result {
 			Ok(_) => {}
 			Err(e) => {
@@ -189,7 +178,21 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 	}
 	println!("{}\n{health}", healthcheck_path.display());
 
-	std::fs::create_dir_all(healthcheck_path.parent().unwrap()).unwrap();
-	std::fs::write(healthcheck_path, health).unwrap();
+	//TODO: switch to v_utils::share_dir
+	fs::write(healthcheck_path, health).unwrap();
+	}
+
+	{
+		let sprint_ms = &<std::result::Result<std::string::String, GetMilestoneError> as Clone>::clone(&results[1]).map_err(|e| eyre!("Couldn't parse 2w milestone which MUST be defined: {e}"))?;
+		let sprint_header = sprint_ms.lines().next().ok_or_else(|| eyre!("2w milestone does not have a description. MUST have a description."))?;
+		if !sprint_header.starts_with("# ") {
+			eprintln!("2w milestone description does not start with a header. It SHOULD start with '# '.");
+		}
+		fs::write(share_dir.join(SPRINT_HEADER_FILEHAME), sprint_header).unwrap();
+	}
+
+
+
+
 	Ok(())
 }
