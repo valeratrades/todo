@@ -15,7 +15,7 @@ tabs_in_doc_comments = "allow"
 [dependencies]
 chrono = { version = "^0.4.39", features = ["serde"] }
 clap = { version = "^4.5.27", features = ["derive"] }
-clap_complete = "4.5.42"
+clap_complete = "4.5.44"
 color-eyre = "0.6.3"
 config = "^0.15.6"
 derive-new = "^0"
@@ -24,10 +24,10 @@ google-calendar = "^0.7.0"
 pandoc = "^0.8.11"
 reqwest = { version = "^0.12.12", features = ["blocking", "json"] }
 serde = { version = "^1.0.217", features = ["derive"] }
-serde_json = { version = "^1.0.137", features = ["std"] }
-tempfile = "^3.15.0"
+serde_json = { version = "^1.0.138", features = ["std"] }
+tempfile = "^3.16.0"
 thiserror = "2.0.11"
 tokio = { version = "^1.43.0", features = ["rt", "rt-multi-thread"] }
-v_utils = { version = "^2.2.0", features = ["io", "macros", "trades"], path = "/home/v/s/v_utils/v_utils" }
+v_utils = { version = "^2.3.3", features = ["io", "macros", "trades"], path = "/home/v/s/v_utils/v_utils" }
 xattr = "1.4.0"
 xdg = "2.5.2"
