@@ -3524,7 +3524,9 @@ dependencies = [
 
 [[package]]
 name = "v_utils"
-version = "2.3.3"
+version = "2.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc141243320fffdd58010736732e5cd59c1fecbef531119f01792787abd67543"
 dependencies = [
  "chrono",
  "console-subscriber",
@@ -3554,6 +3556,8 @@ dependencies = [
 [[package]]
 name = "v_utils_macros"
 version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d62d0241a15bb0158c5714f3ca5668b3481b91787b40dafcb787c7005a3b47b"
 dependencies = [
  "eyre",
  "heck",

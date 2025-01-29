@@ -28,6 +28,6 @@ serde_json = { version = "^1.0.138", features = ["std"] }
 tempfile = "^3.16.0"
 thiserror = "2.0.11"
 tokio = { version = "^1.43.0", features = ["rt", "rt-multi-thread"] }
-v_utils = { version = "^2.3.3", features = ["io", "macros", "trades"], path = "/home/v/s/v_utils/v_utils" } #ga: rm path
+v_utils = { version = "^2.3.4", features = ["io", "macros", "trades"]} #ga: rm path
 xattr = "1.4.0"
 xdg = "2.5.2"
