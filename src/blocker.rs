@@ -2,8 +2,10 @@ use clap::{Args, Subcommand};
 use color_eyre::eyre::Result;
 
 use crate::config::{AppConfig, STATE_DIR};
+use crate::milestones::SPRINT_HEADER_REL_PATH;
+use crate::config::DATA_DIR;
 
-static STATE_APPENDIX: &str = "blocker.txt";
+static BLOCKER_REL_PATH: &str = "blocker.txt";
 
 #[derive(Debug, Clone, Args)]
 pub struct BlockerArgs {
@@ -14,7 +16,7 @@ pub struct BlockerArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
 	/// Append a blocker
-	/// #NB
+	/// # NB
 	/// adds one and only one blocker. The structure is **not** a tree for a reason:
 	/// - it forces prioritization (high leverage)
 	/// - solving top 1 thing can often unlock many smaller ones for free
@@ -30,7 +32,7 @@ pub enum Command {
 }
 
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
-	let blocker_path = STATE_DIR.get().unwrap().join(STATE_APPENDIX);
+	let blocker_path = STATE_DIR.get().unwrap().join(BLOCKER_REL_PATH);
 	let mut blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
 		.unwrap_or_else(|_| String::new())
 		.split('\n')
@@ -48,6 +50,13 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			std::fs::write(&blocker_path, blockers.join("\n"))?;
 		}
 		Command::List => {
+			let sprint_header = match std::fs::read_to_string(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH)) {
+				Ok(s) => Some(s),
+				Err(_) => None,
+			};
+			if let Some(s) = sprint_header {
+				println!("{s}");
+			}
 			println!("{}", blockers.join("\n"));
 		}
 		Command::Current =>

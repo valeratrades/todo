@@ -4,8 +4,8 @@ use v_utils::prelude::*;
 
 use crate::config::{AppConfig, DATA_DIR};
 
-pub static HEALTHCHECK_FILENAME: &str = "healthcheck.status";
-pub static SPRINT_HEADER_FILEHAME: &str = "sprint_header.md";
+pub static HEALTHCHECK_REL_PATH: &str = "healthcheck.status";
+pub static SPRINT_HEADER_REL_PATH: &str = "sprint_header.md";
 
 #[derive(Args)]
 pub struct MilestonesArgs {
@@ -151,7 +151,7 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 
 	let share_dir = share_dir!();
 
-	let healthcheck_path = share_dir.join(HEALTHCHECK_FILENAME);
+	let healthcheck_path = share_dir.join(HEALTHCHECK_REL_PATH);
 
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
@@ -188,7 +188,7 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 		if !sprint_header.starts_with("# ") {
 			eprintln!("2w milestone description does not start with a header. It SHOULD start with '# '.");
 		}
-		fs::write(share_dir.join(SPRINT_HEADER_FILEHAME), sprint_header).unwrap();
+		fs::write(share_dir.join(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
 	}
 
 
