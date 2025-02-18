@@ -72,13 +72,10 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 			let mut d: Day = d;
 
 			if let Some(ev_args) = &ev_override {
-				let ev = match (ev_args.add, ev_args.subtract) {
-					(true, false) => d.ev + ev_args.ev,
-					(false, true) => d.ev - ev_args.ev,
-					(false, false) => ev_args.ev,
-					(true, true) => unreachable!(),
+				d.ev = match ev_args.change {
+					true => d.ev + ev_args.ev,
+					false => ev_args.ev,
 				};
-				d.ev = ev;
 			} else if let ManualSubcommands::CounterStep(step) = &args.command {
 				if step.cargo_watch {
 					d.counters.cargo_watch += 1;
@@ -158,31 +155,25 @@ pub struct EvArgs {
 	pub ev: i32,
 	#[arg(short, long)]
 	pub open: bool,
-	#[arg(short, long)]
-	pub add: bool,
-	#[arg(short, long)]
-	pub subtract: bool,
-	#[arg(short, long, default_value = "true")]
+	#[arg(short, long, allow_hyphen_values = true)]
+	pub change: bool,
+	#[arg(short, long, default_value = "true", allow_hyphen_values = true)]
 	pub replace: bool,
 }
 impl EvArgs {
 	//? This seems ugly. There has to be a way to do this natively with clap, specifically with the `conflicts_with` attribute
 	fn validate(&self) -> Result<Self> {
-		let replace = match self.add || self.subtract {
+		let replace = match self.change {
 			true => false,
 			false => self.replace,
 		};
-		if self.add && self.subtract {
-			bail!("Exactly one of 'add', 'subtract', or 'replace' must be specified.");
-		}
-		if !self.add && !self.subtract && !self.replace {
-			bail!("Exactly one of 'add', 'subtract', or 'replace' must be specified.");
+		if !self.change && !self.replace {
+			bail!("Exactly one of {{'change', 'replace'}} must be specified.");
 		}
 		Ok(Self {
 			ev: self.ev,
 			open: self.open,
-			add: self.add,
-			subtract: self.subtract,
+			change: self.change,
 			replace,
 		})
 	}
