@@ -22,8 +22,8 @@ impl Shell {
 			r#"
 # {exe_name}s-manual
 alias tm="{exe_name} manual"
-alias tmc="tm ev -c"
-alias tmr="tm ev -r"
+alias tmc="tm ev -c --" # `--` allows for negative values (as otherwise they are interpreted as flags)
+alias tmr="tm ev -r --"
 
 # {exe_name}s-{exe_name}s
 alias tdo="{exe_name} open"
