@@ -5,12 +5,13 @@ use crate::config::{AppConfig, STATE_DIR};
 use crate::milestones::SPRINT_HEADER_REL_PATH;
 use crate::config::DATA_DIR;
 
-static BLOCKER_REL_PATH: &str = "blocker.txt";
-
 #[derive(Debug, Clone, Args)]
 pub struct BlockerArgs {
 	#[command(subcommand)]
 	command: Command,
+	#[arg(short, long, default_value = "blocker.txt")]
+	/// The filename of the blocker file. Will be appended to the state directory. Can have any text-based format
+	filename: String
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -32,7 +33,7 @@ pub enum Command {
 }
 
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
-	let blocker_path = STATE_DIR.get().unwrap().join(BLOCKER_REL_PATH);
+	let blocker_path = STATE_DIR.get().unwrap().join(args.filename);
 	let mut blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
 		.unwrap_or_else(|_| String::new())
 		.split('\n')
