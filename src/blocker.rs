@@ -3,15 +3,17 @@ use color_eyre::eyre::Result;
 
 use crate::config::{AppConfig, STATE_DIR};
 use crate::milestones::SPRINT_HEADER_REL_PATH;
-use crate::config::DATA_DIR;
+use crate::config::{DATA_DIR, CACHE_DIR};
+
+static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 
 #[derive(Debug, Clone, Args)]
 pub struct BlockerArgs {
 	#[command(subcommand)]
 	command: Command,
-	#[arg(short, long, default_value = "blocker.txt")]
+	#[arg(short, long)]
 	/// The filename of the blocker file. Will be appended to the state directory. Can have any text-based format
-	filename: String
+	filename: Option<String>
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -30,16 +32,30 @@ pub enum Command {
 	Current,
 	/// Just open the \`blockers\` file with $EDITOR. Text as interface.
 	Open,
+	/// Set the default `--filename`, for the project you're working on currently.
+	Project { filename: String },
 }
 
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
-	let blocker_path = STATE_DIR.get().unwrap().join(args.filename);
+	let filename = match args.filename {
+		Some(f) => f,
+		None => {
+			let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+			match std::fs::read_to_string(&persisted_project_file) {
+				Ok(s) => s,
+				Err(_) => "blockers.txt".to_string(),
+			}
+		}
+	};
+
+	let blocker_path = STATE_DIR.get().unwrap().join(filename);
 	let mut blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
 		.unwrap_or_else(|_| String::new())
 		.split('\n')
 		.filter(|s| !s.is_empty())
 		.map(|s| s.to_owned())
 		.collect();
+
 
 	match args.command {
 		Command::Add { name } => {
@@ -70,6 +86,10 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			},
 		Command::Open => {
 			v_utils::io::open(&blocker_path)?;
+		}
+		Command::Project { filename } => {
+			let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+			std::fs::write(&state_dir, filename)?;
 		}
 	};
 	Ok(())
