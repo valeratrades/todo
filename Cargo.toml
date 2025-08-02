@@ -34,4 +34,4 @@ xdg = "3.0.0"
 
 [[example]]
 name = "clockify"
-path = "../examples/clockify_api_test.rs"
+path = "examples/clockify_api_test.rs"
