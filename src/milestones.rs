@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
 use reqwest::blocking::Client;
 use v_utils::prelude::*;
@@ -54,7 +55,7 @@ fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 	let sections = todos_url.split("/").collect::<Vec<&str>>();
 	let (owner, repo) = (sections[sections.len() - 2], sections[sections.len() - 1]);
 
-	let url = format!("https://api.github.com/repos/{}/{}/milestones", owner, repo);
+	let url = format!("https://api.github.com/repos/{owner}/{repo}/milestones");
 
 	let client = Client::new();
 	let res = client
@@ -149,50 +150,47 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 fn healthcheck(config: &AppConfig) -> Result<()> {
 	use std::fs;
 
-	let share_dir = share_dir!();
-
-	let healthcheck_path = share_dir.join(HEALTHCHECK_REL_PATH);
+	let healthcheck_path = DATA_DIR.get().unwrap().join(HEALTHCHECK_REL_PATH);
 
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
 		.iter()
 		.map(|tf| get_milestone(*tf, &retrieved_milestones))
 		.collect::<Vec<Result<String, GetMilestoneError>>>();
-{
-
-	let mut health = String::new();
-	for result in &results {
-		match result {
-			Ok(_) => {}
-			Err(e) => {
-				if !health.is_empty() {
-					health.push('\n');
+	{
+		let mut health = String::new();
+		for result in &results {
+			match result {
+				Ok(_) => {}
+				Err(e) => {
+					if !health.is_empty() {
+						health.push('\n');
+					}
+					health.push_str(&e.to_string());
 				}
-				health.push_str(&e.to_string());
 			}
 		}
-	}
 
-	if health.is_empty() {
-		health = "OK".to_string();
-	}
-	println!("{}\n{health}", healthcheck_path.display());
+		if health.is_empty() {
+			health = "OK".to_string();
+		}
+		println!("{}\n{health}", healthcheck_path.display());
 
-	//TODO: switch to v_utils::share_dir
-	fs::write(healthcheck_path, health).unwrap();
+		fs::write(healthcheck_path, health).unwrap();
 	}
 
 	{
-		let sprint_ms = &<std::result::Result<std::string::String, GetMilestoneError> as Clone>::clone(&results[1]).map_err(|e| eyre!("Couldn't parse 2w milestone which MUST be defined: {e}"))?;
-		let sprint_header = sprint_ms.lines().next().ok_or_else(|| eyre!("2w milestone does not have a description. MUST have a description."))?;
+		let sprint_ms =
+			&<std::result::Result<std::string::String, GetMilestoneError> as Clone>::clone(&results[1]).map_err(|e| eyre!("Couldn't parse 2w milestone which MUST be defined: {e}"))?;
+		let sprint_header = sprint_ms
+			.lines()
+			.next()
+			.ok_or_else(|| eyre!("2w milestone does not have a description. MUST have a description."))?;
 		if !sprint_header.starts_with("# ") {
 			eprintln!("2w milestone description does not start with a header. It SHOULD start with '# '.");
 		}
-		fs::write(share_dir.join(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
+		fs::write(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
 	}
-
-
-
 
 	Ok(())
 }

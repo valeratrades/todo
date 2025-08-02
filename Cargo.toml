@@ -13,21 +13,25 @@ undocumented_unsafe_blocks = "warn"
 tabs_in_doc_comments = "allow"
 
 [dependencies]
-chrono = { version = "^0.4.39", features = ["serde"] }
-clap = { version = "^4.5.27", features = ["derive"] }
-clap_complete = "4.5.44"
-color-eyre = "0.6.3"
-config = "^0.15.6"
+chrono = { version = "^0.4.41", features = ["serde"] }
+clap = { version = "^4.5.42", features = ["derive"] }
+clap_complete = "4.5.55"
+color-eyre = "0.6.5"
+config = "^0.15.13"
 derive-new = "^0"
-derive_more = { version = "1.0.0", features = ["from_str", "display"] }
+derive_more = { version = "2.0.1", features = ["from_str", "display"] }
 google-calendar = "^0.7.0"
 pandoc = "^0.8.11"
-reqwest = { version = "^0.12.12", features = ["blocking", "json"] }
-serde = { version = "^1.0.217", features = ["derive"] }
-serde_json = { version = "^1.0.138", features = ["std"] }
-tempfile = "^3.16.0"
-thiserror = "2.0.11"
-tokio = { version = "^1.43.0", features = ["rt", "rt-multi-thread"] }
-v_utils = { version = "^2.3.4", features = ["io", "macros", "trades"]} #ga: rm path
-xattr = "1.4.0"
-xdg = "2.5.2"
+reqwest = { version = "^0.12.22", features = ["blocking", "json"] }
+serde = { version = "^1.0.219", features = ["derive"] }
+serde_json = { version = "^1.0.142", features = ["std"] }
+tempfile = "^3.20.0"
+thiserror = "2.0.12"
+tokio = { version = "^1.47.1", features = ["rt", "rt-multi-thread"] }
+v_utils = { version = "^2.6.8", features = ["io", "macros", "trades"], path = "../v_utils/v_utils" } #ga: rm path
+xattr = "1.5.1"
+xdg = "3.0.0"
+
+[[example]]
+name = "clockify"
+path = "examples/clockify_api_test.rs"

@@ -4,20 +4,9 @@ env:
   RUSTUP_MAX_RETRIES: '10'
   RUST_BACKTRACE: short
 jobs:
-  doc:
-    env:
-      RUSTDOCFLAGS: -Dwarnings
-    if: needs.pre_ci.outputs.continue
-    name: Documentation
-    needs: pre_ci
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@nightly
-    - uses: dtolnay/install@cargo-docs-rs
-    - run: cargo docs-rs
-    timeout-minutes: 45
-  miri:
+  pre_ci:
+    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
+  rust-miri:
     if: needs.pre_ci.outputs.continue
     name: Miri
     needs: pre_ci
@@ -25,14 +14,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@miri
+    - name: Download modified by pre-ci Cargo.toml files
+      uses: actions/download-artifact@v4
+      with:
+        name: modified-cargo-files
     - run: cargo miri setup
     - env:
         MIRIFLAGS: -Zmiri-strict-provenance
       run: cargo miri test
     timeout-minutes: 45
-  pre_ci:
-    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
-  tests:
+  rust-tests:
     if: needs.pre_ci.outputs.continue
     name: Rust ${{matrix.rust}}
     needs: pre_ci
@@ -48,6 +39,10 @@ jobs:
     - if: matrix.rust == 'nightly'
       name: Enable type layout randomization
       run: echo RUSTFLAGS=${RUSTFLAGS}\ -Zrandomize-layout\ --cfg=exhaustive >> $GITHUB_ENV
+    - name: Download modified by pre-ci Cargo.toml files
+      uses: actions/download-artifact@v4
+      with:
+        name: modified-cargo-files
     - run: cargo update
     - run: cargo check
     - run: cargo test
@@ -56,7 +51,7 @@ jobs:
       matrix:
         rust:
         - nightly
-        - nightly-2024-10-10
+        - nightly-2025-08-01
     timeout-minutes: 45
 name: Errors
 'on':
