@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use v_utils::prelude::*;
 
@@ -149,9 +150,7 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 fn healthcheck(config: &AppConfig) -> Result<()> {
 	use std::fs;
 
-	let share_dir = share_dir!();
-
-	let healthcheck_path = share_dir.join(HEALTHCHECK_REL_PATH);
+	let healthcheck_path = DATA_DIR.get().unwrap().join(HEALTHCHECK_REL_PATH);
 
 	let retrieved_milestones = request_milestones(config)?;
 	let results = KEY_MILESTONES
@@ -188,7 +187,7 @@ fn healthcheck(config: &AppConfig) -> Result<()> {
 		if !sprint_header.starts_with("# ") {
 			eprintln!("2w milestone description does not start with a header. It SHOULD start with '# '.");
 		}
-		fs::write(share_dir.join(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
+		fs::write(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
 	}
 
 

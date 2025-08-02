@@ -5,6 +5,7 @@
 **/bin/
 **/*.test
 **/*.out
+**/*.db
 
 ## Personal
 **/_*
@@ -15,13 +16,15 @@ commit-message.txt
 commit_message.txt
 commit-message
 commit_message
+commit
+functions.sh
+
+## Nix
+result
+.direnv/
 
 ## Vim
 *.sw[po]
-
-## Nix
-**/result/
-.direnv/
 
 ## MacOS
 .DS_Store
@@ -51,7 +54,10 @@ venv/
 *.exe~
 *.dll
 
-
+## Web
+**/*.sass-cache/
 ## Rust
-.cargo/config.toml
-.cargo/config
+**/**.pending-snap
+### could be used for initial debugging of apps using `config` crate
+config.toml
+**/rustc-ice*

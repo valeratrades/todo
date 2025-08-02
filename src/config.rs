@@ -46,8 +46,8 @@ impl AppConfig {
 			None => {
 				let app_name = env!("CARGO_PKG_NAME");
 				let app_name = env!("CARGO_PKG_NAME");
-				let xdg_dirs = xdg::BaseDirectories::with_prefix(app_name).unwrap();
-				let xdg_conf_dir = xdg_dirs.get_config_home().parent().unwrap().display().to_string();
+				let xdg_dirs = xdg::BaseDirectories::with_prefix(app_name);
+				let xdg_conf_dir = xdg_dirs.get_config_home().unwrap().parent().unwrap().display().to_string();
 
 				let locations = [
 					format!("{xdg_conf_dir}/{app_name}"),
@@ -82,11 +82,7 @@ impl AppConfig {
 		let state_dir = STATE_DIR.get_or_init(|| std::env::var("XDG_STATE_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
 		let _ = std::fs::create_dir_all(state_dir);
 
-		let cache_dir = CACHE_DIR.get_or_init(|| {
-			std::env::var("XDG_CACHE_HOME")
-				.map(PathBuf::from)
-				.unwrap_or_else(|_| PathBuf::from("~/.cache").join(EXE_NAME))
-		});
+		let cache_dir = CACHE_DIR.get_or_init(|| std::env::var("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("~/.cache").join(EXE_NAME)));
 		let _ = std::fs::create_dir_all(cache_dir);
 
 		if std::env::var("XDG_DATA_HOME").is_err() {
