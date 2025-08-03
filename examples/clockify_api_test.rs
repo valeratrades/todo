@@ -6,16 +6,17 @@ use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use tracing;
 use urlencoding;
 
 #[derive(Parser, Debug)]
 #[command(name = "clockify-start", about = "Start a running Clockify time entry from the CLI")]
 struct Args {
 	/// Description for the time entry
-	#[arg(short, long, default_value = "")]
-	desc: String,
+	#[arg(short, long)]
+	desc: Option<String>,
 
-	/// Workspace ID (if omitted, use the user's active workspace)
+	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
 	workspace: Option<String>,
 
@@ -38,6 +39,14 @@ struct Args {
 	/// List all workspaces
 	#[arg(long)]
 	list_workspaces: bool,
+
+	/// List all projects in workspace
+	#[arg(long)]
+	list_projects: bool,
+
+	/// Stop current running time entry
+	#[arg(long)]
+	stop: bool,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +88,7 @@ struct Tag {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NewTimeEntry {
 	start: String,
 	description: String,
@@ -121,20 +131,35 @@ async fn main() -> Result<()> {
 		return Ok(());
 	}
 
+	if args.list_projects {
+		let workspace_name = args.workspace.as_deref().unwrap_or("default");
+		list_projects(workspace_name).await?;
+		return Ok(());
+	}
+
 	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
+	if args.stop {
+		let workspace_id = match args.workspace {
+			Some(w) => resolve_workspace(&client, &w).await?,
+			None => get_active_workspace(&client).await?,
+		};
+		stop_current_entry_by_id(&workspace_id).await?;
+		return Ok(());
+	}
+
 	let workspace_id = match args.workspace {
-		Some(w) => w,
+		Some(w) => resolve_workspace(&client, &w).await?,
 		None => get_active_workspace(&client).await?,
 	};
 
-	let project_id = if let Some(p) = args.project {
-		Some(resolve_project(&client, &workspace_id, &p).await?)
-	} else {
-		None
-	};
+	// Require project and description for creating time entries
+	let project = args.project.ok_or_else(|| eyre!("--project is required when creating time entries"))?;
+	let description = args.desc.ok_or_else(|| eyre!("--desc is required when creating time entries"))?;
+	
+	let project_id = Some(resolve_project(&client, &workspace_id, &project).await?);
 
 	let task_id = if let Some(t) = args.task {
 		let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
@@ -153,7 +178,7 @@ async fn main() -> Result<()> {
 
 	let payload = NewTimeEntry {
 		start: now,
-		description: args.desc,
+		description,
 		billable: args.billable,
 		project_id,
 		task_id,
@@ -217,19 +242,41 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects?archived=false&name={}", urlencoding::encode(input));
 	let mut projects: Vec<Project> = client.get(url).send().await?.error_for_status()?.json().await?;
 
+	// Exact match first
 	if let Some(p) = projects.iter().find(|p| p.name == input) {
 		return Ok(p.id.clone());
 	}
+	
+	// Exact case-insensitive match
+	if let Some(p) = projects.iter().find(|p| p.name.eq_ignore_ascii_case(input)) {
+		return Ok(p.id.clone());
+	}
+	
+	// Case-insensitive substring match
+	let input_lower = input.to_lowercase();
+	if let Some(p) = projects.iter().find(|p| p.name.to_lowercase().contains(&input_lower)) {
+		return Ok(p.id.clone());
+	}
+	
 	if projects.is_empty() {
 		// Fallback: fetch first 200 active projects and try a loose match
 		let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects?archived=false&page=1&page-size=200");
 		projects = client.get(url).send().await?.error_for_status()?.json().await?;
-		if let Some(p) = projects.iter().find(|p| p.name.eq_ignore_ascii_case(input) || p.name.contains(input)) {
+		
+		// Repeat the same matching logic for the full list
+		if let Some(p) = projects.iter().find(|p| p.name == input) {
+			return Ok(p.id.clone());
+		}
+		if let Some(p) = projects.iter().find(|p| p.name.eq_ignore_ascii_case(input)) {
+			return Ok(p.id.clone());
+		}
+		if let Some(p) = projects.iter().find(|p| p.name.to_lowercase().contains(&input_lower)) {
 			return Ok(p.id.clone());
 		}
 		return Err(eyre!("Project not found: {input}"));
 	}
-	Ok(projects.remove(0).id)
+	
+	Err(eyre!("Project not found: {input}"))
 }
 
 async fn fetch_project_by_id(client: &reqwest::Client, ws: &str, id: &str) -> Result<String> {
@@ -315,6 +362,108 @@ async fn fetch_tags(client: &reqwest::Client, ws: &str) -> Result<Vec<Tag>> {
 	Ok(tags.into_iter().filter(|t| !t.archived).collect())
 }
 
+async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<String> {
+	// If input looks like an ID, try it directly
+	if looks_like_id(input) {
+		return Ok(input.to_string());
+	}
+
+	// Otherwise search by name
+	let workspaces: Vec<Workspace> = client
+		.get("https://api.clockify.me/api/v1/workspaces")
+		.send()
+		.await
+		.wrap_err("Failed to fetch workspaces")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error fetching workspaces")?
+		.json()
+		.await
+		.wrap_err("Failed to parse workspaces response")?;
+
+	// Exact match first
+	if let Some(w) = workspaces.iter().find(|w| w.name == input) {
+		return Ok(w.id.clone());
+	}
+
+	// Exact case-insensitive match
+	if let Some(w) = workspaces.iter().find(|w| w.name.eq_ignore_ascii_case(input)) {
+		return Ok(w.id.clone());
+	}
+
+	// Case-insensitive substring match
+	let input_lower = input.to_lowercase();
+	if let Some(w) = workspaces.iter().find(|w| w.name.to_lowercase().contains(&input_lower)) {
+		return Ok(w.id.clone());
+	}
+
+	Err(eyre!("Workspace not found: {}", input))
+}
+
+async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
+	let api_key = std::env::var("CLOCKIFY_API_KEY")
+		.wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+
+	let client = reqwest::Client::builder()
+		.default_headers(make_headers(&api_key)?)
+		.build()?;
+
+	// workspace_id is already provided
+
+	// Get current running time entry
+	let user: User = client
+		.get("https://api.clockify.me/api/v1/user")
+		.send()
+		.await
+		.wrap_err("Failed to fetch user")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error fetching user")?
+		.json()
+		.await
+		.wrap_err("Failed to parse user response")?;
+
+	// Check for running time entry
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?in-progress=true", workspace_id, user.active_workspace);
+	let running_entries: Vec<CreatedEntry> = client
+		.get(&url)
+		.send()
+		.await
+		.wrap_err("Failed to fetch running time entries")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error fetching running entries")?
+		.json()
+		.await
+		.wrap_err("Failed to parse running entries response")?;
+
+	if running_entries.is_empty() {
+		tracing::warn!("No running time entry found - already stopped");
+		return Ok(());
+	}
+
+	let entry = &running_entries[0];
+	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+	// Stop the time entry
+	let stop_url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries/{}", workspace_id, entry.id);
+	let stop_payload = serde_json::json!({
+		"end": now
+	});
+
+	let _: CreatedEntry = client
+		.put(&stop_url)
+		.json(&stop_payload)
+		.send()
+		.await
+		.wrap_err("Failed to stop time entry")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error stopping the time entry")?
+		.json()
+		.await
+		.wrap_err("Failed to parse stop response")?;
+
+	println!("Stopped time entry: {} - {}", entry.id, entry.description);
+	Ok(())
+}
+
 async fn list_workspaces() -> Result<()> {
 	let api_key = std::env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 
@@ -334,6 +483,41 @@ async fn list_workspaces() -> Result<()> {
 	println!("Your workspaces:");
 	for workspace in workspaces {
 		println!("  {} - {}", workspace.id, workspace.name);
+	}
+
+	Ok(())
+}
+
+async fn list_projects(workspace_input: &str) -> Result<()> {
+	let api_key = std::env::var("CLOCKIFY_API_KEY")
+		.wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+
+	let client = reqwest::Client::builder()
+		.default_headers(make_headers(&api_key)?)
+		.build()?;
+
+	let workspace_id = if workspace_input == "default" {
+		get_active_workspace(&client).await?
+	} else {
+		resolve_workspace(&client, workspace_input).await?
+	};
+
+	// Get all projects in the workspace
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects?archived=false&page-size=200", workspace_id);
+	let projects: Vec<Project> = client
+		.get(&url)
+		.send()
+		.await
+		.wrap_err("Failed to fetch projects")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error fetching projects")?
+		.json()
+		.await
+		.wrap_err("Failed to parse projects response")?;
+
+	println!("Projects in workspace {}:", workspace_id);
+	for project in projects {
+		println!("  {} - {} (archived: {})", project.id, project.name, project.archived);
 	}
 
 	Ok(())
