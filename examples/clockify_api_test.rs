@@ -1,11 +1,12 @@
 // src/main.rs
 use std::env;
 
-use anyhow::{anyhow, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use clap::Parser;
+use color_eyre::eyre::{eyre, Result, WrapErr};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use urlencoding;
 
 #[derive(Parser, Debug)]
 #[command(name = "clockify-start", about = "Start a running Clockify time entry from the CLI")]
@@ -33,12 +34,22 @@ struct Args {
 	/// Mark entry as billable
 	#[arg(short = 'b', long, default_value_t = false)]
 	billable: bool,
+
+	/// List all workspaces
+	#[arg(long)]
+	list_workspaces: bool,
 }
 
 #[derive(Deserialize)]
 struct User {
 	#[serde(rename = "activeWorkspace")]
 	active_workspace: String,
+}
+
+#[derive(Deserialize)]
+struct Workspace {
+	id: String,
+	name: String,
 }
 
 #[derive(Deserialize)]
@@ -73,11 +84,11 @@ struct NewTimeEntry {
 	description: String,
 	billable: bool,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	projectId: Option<String>,
+	project_id: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	taskId: Option<String>,
+	task_id: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	tagIds: Option<Vec<String>>,
+	tag_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -102,9 +113,15 @@ struct TimeInterval {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+	color_eyre::install()?;
 	let args = Args::parse();
 
-	let api_key = env::var("CLOCKIFY_API_KEY").context("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	if args.list_workspaces {
+		list_workspaces().await?;
+		return Ok(());
+	}
+
+	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
@@ -120,7 +137,7 @@ async fn main() -> Result<()> {
 	};
 
 	let task_id = if let Some(t) = args.task {
-		let pid = project_id.as_ref().ok_or_else(|| anyhow!("--task requires --project to be set"))?;
+		let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
 		Some(resolve_task(&client, &workspace_id, pid, &t).await?)
 	} else {
 		None
@@ -138,9 +155,9 @@ async fn main() -> Result<()> {
 		start: now,
 		description: args.desc,
 		billable: args.billable,
-		projectId: project_id,
-		taskId: task_id,
-		tagIds: tag_ids,
+		project_id,
+		task_id,
+		tag_ids,
 	};
 
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
@@ -150,12 +167,12 @@ async fn main() -> Result<()> {
 		.json(&payload)
 		.send()
 		.await
-		.context("Failed to create time entry")?
+		.wrap_err("Failed to create time entry")?
 		.error_for_status()
-		.context("Clockify API returned an error creating the time entry")?
+		.wrap_err("Clockify API returned an error creating the time entry")?
 		.json()
 		.await
-		.context("Failed to parse Clockify response")?;
+		.wrap_err("Failed to parse Clockify response")?;
 
 	println!("Started entry:");
 	println!("  id: {}", created.id);
@@ -170,7 +187,7 @@ async fn main() -> Result<()> {
 
 fn make_headers(api_key: &str) -> Result<HeaderMap> {
 	let mut h = HeaderMap::new();
-	h.insert("X-Api-Key", HeaderValue::from_str(api_key).context("Invalid CLOCKIFY_API_KEY value")?);
+	h.insert("X-Api-Key", HeaderValue::from_str(api_key).wrap_err("Invalid CLOCKIFY_API_KEY value")?);
 	h.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
 	Ok(h)
 }
@@ -180,12 +197,12 @@ async fn get_active_workspace(client: &reqwest::Client) -> Result<String> {
 		.get("https://api.clockify.me/api/v1/user")
 		.send()
 		.await
-		.context("Failed to fetch user")?
+		.wrap_err("Failed to fetch user")?
 		.error_for_status()
-		.context("Clockify API returned an error fetching user")?
+		.wrap_err("Clockify API returned an error fetching user")?
 		.json()
 		.await
-		.context("Failed to parse user response")?;
+		.wrap_err("Failed to parse user response")?;
 	Ok(user.active_workspace)
 }
 
@@ -210,7 +227,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 		if let Some(p) = projects.iter().find(|p| p.name.eq_ignore_ascii_case(input) || p.name.contains(input)) {
 			return Ok(p.id.clone());
 		}
-		return Err(anyhow!("Project not found: {}", input));
+		return Err(eyre!("Project not found: {}", input));
 	}
 	Ok(projects.remove(0).id)
 }
@@ -237,7 +254,7 @@ async fn resolve_task(client: &reqwest::Client, ws: &str, project_id: &str, inpu
 	if let Some(t) = tasks.iter().find(|t| t.name.eq_ignore_ascii_case(input) || t.name.contains(input)) {
 		return Ok(t.id.clone());
 	}
-	Err(anyhow!("Task not found in project {}: {}", project_id, input))
+	Err(eyre!("Task not found in project {}: {}", project_id, input))
 }
 
 async fn fetch_task_by_id(client: &reqwest::Client, ws: &str, project_id: &str, id: &str) -> Result<String> {
@@ -270,7 +287,7 @@ async fn resolve_tags(client: &reqwest::Client, ws: &str, input: &str) -> Result
 		let all = fetch_tags(client, ws).await?;
 		for id in ids.clone() {
 			if !all.iter().any(|t| t.id == id) {
-				return Err(anyhow!("Tag ID not found: {}", id));
+				return Err(eyre!("Tag ID not found: {}", id));
 			}
 		}
 	}
@@ -284,7 +301,7 @@ async fn resolve_tags(client: &reqwest::Client, ws: &str, input: &str) -> Result
 			} else if let Some(t) = all.iter().find(|t| t.name.eq_ignore_ascii_case(&n) || t.name.contains(&n)) {
 				ids.push(t.id.clone());
 			} else {
-				return Err(anyhow!("Tag not found: {}", n));
+				return Err(eyre!("Tag not found: {}", n));
 			}
 		}
 	}
@@ -296,6 +313,30 @@ async fn fetch_tags(client: &reqwest::Client, ws: &str) -> Result<Vec<Tag>> {
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/tags?page-size=200", ws);
 	let tags: Vec<Tag> = client.get(url).send().await?.error_for_status()?.json().await?;
 	Ok(tags.into_iter().filter(|t| !t.archived).collect())
+}
+
+async fn list_workspaces() -> Result<()> {
+	let api_key = std::env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
+
+	let workspaces: Vec<Workspace> = client
+		.get("https://api.clockify.me/api/v1/workspaces")
+		.send()
+		.await
+		.wrap_err("Failed to fetch workspaces")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error fetching workspaces")?
+		.json()
+		.await
+		.wrap_err("Failed to parse workspaces response")?;
+
+	println!("Your workspaces:");
+	for workspace in workspaces {
+		println!("  {} - {}", workspace.id, workspace.name);
+	}
+
+	Ok(())
 }
 
 fn looks_like_id(s: &str) -> bool {
