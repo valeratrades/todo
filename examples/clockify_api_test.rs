@@ -51,6 +51,7 @@ struct Args {
 
 #[derive(Deserialize)]
 struct User {
+	id: String,
 	#[serde(rename = "activeWorkspace")]
 	active_workspace: String,
 }
@@ -142,10 +143,8 @@ async fn main() -> Result<()> {
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
 	if args.stop {
-		let workspace_id = match args.workspace {
-			Some(w) => resolve_workspace(&client, &w).await?,
-			None => get_active_workspace(&client).await?,
-		};
+		let workspace = args.workspace.ok_or_else(|| eyre!("--workspace is required when stopping time entries"))?;
+		let workspace_id = resolve_workspace(&client, &workspace).await?;
 		stop_current_entry_by_id(&workspace_id).await?;
 		return Ok(());
 	}
@@ -158,7 +157,7 @@ async fn main() -> Result<()> {
 	// Require project and description for creating time entries
 	let project = args.project.ok_or_else(|| eyre!("--project is required when creating time entries"))?;
 	let description = args.desc.ok_or_else(|| eyre!("--desc is required when creating time entries"))?;
-	
+
 	let project_id = Some(resolve_project(&client, &workspace_id, &project).await?);
 
 	let task_id = if let Some(t) = args.task {
@@ -246,23 +245,23 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 	if let Some(p) = projects.iter().find(|p| p.name == input) {
 		return Ok(p.id.clone());
 	}
-	
+
 	// Exact case-insensitive match
 	if let Some(p) = projects.iter().find(|p| p.name.eq_ignore_ascii_case(input)) {
 		return Ok(p.id.clone());
 	}
-	
+
 	// Case-insensitive substring match
 	let input_lower = input.to_lowercase();
 	if let Some(p) = projects.iter().find(|p| p.name.to_lowercase().contains(&input_lower)) {
 		return Ok(p.id.clone());
 	}
-	
+
 	if projects.is_empty() {
 		// Fallback: fetch first 200 active projects and try a loose match
 		let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects?archived=false&page=1&page-size=200");
 		projects = client.get(url).send().await?.error_for_status()?.json().await?;
-		
+
 		// Repeat the same matching logic for the full list
 		if let Some(p) = projects.iter().find(|p| p.name == input) {
 			return Ok(p.id.clone());
@@ -275,7 +274,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 		}
 		return Err(eyre!("Project not found: {input}"));
 	}
-	
+
 	Err(eyre!("Project not found: {input}"))
 }
 
@@ -400,16 +399,11 @@ async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<Stri
 }
 
 async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
-	let api_key = std::env::var("CLOCKIFY_API_KEY")
-		.wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	let api_key = std::env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 
-	let client = reqwest::Client::builder()
-		.default_headers(make_headers(&api_key)?)
-		.build()?;
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
-	// workspace_id is already provided
-
-	// Get current running time entry
+	// Get user ID first
 	let user: User = client
 		.get("https://api.clockify.me/api/v1/user")
 		.send()
@@ -421,25 +415,36 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 		.await
 		.wrap_err("Failed to parse user response")?;
 
-	// Check for running time entry
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?in-progress=true", workspace_id, user.active_workspace);
-	let running_entries: Vec<CreatedEntry> = client
+	println!("User ID: {}", user.id);
+
+	// Try the alternative endpoint: get recent time entries and filter for running ones
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?page-size=10", workspace_id, user.id);
+	println!("Checking for recent time entries at: {}", url);
+
+	let entries: Vec<CreatedEntry> = client
 		.get(&url)
 		.send()
 		.await
-		.wrap_err("Failed to fetch running time entries")?
+		.wrap_err("Failed to fetch time entries")?
 		.error_for_status()
-		.wrap_err("Clockify API returned an error fetching running entries")?
+		.wrap_err("Clockify API returned an error fetching time entries")?
 		.json()
 		.await
-		.wrap_err("Failed to parse running entries response")?;
+		.wrap_err("Failed to parse time entries response")?;
 
-	if running_entries.is_empty() {
-		tracing::warn!("No running time entry found - already stopped");
+	println!("Found {} recent entries", entries.len());
+
+	// Find running entry (one without end time)
+	let running_entry = entries.iter().find(|entry| entry.time_interval.end.is_none());
+
+	if let Some(entry) = running_entry {
+		println!("Found running entry: {} - {}", entry.id, entry.description);
+	} else {
+		println!("No running time entry found - already stopped");
 		return Ok(());
 	}
 
-	let entry = &running_entries[0];
+	let entry = running_entry.unwrap();
 	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
 	// Stop the time entry
@@ -489,12 +494,9 @@ async fn list_workspaces() -> Result<()> {
 }
 
 async fn list_projects(workspace_input: &str) -> Result<()> {
-	let api_key = std::env::var("CLOCKIFY_API_KEY")
-		.wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	let api_key = std::env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 
-	let client = reqwest::Client::builder()
-		.default_headers(make_headers(&api_key)?)
-		.build()?;
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
 	let workspace_id = if workspace_input == "default" {
 		get_active_workspace(&client).await?
