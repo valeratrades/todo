@@ -395,7 +395,7 @@ async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<Stri
 		return Ok(w.id.clone());
 	}
 
-	Err(eyre!("Workspace not found: {}", input))
+	Err(eyre!("Workspace not found: {input}"))
 }
 
 async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
@@ -418,7 +418,7 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 	println!("User ID: {}", user.id);
 
 	// Try the alternative endpoint: get recent time entries and filter for running ones
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?page-size=10", workspace_id, user.id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/user/{}/time-entries?page-size=10", user.id);
 	println!("Checking for recent time entries at: {}", url);
 
 	let entries: Vec<CreatedEntry> = client
@@ -447,9 +447,14 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 	let entry = running_entry.unwrap();
 	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
-	// Stop the time entry
-	let stop_url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries/{}", workspace_id, entry.id);
+	// Stop the time entry using the correct endpoint
+	let stop_url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/time-entries/{}", entry.id);
 	let stop_payload = serde_json::json!({
+		"start": entry.time_interval.start,
+		"billable": false,
+		"description": entry.description,
+		"projectId": entry.project_id,
+		"taskId": entry.task_id,
 		"end": now
 	});
 
