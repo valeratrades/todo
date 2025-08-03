@@ -3,7 +3,7 @@ use std::env;
 
 use chrono::{SecondsFormat, Utc};
 use clap::Parser;
-use color_eyre::eyre::{eyre, Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use urlencoding;
@@ -214,7 +214,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 		}
 	}
 	// Otherwise search by name (exact, then case-insensitive substring)
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects?archived=false&name={}", ws, urlencoding::encode(input));
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects?archived=false&name={}", urlencoding::encode(input));
 	let mut projects: Vec<Project> = client.get(url).send().await?.error_for_status()?.json().await?;
 
 	if let Some(p) = projects.iter().find(|p| p.name == input) {
@@ -222,12 +222,12 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 	}
 	if projects.is_empty() {
 		// Fallback: fetch first 200 active projects and try a loose match
-		let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects?archived=false&page=1&page-size=200", ws);
+		let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects?archived=false&page=1&page-size=200");
 		projects = client.get(url).send().await?.error_for_status()?.json().await?;
 		if let Some(p) = projects.iter().find(|p| p.name.eq_ignore_ascii_case(input) || p.name.contains(input)) {
 			return Ok(p.id.clone());
 		}
-		return Err(eyre!("Project not found: {}", input));
+		return Err(eyre!("Project not found: {input}"));
 	}
 	Ok(projects.remove(0).id)
 }
