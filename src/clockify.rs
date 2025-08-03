@@ -1,23 +1,22 @@
-// src/main.rs
 use std::env;
 
 use chrono::{SecondsFormat, Utc};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use tracing;
 use urlencoding;
 
-#[derive(Parser, Debug)]
-#[command(name = "clockify", about = "Clockify time tracking CLI")]
-struct Args {
+use crate::config::AppConfig;
+
+#[derive(Debug, Clone, Args)]
+pub struct ClockifyArgs {
 	#[command(subcommand)]
-	command: Commands,
+	command: Command,
 }
 
-#[derive(Parser, Debug)]
-enum Commands {
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
 	/// Start a new time entry
 	Start(StartArgs),
 	/// Stop the currently running time entry
@@ -28,44 +27,44 @@ enum Commands {
 	ListProjects(ListProjectsArgs),
 }
 
-#[derive(Parser, Debug)]
-struct StartArgs {
+#[derive(Parser, Debug, Clone)]
+pub struct StartArgs {
 	/// Description for the time entry
-	description: String,
+	pub description: String,
 
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
-	workspace: Option<String>,
+	pub workspace: Option<String>,
 
 	/// Project ID or name (name will be resolved if no exact ID match found)
 	#[arg(short = 'p', long)]
-	project: Option<String>,
+	pub project: Option<String>,
 
 	/// Task ID or name (requires --project; name will be resolved)
 	#[arg(short = 't', long)]
-	task: Option<String>,
+	pub task: Option<String>,
 
 	/// Comma-separated tag IDs or names (names will be resolved)
 	#[arg(short = 'g', long)]
-	tags: Option<String>,
+	pub tags: Option<String>,
 
 	/// Mark entry as billable
 	#[arg(short = 'b', long, default_value_t = false)]
-	billable: bool,
+	pub billable: bool,
 }
 
-#[derive(Parser, Debug)]
-struct StopArgs {
+#[derive(Parser, Debug, Clone)]
+pub struct StopArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
-	workspace: Option<String>,
+	pub workspace: Option<String>,
 }
 
-#[derive(Parser, Debug)]
-struct ListProjectsArgs {
+#[derive(Parser, Debug, Clone)]
+pub struct ListProjectsArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
-	workspace: Option<String>,
+	pub workspace: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -141,93 +140,91 @@ struct TimeInterval {
 	end: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-	color_eyre::install()?;
-	let args = Args::parse();
+pub fn main(_config: AppConfig, args: ClockifyArgs) -> Result<()> {
+	tokio::runtime::Runtime::new()?.block_on(async {
+		match args.command {
+			Command::ListWorkspaces => {
+				list_workspaces().await?;
+			}
+			Command::ListProjects(list_args) => {
+				let workspace_name = list_args.workspace.as_deref().unwrap_or("default");
+				list_projects(workspace_name).await?;
+			}
+			Command::Stop(stop_args) => {
+				let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+				let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
+				
+				let workspace_id = match stop_args.workspace {
+					Some(w) => resolve_workspace(&client, &w).await?,
+					None => get_active_workspace(&client).await?,
+				};
+				
+				stop_current_entry_by_id(&workspace_id).await?;
+			}
+			Command::Start(start_args) => {
+				let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+				let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
-	match args.command {
-		Commands::ListWorkspaces => {
-			list_workspaces().await?;
+				let workspace_id = match start_args.workspace {
+					Some(w) => resolve_workspace(&client, &w).await?,
+					None => get_active_workspace(&client).await?,
+				};
+
+				// Require project for creating time entries
+				let project = start_args.project.ok_or_else(|| eyre!("--project is required when creating time entries"))?;
+
+				let project_id = Some(resolve_project(&client, &workspace_id, &project).await?);
+
+				let task_id = if let Some(t) = start_args.task {
+					let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
+					Some(resolve_task(&client, &workspace_id, pid, &t).await?)
+				} else {
+					None
+				};
+
+				let tag_ids = if let Some(t) = start_args.tags {
+					Some(resolve_tags(&client, &workspace_id, &t).await?)
+				} else {
+					None
+				};
+
+				let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+				let payload = NewTimeEntry {
+					start: now,
+					description: start_args.description,
+					billable: start_args.billable,
+					project_id,
+					task_id,
+					tag_ids,
+				};
+
+				let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
+
+				let created: CreatedEntry = client
+					.post(url)
+					.json(&payload)
+					.send()
+					.await
+					.wrap_err("Failed to create time entry")?
+					.error_for_status()
+					.wrap_err("Clockify API returned an error creating the time entry")?
+					.json()
+					.await
+					.wrap_err("Failed to parse Clockify response")?;
+
+				println!("Started entry:");
+				println!("  id: {}", created.id);
+				println!("  description: {}", created.description);
+				println!("  start: {}", created.time_interval.start);
+				println!("  project: {}", created.project_id.as_deref().unwrap_or("<none>"));
+				println!("  task: {}", created.task_id.as_deref().unwrap_or("<none>"));
+				println!("  workspace: {}", created.workspace_id);
+			}
 		}
-		Commands::ListProjects(list_args) => {
-			let workspace_name = list_args.workspace.as_deref().unwrap_or("default");
-			list_projects(workspace_name).await?;
-		}
-		Commands::Stop(stop_args) => {
-			let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
-			let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
-			let workspace_id = match stop_args.workspace {
-				Some(w) => resolve_workspace(&client, &w).await?,
-				None => get_active_workspace(&client).await?,
-			};
-
-			stop_current_entry_by_id(&workspace_id).await?;
-		}
-		Commands::Start(start_args) => {
-			let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
-			let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
-
-			let workspace_id = match start_args.workspace {
-				Some(w) => resolve_workspace(&client, &w).await?,
-				None => get_active_workspace(&client).await?,
-			};
-
-			// Require project for creating time entries
-			let project = start_args.project.ok_or_else(|| eyre!("--project is required when creating time entries"))?;
-
-			let project_id = Some(resolve_project(&client, &workspace_id, &project).await?);
-
-			let task_id = if let Some(t) = start_args.task {
-				let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
-				Some(resolve_task(&client, &workspace_id, pid, &t).await?)
-			} else {
-				None
-			};
-
-			let tag_ids = if let Some(t) = start_args.tags {
-				Some(resolve_tags(&client, &workspace_id, &t).await?)
-			} else {
-				None
-			};
-
-			let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-
-			let payload = NewTimeEntry {
-				start: now,
-				description: start_args.description,
-				billable: start_args.billable,
-				project_id,
-				task_id,
-				tag_ids,
-			};
-
-			let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
-
-			let created: CreatedEntry = client
-				.post(url)
-				.json(&payload)
-				.send()
-				.await
-				.wrap_err("Failed to create time entry")?
-				.error_for_status()
-				.wrap_err("Clockify API returned an error creating the time entry")?
-				.json()
-				.await
-				.wrap_err("Failed to parse Clockify response")?;
-
-			println!("Started entry:");
-			println!("  id: {}", created.id);
-			println!("  description: {}", created.description);
-			println!("  start: {}", created.time_interval.start);
-			println!("  project: {}", created.project_id.as_deref().unwrap_or("<none>"));
-			println!("  task: {}", created.task_id.as_deref().unwrap_or("<none>"));
-			println!("  workspace: {}", created.workspace_id);
-		}
-	}
-
-	Ok(())
+		Ok(())
+	})
 }
 
 fn make_headers(api_key: &str) -> Result<HeaderMap> {
@@ -416,7 +413,7 @@ async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<Stri
 		return Ok(w.id.clone());
 	}
 
-	Err(eyre!("Workspace not found: {input}"))
+	Err(eyre!("Workspace not found: {}", input))
 }
 
 async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
@@ -439,7 +436,7 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 	println!("User ID: {}", user.id);
 
 	// Try the alternative endpoint: get recent time entries and filter for running ones
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/user/{}/time-entries?page-size=10", user.id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?page-size=10", workspace_id, user.id);
 	println!("Checking for recent time entries at: {}", url);
 
 	let entries: Vec<CreatedEntry> = client
@@ -469,7 +466,7 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
 	// Stop the time entry using the correct endpoint
-	let stop_url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/time-entries/{}", entry.id);
+	let stop_url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries/{}", workspace_id, entry.id);
 	let stop_payload = serde_json::json!({
 		"start": entry.time_interval.start,
 		"billable": false,

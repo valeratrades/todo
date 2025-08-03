@@ -1,6 +1,8 @@
 #![allow(clippy::len_zero)]
 mod activity_monitor;
 mod blocker;
+#[cfg(feature = "urlencoding")]
+mod clockify;
 pub mod config;
 pub mod day_section;
 mod manual_stats;
@@ -65,6 +67,9 @@ enum Commands {
 	Init(shell_init::ShellInitArgs),
 	/// Blockers tree
 	Blocker(blocker::BlockerArgs),
+	/// Clockify time tracking
+	#[cfg(feature = "urlencoding")]
+	Clockify(clockify::ClockifyArgs),
 }
 #[derive(Args)]
 struct NoArgs {}
@@ -98,6 +103,8 @@ fn main() {
 			Ok(())
 		}
 		Commands::Blocker(args) => blocker::main(config, args),
+		#[cfg(feature = "urlencoding")]
+		Commands::Clockify(args) => clockify::main(config, args),
 	};
 
 	match success {
