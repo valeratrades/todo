@@ -13,13 +13,19 @@ static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 static LEGACY_PROJECT_ID: &str = "66d83316b6114535ad872316";
 
 // Helper function to process filename for use as project name
-fn process_filename_as_project(filename: &str) -> String {
+fn process_filename_as_project(relative_path: &str) -> String {
+	// Extract filename from path (everything after the last slash, or the whole string if no slash)
+	let filename = match relative_path.rfind('/') {
+		Some(pos) => &relative_path[pos + 1..],
+		None => relative_path,
+	};
+
 	// Strip file extension
 	let name_without_ext = match filename.rfind('.') {
 		Some(pos) => &filename[..pos],
 		None => filename,
 	};
-	
+
 	// Convert underscores to spaces
 	name_without_ext.replace('_', " ")
 }
@@ -81,7 +87,6 @@ pub struct ListProjectsArgs {
 	#[arg(short = 'w', long)]
 	pub workspace: Option<String>,
 }
-
 
 #[derive(Deserialize)]
 struct User {
@@ -156,16 +161,8 @@ struct TimeInterval {
 	end: Option<String>,
 }
 
-
 // Public functions for use by other modules
-pub async fn start_time_entry(
-	workspace: &str,
-	project: &str,
-	description: String,
-	task: Option<&str>,
-	tags: Option<&str>,
-	billable: bool,
-) -> Result<()> {
+pub async fn start_time_entry(workspace: &str, project: &str, description: String, task: Option<&str>, tags: Option<&str>, billable: bool) -> Result<()> {
 	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
@@ -179,11 +176,7 @@ pub async fn start_time_entry(
 		None
 	};
 
-	let tag_ids = if let Some(t) = tags {
-		Some(resolve_tags(&client, &workspace_id, t).await?)
-	} else {
-		None
-	};
+	let tag_ids = if let Some(t) = tags { Some(resolve_tags(&client, &workspace_id, t).await?) } else { None };
 
 	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
@@ -224,7 +217,7 @@ pub async fn start_time_entry(
 pub async fn stop_time_entry(workspace: &str) -> Result<()> {
 	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
-	
+
 	let workspace_id = resolve_workspace(&client, workspace).await?;
 	stop_current_entry_by_id(&workspace_id).await?;
 
@@ -265,7 +258,7 @@ pub async fn start_time_entry_with_defaults(
 				}
 			}
 		};
-		
+
 		println!("Using legacy mode with project ID: {} and prefix: {}", LEGACY_PROJECT_ID, project_prefix);
 		let prefixed_description = format!("{}: {}", project_prefix, description);
 		(Some(LEGACY_PROJECT_ID.to_string()), prefixed_description)
@@ -277,22 +270,22 @@ pub async fn start_time_entry_with_defaults(
 		} else {
 			None
 		};
-		
+
 		let processed_project = cached_project.as_ref().map(|filename| process_filename_as_project(filename));
-		
+
 		let project_name = match project {
 			Some(p) => p,
-			None => {
-				match &processed_project {
-					Some(processed) => {
-						println!("Using cached project (processed from filename): {}", processed);
-						processed.as_str()
-					},
-					None => {
-						return Err(eyre!("--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'"));
-					}
+			None => match &processed_project {
+				Some(processed) => {
+					println!("Using cached project (processed from filename): {}", processed);
+					processed.as_str()
 				}
-			}
+				None => {
+					return Err(eyre!(
+						"--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'"
+					));
+				}
+			},
 		};
 
 		let resolved_project_id = resolve_project(&client, &workspace_id, project_name).await?;
@@ -306,11 +299,7 @@ pub async fn start_time_entry_with_defaults(
 		None
 	};
 
-	let tag_ids = if let Some(t) = tags {
-		Some(resolve_tags(&client, &workspace_id, t).await?)
-	} else {
-		None
-	};
+	let tag_ids = if let Some(t) = tags { Some(resolve_tags(&client, &workspace_id, t).await?) } else { None };
 
 	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
@@ -351,13 +340,13 @@ pub async fn start_time_entry_with_defaults(
 pub async fn stop_time_entry_with_defaults(workspace: Option<&str>) -> Result<()> {
 	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
-	
+
 	// Resolve workspace - use active workspace if not provided
 	let workspace_id = match workspace {
 		Some(w) => resolve_workspace(&client, w).await?,
 		None => get_active_workspace(&client).await?,
 	};
-	
+
 	stop_current_entry_by_id(&workspace_id).await?;
 
 	Ok(())
@@ -376,12 +365,12 @@ pub fn main(_config: AppConfig, args: ClockifyArgs) -> Result<()> {
 			Command::Stop(stop_args) => {
 				let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 				let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
-				
+
 				let workspace_id = match stop_args.workspace {
 					Some(w) => resolve_workspace(&client, &w).await?,
 					None => get_active_workspace(&client).await?,
 				};
-				
+
 				stop_current_entry_by_id(&workspace_id).await?;
 			}
 			Command::Start(start_args) => {
