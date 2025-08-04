@@ -13,6 +13,7 @@ use crate::{
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
 static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
+static BLOCKER_CURRENT_CACHE_FILENAME: &str = "blocker_current_cache.txt";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkspaceSettings {
@@ -115,6 +116,38 @@ fn set_blocker_tracking_state(enabled: bool) -> Result<()> {
 	Ok(())
 }
 
+fn get_current_blocker_cache_path(relative_path: &str) -> std::path::PathBuf {
+	let cache_key = relative_path.replace('/', "_");
+	CACHE_DIR.get().unwrap().join(format!("{}_{}", cache_key, BLOCKER_CURRENT_CACHE_FILENAME))
+}
+
+fn save_current_blocker_cache(relative_path: &str, current_blocker: Option<String>) -> Result<()> {
+	let cache_path = get_current_blocker_cache_path(relative_path);
+	match current_blocker {
+		Some(blocker) => std::fs::write(&cache_path, blocker)?,
+		None => {
+			let _ = std::fs::remove_file(&cache_path);
+		}
+	}
+	Ok(())
+}
+
+fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
+	let cache_path = get_current_blocker_cache_path(relative_path);
+	std::fs::read_to_string(&cache_path).ok()
+}
+
+fn get_current_blocker(relative_path: &str) -> Option<String> {
+	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
+		.unwrap_or_else(|_| String::new())
+		.split('\n')
+		.filter(|s| !s.is_empty())
+		.map(|s| s.to_owned())
+		.collect();
+	blockers.last().cloned()
+}
+
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 	let slash_count = relative_path.matches('/').count();
 
@@ -200,6 +233,52 @@ async fn start_tracking_for_task(description: String, relative_path: &str, resum
 	.await
 }
 
+fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
+	use std::process::Command;
+
+	let current_exe = std::env::current_exe()?;
+
+	Command::new(current_exe)
+		.args(&["blocker", "current", "--relative_path", &relative_path])
+		.env("_BLOCKER_BACKGROUND_CHECK", "1")
+		.spawn()?;
+
+	Ok(())
+}
+
+fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
+	let cached_current = load_current_blocker_cache(relative_path);
+	let actual_current = get_current_blocker(relative_path);
+
+	if cached_current != actual_current {
+		if is_blocker_tracking_enabled() {
+			let workspace_from_path = parse_workspace_from_path(relative_path)?;
+
+			tokio::runtime::Runtime::new()?.block_on(async {
+				let _ = stop_current_tracking(workspace_from_path.as_deref()).await;
+
+				if let Some(new_task) = &actual_current {
+					let default_resume_args = ResumeArgs {
+						workspace: None,
+						project: None,
+						task: None,
+						tags: None,
+						billable: false,
+					};
+
+					if let Err(e) = start_tracking_for_task(new_task.clone(), relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
+						eprintln!("Warning: Failed to start tracking for updated task: {}", e);
+					}
+				}
+			});
+		}
+
+		save_current_blocker_cache(relative_path, actual_current)?;
+	}
+
+	Ok(())
+}
+
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	let relative_path = match args.relative_path {
 		Some(f) => f,
@@ -211,6 +290,11 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			}
 		}
 	};
+
+	// Handle background blocker check
+	if std::env::var("_BLOCKER_BACKGROUND_CHECK").is_ok() {
+		return handle_background_blocker_check(&relative_path);
+	}
 
 	// Parse workspace from path if it contains a slash
 	let workspace_from_path = parse_workspace_from_path(&relative_path)?;
@@ -234,6 +318,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			blockers.push(name.clone());
 			std::fs::write(&blocker_path, blockers.join("\n"))?;
+
+			// Save current blocker to cache
+			save_current_blocker_cache(&relative_path, Some(name.clone()))?;
 
 			// If tracking is enabled, start tracking the new task
 			if is_blocker_tracking_enabled() {
@@ -262,6 +349,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			blockers.pop();
 			std::fs::write(&blocker_path, blockers.join("\n"))?;
+
+			// Save current blocker to cache
+			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
 
 			// If tracking is enabled and there's still a task, start tracking it
 			if is_blocker_tracking_enabled() {
@@ -301,7 +391,14 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				}
 			},
 		Command::Open => {
+			// Save current blocker state to cache before opening
+			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
+
+			// Open the file
 			v_utils::io::open(&blocker_path)?;
+
+			// Spawn background process to check for changes after editor closes
+			spawn_blocker_comparison_process(relative_path.clone())?;
 		}
 		Command::Project { relative_path } => {
 			// Validate the path before saving
