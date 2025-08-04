@@ -239,7 +239,7 @@ fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 	let current_exe = std::env::current_exe()?;
 
 	Command::new(current_exe)
-		.args(&["blocker", "--relative_path", &relative_path, "current"])
+		.args(&["blocker", "--relative-path", &relative_path, "current"])
 		.env("_BLOCKER_BACKGROUND_CHECK", "1")
 		.spawn()?;
 
