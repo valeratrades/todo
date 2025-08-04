@@ -1,5 +1,8 @@
+use std::{collections::HashMap, io::Write};
+
 use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, eyre};
+use serde::{Deserialize, Serialize};
 
 use crate::{
 	clockify,
@@ -9,6 +12,23 @@ use crate::{
 
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
+static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkspaceSettings {
+	legacy: bool,
+}
+
+impl Default for WorkspaceSettings {
+	fn default() -> Self {
+		Self { legacy: false }
+	}
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct WorkspaceCache {
+	workspaces: HashMap<String, WorkspaceSettings>,
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct BlockerArgs {
@@ -64,10 +84,6 @@ pub struct ResumeArgs {
 	/// Mark entry as billable
 	#[arg(short = 'b', long, default_value_t = false)]
 	pub billable: bool,
-
-	/// Use legacy mode: hardcoded project ID with filename as description prefix
-	#[arg(long)]
-	pub legacy: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -101,7 +117,7 @@ fn set_blocker_tracking_state(enabled: bool) -> Result<()> {
 
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 	let slash_count = relative_path.matches('/').count();
-	
+
 	if slash_count == 0 {
 		Ok(None)
 	} else if slash_count == 1 {
@@ -112,18 +128,65 @@ fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 	}
 }
 
+fn get_workspace_settings_path() -> std::path::PathBuf {
+	CACHE_DIR.get().unwrap().join(WORKSPACE_SETTINGS_FILENAME)
+}
+
+fn load_workspace_cache() -> WorkspaceCache {
+	let cache_path = get_workspace_settings_path();
+	match std::fs::read_to_string(&cache_path) {
+		Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+		Err(_) => WorkspaceCache::default(),
+	}
+}
+
+fn save_workspace_cache(cache: &WorkspaceCache) -> Result<()> {
+	let cache_path = get_workspace_settings_path();
+	let content = serde_json::to_string_pretty(cache)?;
+	std::fs::write(&cache_path, content)?;
+	Ok(())
+}
+
+fn get_workspace_legacy_setting(workspace: &str) -> Result<bool> {
+	let cache = load_workspace_cache();
+
+	if let Some(settings) = cache.workspaces.get(workspace) {
+		Ok(settings.legacy)
+	} else {
+		// Ask user for preference
+		println!("Workspace '{}' legacy mode setting not found.", workspace);
+		print!("Use legacy mode for this workspace? [y/N]: ");
+		Write::flush(&mut std::io::stdout())?;
+
+		let mut input = String::new();
+		std::io::stdin().read_line(&mut input)?;
+		let use_legacy = input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes";
+
+		// Save the preference
+		let mut cache = load_workspace_cache();
+		cache.workspaces.insert(workspace.to_string(), WorkspaceSettings { legacy: use_legacy });
+		save_workspace_cache(&cache)?;
+
+		println!("Saved legacy mode preference for workspace '{}': {}", workspace, use_legacy);
+		Ok(use_legacy)
+	}
+}
+
 async fn stop_current_tracking(workspace: Option<&str>) -> Result<()> {
 	clockify::stop_time_entry_with_defaults(workspace).await
 }
 
-async fn start_tracking_for_task(
-	description: String,
-	relative_path: &str,
-	resume_args: &ResumeArgs,
-	workspace_override: Option<&str>,
-) -> Result<()> {
+async fn start_tracking_for_task(description: String, relative_path: &str, resume_args: &ResumeArgs, workspace_override: Option<&str>) -> Result<()> {
 	let workspace = workspace_override.or_else(|| resume_args.workspace.as_deref());
-	
+
+	// Determine legacy mode from workspace settings
+	let legacy = if let Some(ws) = workspace {
+		get_workspace_legacy_setting(ws)?
+	} else {
+		// If no workspace specified, use default (false)
+		false
+	};
+
 	clockify::start_time_entry_with_defaults(
 		workspace,
 		resume_args.project.as_deref(),
@@ -131,7 +194,7 @@ async fn start_tracking_for_task(
 		resume_args.task.as_deref(),
 		resume_args.tags.as_deref(),
 		resume_args.billable,
-		resume_args.legacy,
+		legacy,
 		Some(relative_path),
 	)
 	.await
@@ -168,10 +231,10 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					let _ = stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
 				});
 			}
-			
+
 			blockers.push(name.clone());
 			std::fs::write(&blocker_path, blockers.join("\n"))?;
-			
+
 			// If tracking is enabled, start tracking the new task
 			if is_blocker_tracking_enabled() {
 				let default_resume_args = ResumeArgs {
@@ -180,9 +243,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					task: None,
 					tags: None,
 					billable: false,
-					legacy: false,
 				};
-				
+
 				tokio::runtime::Runtime::new()?.block_on(async {
 					if let Err(e) = start_tracking_for_task(name, &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
 						eprintln!("Warning: Failed to start tracking for new task: {}", e);
@@ -197,10 +259,10 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					let _ = stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
 				});
 			}
-			
+
 			blockers.pop();
 			std::fs::write(&blocker_path, blockers.join("\n"))?;
-			
+
 			// If tracking is enabled and there's still a task, start tracking it
 			if is_blocker_tracking_enabled() {
 				if let Some(current_task) = blockers.last() {
@@ -210,9 +272,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 						task: None,
 						tags: None,
 						billable: false,
-						legacy: false,
 					};
-					
+
 					tokio::runtime::Runtime::new()?.block_on(async {
 						if let Err(e) = start_tracking_for_task(current_task.clone(), &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
 							eprintln!("Warning: Failed to start tracking for previous task: {}", e);
@@ -260,7 +321,10 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			tokio::runtime::Runtime::new()?.block_on(async {
 				let workspace = workspace_from_path.as_deref().or_else(|| resume_args.workspace.as_deref());
-				
+
+				// Determine legacy mode from workspace settings
+				let legacy = if let Some(ws) = workspace { get_workspace_legacy_setting(ws)? } else { false };
+
 				clockify::start_time_entry_with_defaults(
 					workspace,
 					resume_args.project.as_deref(),
@@ -268,7 +332,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					resume_args.task.as_deref(),
 					resume_args.tags.as_deref(),
 					resume_args.billable,
-					resume_args.legacy,
+					legacy,
 					Some(&relative_path), // Pass the relative_path for legacy mode
 				)
 				.await
@@ -277,7 +341,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::Pause(pause_args) => {
 			// Disable tracking state
 			set_blocker_tracking_state(false)?;
-			
+
 			let workspace = workspace_from_path.as_deref().or_else(|| pause_args.workspace.as_deref());
 			tokio::runtime::Runtime::new()?.block_on(async { clockify::stop_time_entry_with_defaults(workspace).await })?;
 		}
