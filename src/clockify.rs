@@ -7,7 +7,22 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use urlencoding;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, CACHE_DIR};
+
+static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
+static LEGACY_PROJECT_ID: &str = "66d83316b6114535ad872316";
+
+// Helper function to process filename for use as project name
+fn process_filename_as_project(filename: &str) -> String {
+	// Strip file extension
+	let name_without_ext = match filename.rfind('.') {
+		Some(pos) => &filename[..pos],
+		None => filename,
+	};
+	
+	// Convert underscores to spaces
+	name_without_ext.replace('_', " ")
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct ClockifyArgs {
@@ -66,6 +81,7 @@ pub struct ListProjectsArgs {
 	#[arg(short = 'w', long)]
 	pub workspace: Option<String>,
 }
+
 
 #[derive(Deserialize)]
 struct User {
@@ -138,6 +154,213 @@ struct CreatedEntry {
 struct TimeInterval {
 	start: String,
 	end: Option<String>,
+}
+
+
+// Public functions for use by other modules
+pub async fn start_time_entry(
+	workspace: &str,
+	project: &str,
+	description: String,
+	task: Option<&str>,
+	tags: Option<&str>,
+	billable: bool,
+) -> Result<()> {
+	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
+
+	let workspace_id = resolve_workspace(&client, workspace).await?;
+	let project_id = Some(resolve_project(&client, &workspace_id, project).await?);
+
+	let task_id = if let Some(t) = task {
+		let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
+		Some(resolve_task(&client, &workspace_id, pid, t).await?)
+	} else {
+		None
+	};
+
+	let tag_ids = if let Some(t) = tags {
+		Some(resolve_tags(&client, &workspace_id, t).await?)
+	} else {
+		None
+	};
+
+	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+	let payload = NewTimeEntry {
+		start: now,
+		description,
+		billable,
+		project_id,
+		task_id,
+		tag_ids,
+	};
+
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
+
+	let created: CreatedEntry = client
+		.post(url)
+		.json(&payload)
+		.send()
+		.await
+		.wrap_err("Failed to create time entry")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error creating the time entry")?
+		.json()
+		.await
+		.wrap_err("Failed to parse Clockify response")?;
+
+	println!("Started working on blocker:");
+	println!("  id: {}", created.id);
+	println!("  description: {}", created.description);
+	println!("  start: {}", created.time_interval.start);
+	println!("  project: {}", created.project_id.as_deref().unwrap_or("<none>"));
+	println!("  task: {}", created.task_id.as_deref().unwrap_or("<none>"));
+	println!("  workspace: {}", created.workspace_id);
+
+	Ok(())
+}
+
+pub async fn stop_time_entry(workspace: &str) -> Result<()> {
+	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
+	
+	let workspace_id = resolve_workspace(&client, workspace).await?;
+	stop_current_entry_by_id(&workspace_id).await?;
+
+	Ok(())
+}
+
+// New functions with optional parameters for blocker integration
+pub async fn start_time_entry_with_defaults(
+	workspace: Option<&str>,
+	project: Option<&str>,
+	description: String,
+	task: Option<&str>,
+	tags: Option<&str>,
+	billable: bool,
+	legacy: bool,
+	filename: Option<&str>,
+) -> Result<()> {
+	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
+
+	// Resolve workspace - use active workspace if not provided
+	let workspace_id = match workspace {
+		Some(w) => resolve_workspace(&client, w).await?,
+		None => get_active_workspace(&client).await?,
+	};
+
+	// Handle legacy mode vs normal mode
+	let (project_id, final_description) = if legacy {
+		// Legacy mode: use hardcoded project ID and prefix description with processed filename
+		let project_prefix = match filename {
+			Some(fname) => process_filename_as_project(fname),
+			None => {
+				// Fallback to cached filename if not provided
+				let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+				match std::fs::read_to_string(&persisted_project_file) {
+					Ok(cached_filename) => process_filename_as_project(&cached_filename),
+					Err(_) => return Err(eyre!("Legacy mode requires a filename for project prefix")),
+				}
+			}
+		};
+		
+		println!("Using legacy mode with project ID: {} and prefix: {}", LEGACY_PROJECT_ID, project_prefix);
+		let prefixed_description = format!("{}: {}", project_prefix, description);
+		(Some(LEGACY_PROJECT_ID.to_string()), prefixed_description)
+	} else {
+		// Normal mode: resolve project as before
+		let cached_project = if project.is_none() {
+			let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+			std::fs::read_to_string(&persisted_project_file).ok()
+		} else {
+			None
+		};
+		
+		let processed_project = cached_project.as_ref().map(|filename| process_filename_as_project(filename));
+		
+		let project_name = match project {
+			Some(p) => p,
+			None => {
+				match &processed_project {
+					Some(processed) => {
+						println!("Using cached project (processed from filename): {}", processed);
+						processed.as_str()
+					},
+					None => {
+						return Err(eyre!("--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'"));
+					}
+				}
+			}
+		};
+
+		let resolved_project_id = resolve_project(&client, &workspace_id, project_name).await?;
+		(Some(resolved_project_id), description)
+	};
+
+	let task_id = if let Some(t) = task {
+		let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
+		Some(resolve_task(&client, &workspace_id, pid, t).await?)
+	} else {
+		None
+	};
+
+	let tag_ids = if let Some(t) = tags {
+		Some(resolve_tags(&client, &workspace_id, t).await?)
+	} else {
+		None
+	};
+
+	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+	let payload = NewTimeEntry {
+		start: now,
+		description: final_description,
+		billable,
+		project_id,
+		task_id,
+		tag_ids,
+	};
+
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
+
+	let created: CreatedEntry = client
+		.post(url)
+		.json(&payload)
+		.send()
+		.await
+		.wrap_err("Failed to create time entry")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error creating the time entry")?
+		.json()
+		.await
+		.wrap_err("Failed to parse Clockify response")?;
+
+	println!("Started working on blocker:");
+	println!("  id: {}", created.id);
+	println!("  description: {}", created.description);
+	println!("  start: {}", created.time_interval.start);
+	println!("  project: {}", created.project_id.as_deref().unwrap_or("<none>"));
+	println!("  task: {}", created.task_id.as_deref().unwrap_or("<none>"));
+	println!("  workspace: {}", created.workspace_id);
+
+	Ok(())
+}
+
+pub async fn stop_time_entry_with_defaults(workspace: Option<&str>) -> Result<()> {
+	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
+	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
+	
+	// Resolve workspace - use active workspace if not provided
+	let workspace_id = match workspace {
+		Some(w) => resolve_workspace(&client, w).await?,
+		None => get_active_workspace(&client).await?,
+	};
+	
+	stop_current_entry_by_id(&workspace_id).await?;
+
+	Ok(())
 }
 
 pub fn main(_config: AppConfig, args: ClockifyArgs) -> Result<()> {

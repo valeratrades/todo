@@ -1,9 +1,11 @@
-use clap::{Args, Subcommand};
-use color_eyre::eyre::Result;
+use clap::{Args, Parser, Subcommand};
+use color_eyre::eyre::{Result, eyre};
 
-use crate::config::{AppConfig, STATE_DIR};
-use crate::milestones::SPRINT_HEADER_REL_PATH;
-use crate::config::{DATA_DIR, CACHE_DIR};
+use crate::{
+	clockify,
+	config::{AppConfig, CACHE_DIR, DATA_DIR, STATE_DIR},
+	milestones::SPRINT_HEADER_REL_PATH,
+};
 
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 
@@ -13,7 +15,7 @@ pub struct BlockerArgs {
 	command: Command,
 	#[arg(short, long)]
 	/// The filename of the blocker file. Will be appended to the state directory. Can have any text-based format
-	filename: Option<String>
+	filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -34,6 +36,44 @@ pub enum Command {
 	Open,
 	/// Set the default `--filename`, for the project you're working on currently.
 	Project { filename: String },
+	/// Start tracking time on the current blocker task via Clockify
+	Start(StartArgs),
+	/// Stop tracking time via Clockify
+	Stop(StopArgs),
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct StartArgs {
+	/// Workspace ID or name (if omitted, use the user's active workspace)
+	#[arg(short = 'w', long)]
+	pub workspace: Option<String>,
+
+	/// Project ID or name (if omitted, uses cached project default)
+	#[arg(short = 'p', long)]
+	pub project: Option<String>,
+
+	/// Task ID or name (optional)
+	#[arg(short = 't', long)]
+	pub task: Option<String>,
+
+	/// Comma-separated tag IDs or names (optional)
+	#[arg(short = 'g', long)]
+	pub tags: Option<String>,
+
+	/// Mark entry as billable
+	#[arg(short = 'b', long, default_value_t = false)]
+	pub billable: bool,
+
+	/// Use legacy mode: hardcoded project ID with filename as description prefix
+	#[arg(long)]
+	pub legacy: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct StopArgs {
+	/// Workspace ID or name (if omitted, use the user's active workspace)
+	#[arg(short = 'w', long)]
+	pub workspace: Option<String>,
 }
 
 pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
@@ -48,14 +88,13 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		}
 	};
 
-	let blocker_path = STATE_DIR.get().unwrap().join(filename);
+	let blocker_path = STATE_DIR.get().unwrap().join(&filename);
 	let mut blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
 		.unwrap_or_else(|_| String::new())
 		.split('\n')
 		.filter(|s| !s.is_empty())
 		.map(|s| s.to_owned())
 		.collect();
-
 
 	match args.command {
 		Command::Add { name } => {
@@ -90,6 +129,30 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::Project { filename } => {
 			let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
 			std::fs::write(&state_dir, filename)?;
+		}
+		Command::Start(start_args) => {
+			// Get current blocker task description
+			let description = match blockers.last() {
+				Some(task) => task.clone(),
+				None => return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'")),
+			};
+
+			tokio::runtime::Runtime::new()?.block_on(async {
+				clockify::start_time_entry_with_defaults(
+					start_args.workspace.as_deref(),
+					start_args.project.as_deref(),
+					description,
+					start_args.task.as_deref(),
+					start_args.tags.as_deref(),
+					start_args.billable,
+					start_args.legacy,
+					Some(&filename), // Pass the filename for legacy mode
+				)
+				.await
+			})?;
+		}
+		Command::Stop(stop_args) => {
+			tokio::runtime::Runtime::new()?.block_on(async { clockify::stop_time_entry_with_defaults(stop_args.workspace.as_deref()).await })?;
 		}
 	};
 	Ok(())
