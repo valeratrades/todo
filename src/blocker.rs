@@ -404,7 +404,10 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Validate the path before saving
 			parse_workspace_from_path(&relative_path)?;
 			let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-			std::fs::write(&state_dir, relative_path)?;
+			std::fs::write(&state_dir, &relative_path)?;
+
+			// Spawn background process to check for clockify updates after project change
+			spawn_blocker_comparison_process(relative_path)?;
 		}
 		Command::Resume(resume_args) => {
 			// Get current blocker task description

@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Write;
 
 use chrono::{SecondsFormat, Utc};
 use clap::{Args, Parser, Subcommand};
@@ -502,10 +503,23 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 		if let Some(p) = projects.iter().find(|p| p.name.to_lowercase().contains(&input_lower)) {
 			return Ok(p.id.clone());
 		}
-		return Err(eyre!("Project not found: {input}"));
 	}
 
-	Err(eyre!("Project not found: {input}"))
+	// Project not found - ask user if they want to create it
+	println!("Project '{}' not found in Clockify workspace.", input);
+	print!("Would you like to create a new Clockify project with this exact name? [y/N]: ");
+	Write::flush(&mut std::io::stdout())?;
+
+	let mut response = String::new();
+	std::io::stdin().read_line(&mut response)?;
+	
+	if response.trim().to_lowercase() == "y" || response.trim().to_lowercase() == "yes" {
+		let project_id = create_project(client, ws, input).await?;
+		println!("Created new project '{}' with ID: {}", input, project_id);
+		Ok(project_id)
+	} else {
+		Err(eyre!("Project not found and user declined to create: {}", input))
+	}
 }
 
 async fn fetch_project_by_id(client: &reqwest::Client, ws: &str, id: &str) -> Result<String> {
@@ -589,6 +603,39 @@ async fn fetch_tags(client: &reqwest::Client, ws: &str) -> Result<Vec<Tag>> {
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/tags?page-size=200", ws);
 	let tags: Vec<Tag> = client.get(url).send().await?.error_for_status()?.json().await?;
 	Ok(tags.into_iter().filter(|t| !t.archived).collect())
+}
+
+async fn create_project(client: &reqwest::Client, ws: &str, name: &str) -> Result<String> {
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects", ws);
+	
+	#[derive(Serialize)]
+	struct NewProject {
+		name: String,
+		color: String,
+		billable: bool,
+		public: bool,
+	}
+	
+	let new_project = NewProject {
+		name: name.to_string(),
+		color: "#2196F3".to_string(), // Default blue color
+		billable: false,
+		public: true,
+	};
+	
+	let created: Project = client
+		.post(url)
+		.json(&new_project)
+		.send()
+		.await
+		.wrap_err("Failed to create project")?
+		.error_for_status()
+		.wrap_err("Clockify API returned an error creating the project")?
+		.json()
+		.await
+		.wrap_err("Failed to parse project creation response")?;
+	
+	Ok(created.id)
 }
 
 async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<String> {
