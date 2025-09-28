@@ -13,6 +13,11 @@ use crate::config::{AppConfig, CACHE_DIR};
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 static LEGACY_PROJECT_ID: &str = "66d83316b6114535ad872316";
 
+// Helper function to convert underscores to spaces for name matching
+fn normalize_name_for_matching(name: &str) -> String {
+	name.replace('_', " ")
+}
+
 // Helper function to process filename for use as project name
 fn process_filename_as_project(relative_path: &str) -> String {
 	// Extract filename from path (everything after the last slash, or the whole string if no slash)
@@ -28,7 +33,7 @@ fn process_filename_as_project(relative_path: &str) -> String {
 	};
 
 	// Convert underscores to spaces
-	name_without_ext.replace('_', " ")
+	normalize_name_for_matching(name_without_ext)
 }
 
 #[derive(Debug, Clone, Args)]
@@ -670,6 +675,26 @@ async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<Stri
 	let input_lower = input.to_lowercase();
 	if let Some(w) = workspaces.iter().find(|w| w.name.to_lowercase().contains(&input_lower)) {
 		return Ok(w.id.clone());
+	}
+
+	// Try with normalized input (underscores to spaces) for exact matches
+	let normalized_input = normalize_name_for_matching(input);
+	if normalized_input != input {
+		// Exact match with normalized input
+		if let Some(w) = workspaces.iter().find(|w| w.name == normalized_input) {
+			return Ok(w.id.clone());
+		}
+
+		// Case-insensitive match with normalized input
+		if let Some(w) = workspaces.iter().find(|w| w.name.eq_ignore_ascii_case(&normalized_input)) {
+			return Ok(w.id.clone());
+		}
+
+		// Case-insensitive substring match with normalized input
+		let normalized_lower = normalized_input.to_lowercase();
+		if let Some(w) = workspaces.iter().find(|w| w.name.to_lowercase().contains(&normalized_lower)) {
+			return Ok(w.id.clone());
+		}
 	}
 
 	Err(eyre!("Workspace not found: {}", input))
