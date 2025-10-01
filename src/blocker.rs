@@ -55,7 +55,10 @@ pub enum Command {
 	/// Compactly show the last entry
 	Current,
 	/// Just open the \`blockers\` file with $EDITOR. Text as interface.
-	Open,
+	Open {
+		/// Optional file path relative to state directory to open instead of the default blocker file
+		file_path: Option<String>
+	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
 	Project { relative_path: String },
 	/// Resume tracking time on the current blocker task via Clockify
@@ -390,12 +393,18 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					_ => println!("{}...", &last[..(MAX_LEN - 3)]),
 				}
 			},
-		Command::Open => {
+		Command::Open { file_path } => {
 			// Save current blocker state to cache before opening
 			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
 
+			// Determine which file to open
+			let path_to_open = match file_path {
+				Some(custom_path) => STATE_DIR.get().unwrap().join(&custom_path),
+				None => blocker_path,
+			};
+
 			// Open the file
-			v_utils::io::open(&blocker_path)?;
+			v_utils::io::open(&path_to_open)?;
 
 			// Spawn background process to check for changes after editor closes
 			spawn_blocker_comparison_process(relative_path.clone())?;
