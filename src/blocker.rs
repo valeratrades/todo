@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Write};
+use std::{collections::HashMap, io::Write, path::Path};
 
 use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, eyre};
@@ -57,7 +57,7 @@ pub enum Command {
 	/// Just open the \`blockers\` file with $EDITOR. Text as interface.
 	Open {
 		/// Optional file path relative to state directory to open instead of the default blocker file
-		file_path: Option<String>
+		file_path: Option<String>,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
 	Project { relative_path: String },
@@ -410,13 +410,18 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			spawn_blocker_comparison_process(relative_path.clone())?;
 		}
 		Command::Project { relative_path } => {
-			// Validate the path before saving
-			parse_workspace_from_path(&relative_path)?;
+			// Resolve the project path using pattern matching
+			let resolved_path = resolve_project_path(&relative_path)?;
+
+			// Validate the resolved path before saving
+			parse_workspace_from_path(&resolved_path)?;
 			let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-			std::fs::write(&state_dir, &relative_path)?;
+			std::fs::write(&state_dir, &resolved_path)?;
+
+			println!("Set current project to: {}", resolved_path);
 
 			// Spawn background process to check for clockify updates after project change
-			spawn_blocker_comparison_process(relative_path)?;
+			spawn_blocker_comparison_process(resolved_path)?;
 		}
 		Command::Resume(resume_args) => {
 			// Get current blocker task description
@@ -456,4 +461,102 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		}
 	};
 	Ok(())
+}
+
+/// Search for files using a grep-like pattern
+fn search_files_by_pattern(pattern: &str) -> Result<Vec<String>> {
+	use std::process::Command;
+
+	let state_dir = STATE_DIR.get().unwrap();
+	let output = Command::new("find").args(&[state_dir.to_str().unwrap(), "-name", "*.md", "-type", "f"]).output()?;
+
+	if !output.status.success() {
+		return Err(eyre!("Failed to search for files"));
+	}
+
+	let all_files = String::from_utf8(output.stdout)?;
+	let mut matches = Vec::new();
+
+	for line in all_files.lines() {
+		let file_path = line.trim();
+		if file_path.is_empty() {
+			continue;
+		}
+
+		// Convert absolute path to relative path from STATE_DIR
+		let relative_path = if let Ok(rel_path) = Path::new(file_path).strip_prefix(state_dir) {
+			rel_path.to_string_lossy().to_string()
+		} else {
+			continue; // Skip files not in STATE_DIR
+		};
+
+		// Extract filename without extension for matching
+		if let Some(filename) = Path::new(&relative_path).file_stem() {
+			if let Some(filename_str) = filename.to_str() {
+				let pattern_lower = pattern.to_lowercase();
+				let filename_lower = filename_str.to_lowercase();
+				let path_lower = relative_path.to_lowercase();
+
+				// Check if pattern matches filename OR appears anywhere in the path (case-insensitive)
+				if filename_lower.contains(&pattern_lower) || path_lower.contains(&pattern_lower) {
+					matches.push(relative_path.to_string());
+				}
+			}
+		}
+	}
+
+	Ok(matches)
+}
+
+/// Use fzf to let user choose from multiple matches
+fn choose_file_with_fzf(matches: &[String], initial_query: &str) -> Result<Option<String>> {
+	use std::{
+		io::Write as IoWrite,
+		process::{Command, Stdio},
+	};
+
+	// Prepare input for fzf
+	let input = matches.join("\n");
+
+	let mut fzf = Command::new("fzf").args(&["--query", initial_query]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+
+	if let Some(stdin) = fzf.stdin.take() {
+		let mut stdin_handle = stdin;
+		stdin_handle.write_all(input.as_bytes())?;
+	}
+
+	let output = fzf.wait_with_output()?;
+
+	if output.status.success() {
+		let chosen = String::from_utf8(output.stdout)?.trim().to_string();
+		Ok(Some(chosen))
+	} else {
+		Ok(None)
+	}
+}
+
+/// Resolve project path using pattern matching
+fn resolve_project_path(pattern: &str) -> Result<String> {
+	// First, check if it's already a valid path
+	if pattern.contains('/') || pattern.ends_with(".md") {
+		return Ok(pattern.to_string());
+	}
+
+	// Search for files matching the pattern
+	let matches = search_files_by_pattern(pattern)?;
+
+	match matches.len() {
+		0 => Err(eyre!("No files found matching pattern: {}", pattern)),
+		1 => {
+			println!("Found unique match: {}", matches[0]);
+			Ok(matches[0].clone())
+		}
+		_ => {
+			println!("Found {} matches for '{}'. Opening fzf to choose:", matches.len(), pattern);
+			match choose_file_with_fzf(&matches, pattern)? {
+				Some(chosen) => Ok(chosen),
+				None => Err(eyre!("No file selected")),
+			}
+		}
+	}
 }
