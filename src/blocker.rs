@@ -399,7 +399,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// Determine which file to open
 			let resolved_path = match file_path {
-				Some(custom_path) => resolve_file_path(&custom_path)?,
+				Some(custom_path) => resolve_project_path(&custom_path)?,
 				None => relative_path.clone(),
 			};
 
@@ -413,7 +413,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		}
 		Command::Project { relative_path } => {
 			// Resolve the project path using pattern matching
-			let resolved_path = resolve_file_path(&relative_path)?;
+			let resolved_path = resolve_project_path(&relative_path)?;
 
 			// Validate the resolved path before saving
 			parse_workspace_from_path(&resolved_path)?;
@@ -465,8 +465,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	Ok(())
 }
 
-/// Search for files using a grep-like pattern
-fn search_files_by_pattern(pattern: &str) -> Result<Vec<String>> {
+/// Search for projects using a grep-like pattern
+fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 	use std::process::Command;
 
 	let state_dir = STATE_DIR.get().unwrap();
@@ -510,8 +510,8 @@ fn search_files_by_pattern(pattern: &str) -> Result<Vec<String>> {
 	Ok(matches)
 }
 
-/// Use fzf to let user choose from multiple matches
-fn choose_file_with_fzf(matches: &[String], initial_query: &str) -> Result<Option<String>> {
+/// Use fzf to let user choose from multiple project matches
+fn choose_project_with_fzf(matches: &[String], initial_query: &str) -> Result<Option<String>> {
 	use std::{
 		io::Write as IoWrite,
 		process::{Command, Stdio},
@@ -537,27 +537,26 @@ fn choose_file_with_fzf(matches: &[String], initial_query: &str) -> Result<Optio
 	}
 }
 
-/// Resolve file path using pattern matching - works for both project and open commands
-fn resolve_file_path(pattern: &str) -> Result<String> {
+/// Resolve project path using pattern matching - works for both project and open commands
+fn resolve_project_path(pattern: &str) -> Result<String> {
 	// First, check if it's already a valid path
 	if pattern.contains('/') || pattern.ends_with(".md") {
 		return Ok(pattern.to_string());
 	}
 
-	// Search for files matching the pattern
-	let matches = search_files_by_pattern(pattern)?;
+	let matches = search_projects_by_pattern(pattern)?;
 
 	match matches.len() {
-		0 => Err(eyre!("No files found matching pattern: {}", pattern)),
+		0 => Err(eyre!("No projects found matching pattern: {}", pattern)),
 		1 => {
 			println!("Found unique match: {}", matches[0]);
 			Ok(matches[0].clone())
 		}
 		_ => {
 			println!("Found {} matches for '{}'. Opening fzf to choose:", matches.len(), pattern);
-			match choose_file_with_fzf(&matches, pattern)? {
+			match choose_project_with_fzf(&matches, pattern)? {
 				Some(chosen) => Ok(chosen),
-				None => Err(eyre!("No file selected")),
+				None => Err(eyre!("No project selected")),
 			}
 		}
 	}
