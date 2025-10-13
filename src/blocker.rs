@@ -398,10 +398,12 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
 
 			// Determine which file to open
-			let path_to_open = match file_path {
-				Some(custom_path) => STATE_DIR.get().unwrap().join(&custom_path),
-				None => blocker_path,
+			let resolved_path = match file_path {
+				Some(custom_path) => resolve_file_path(&custom_path)?,
+				None => relative_path.clone(),
 			};
+
+			let path_to_open = STATE_DIR.get().unwrap().join(&resolved_path);
 
 			// Open the file
 			v_utils::io::open(&path_to_open)?;
@@ -411,7 +413,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		}
 		Command::Project { relative_path } => {
 			// Resolve the project path using pattern matching
-			let resolved_path = resolve_project_path(&relative_path)?;
+			let resolved_path = resolve_file_path(&relative_path)?;
 
 			// Validate the resolved path before saving
 			parse_workspace_from_path(&resolved_path)?;
@@ -535,8 +537,8 @@ fn choose_file_with_fzf(matches: &[String], initial_query: &str) -> Result<Optio
 	}
 }
 
-/// Resolve project path using pattern matching
-fn resolve_project_path(pattern: &str) -> Result<String> {
+/// Resolve file path using pattern matching - works for both project and open commands
+fn resolve_file_path(pattern: &str) -> Result<String> {
 	// First, check if it's already a valid path
 	if pattern.contains('/') || pattern.ends_with(".md") {
 		return Ok(pattern.to_string());
