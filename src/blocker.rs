@@ -520,7 +520,7 @@ fn choose_project_with_fzf(matches: &[String], initial_query: &str) -> Result<Op
 	// Prepare input for fzf
 	let input = matches.join("\n");
 
-	let mut fzf = Command::new("fzf").args(&["--query", initial_query]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+	let mut fzf = Command::new("fzf").args(["--query", initial_query]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
 
 	if let Some(stdin) = fzf.stdin.take() {
 		let mut stdin_handle = stdin;
@@ -549,11 +549,11 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 	match matches.len() {
 		0 => Err(eyre!("No projects found matching pattern: {}", pattern)),
 		1 => {
-			println!("Found unique match: {}", matches[0]);
+			eprintln!("Found unique match: {}", matches[0]);
 			Ok(matches[0].clone())
 		}
 		_ => {
-			println!("Found {} matches for '{}'. Opening fzf to choose:", matches.len(), pattern);
+			eprintln!("Found {} matches for '{}'. Opening fzf to choose:", matches.len(), pattern);
 			match choose_project_with_fzf(&matches, pattern)? {
 				Some(chosen) => Ok(chosen),
 				None => Err(eyre!("No project selected")),
