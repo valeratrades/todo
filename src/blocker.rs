@@ -547,13 +547,13 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 	let matches = search_projects_by_pattern(pattern)?;
 
 	match matches.len() {
-		0 => Err(eyre!("No projects found matching pattern: {}", pattern)),
+		0 => Err(eyre!("No projects found matching pattern: {pattern}")),
 		1 => {
 			eprintln!("Found unique match: {}", matches[0]);
 			Ok(matches[0].clone())
 		}
 		_ => {
-			eprintln!("Found {} matches for '{}'. Opening fzf to choose:", matches.len(), pattern);
+			eprintln!("Found {} matches for '{pattern}'. Opening fzf to choose:", matches.len());
 			match choose_project_with_fzf(&matches, pattern)? {
 				Some(chosen) => Ok(chosen),
 				None => Err(eyre!("No project selected")),
