@@ -58,6 +58,9 @@ pub enum Command {
 	Open {
 		/// Optional file path relative to state directory to open instead of the default blocker file
 		file_path: Option<String>,
+		/// Create the file if it doesn't exist (touch)
+		#[arg(short = 't', long)]
+		touch: bool,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
 	Project { relative_path: String },
@@ -393,7 +396,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					_ => println!("{}...", &last[..(MAX_LEN - 3)]),
 				}
 			},
-		Command::Open { file_path } => {
+		Command::Open { file_path, touch } => {
 			// Save current blocker state to cache before opening
 			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
 
@@ -404,6 +407,16 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			};
 
 			let path_to_open = STATE_DIR.get().unwrap().join(&resolved_path);
+
+			// Create the file if it doesn't exist and touch flag is set
+			if touch && !path_to_open.exists() {
+				// Create parent directories if they don't exist
+				if let Some(parent) = path_to_open.parent() {
+					std::fs::create_dir_all(parent)?;
+				}
+				// Create an empty file
+				std::fs::write(&path_to_open, "")?;
+			}
 
 			// Open the file
 			v_utils::io::open(&path_to_open)?;
