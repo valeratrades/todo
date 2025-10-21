@@ -9,11 +9,11 @@ use std::{
 use chrono::prelude::*;
 use color_eyre::eyre::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
-	config::{AppConfig, DATA_DIR},
 	MONITOR_PATH_APPENDIX, TOTALS_PATH_APPENDIX,
+	config::{AppConfig, DATA_DIR},
 };
 
 pub fn start(config: AppConfig) -> Result<()> {
@@ -33,7 +33,7 @@ pub fn start(config: AppConfig) -> Result<()> {
 	}
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Activity {
 	name: String,
 	start_s: i64,
@@ -217,7 +217,7 @@ fn compile_yd_totals(config: &AppConfig) {
 	compile_calendar(yd_activities.clone(), config);
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct GoogleServiceAccount {
 	r#type: String,
 	project_id: String,
@@ -236,7 +236,7 @@ struct GoogleServiceAccount {
 //if it's none, `add` it
 //if it's there, deref the usize
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Total {
 	name: String,
 	time_s: i64,

@@ -15,7 +15,7 @@ static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
 static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
 static BLOCKER_CURRENT_CACHE_FILENAME: &str = "blocker_current_cache.txt";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct WorkspaceSettings {
 	legacy: bool,
 }
@@ -26,12 +26,12 @@ impl Default for WorkspaceSettings {
 	}
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct WorkspaceCache {
 	workspaces: HashMap<String, WorkspaceSettings>,
 }
 
-#[derive(Debug, Clone, Args)]
+#[derive(Args, Clone, Debug)]
 pub struct BlockerArgs {
 	#[command(subcommand)]
 	command: Command,
@@ -40,7 +40,7 @@ pub struct BlockerArgs {
 	relative_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 pub enum Command {
 	/// Append a blocker
 	/// # NB
@@ -70,7 +70,7 @@ pub enum Command {
 	Halt(HaltArgs),
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Clone, Debug, Parser)]
 pub struct ResumeArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
@@ -93,7 +93,7 @@ pub struct ResumeArgs {
 	pub billable: bool,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Clone, Debug, Parser)]
 pub struct HaltArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]

@@ -9,7 +9,7 @@ use std::{
 };
 
 use clap::Args;
-use color_eyre::eyre::{bail, eyre, Context as _, Report, Result};
+use color_eyre::eyre::{Context as _, Report, Result, bail, eyre};
 use tempfile::Builder;
 use v_utils::io::OpenMode;
 
@@ -157,7 +157,7 @@ fn section_path(config: &AppConfig, flags: &TodosFlags) -> Result<PathBuf> {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 enum TaskMeta {
 	Simple {
 		name: String,
@@ -215,7 +215,7 @@ impl TaskMeta {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Task {
 	meta: TaskMeta,
 	path: PathBuf,

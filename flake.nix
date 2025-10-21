@@ -28,7 +28,7 @@
           inherit pkgs;
           lastSupportedVersion = "nightly-2025-08-01";
           jobsErrors = [ "rust-tests" "rust-miri" ];
-          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
+          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "rust-sorted-derives" "tokei" ];
         };
         readme = v-utils.readme-fw {
           inherit pkgs pname;
@@ -99,8 +99,8 @@
               rust
             ] ++ pre-commit-check.enabledPackages;
 
-						env.RUST_BACKTRACE = 1;
-						env.RUST_LIB_BACKTRACE = 0;
+            env.RUST_BACKTRACE = 1;
+            env.RUST_LIB_BACKTRACE = 0;
           };
       }
     );

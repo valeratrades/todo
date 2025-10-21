@@ -9,7 +9,7 @@ pub static STATE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static EXE_NAME: &str = "todo";
 
-#[derive(Debug, Default, derive_new::new, Clone, MyConfigPrimitives)]
+#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
 pub struct AppConfig {
 	pub github_token: String,
 	pub date_format: String,
@@ -17,12 +17,12 @@ pub struct AppConfig {
 	pub timer: Timer,
 	pub activity_monitor: ActivityMonitor,
 }
-#[derive(Default, Clone, derive_new::new, Debug, MyConfigPrimitives)]
+#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
 pub struct Todos {
 	pub path: PathBuf,
 	pub n_tasks_to_show: usize,
 }
-#[derive(Default, Clone, derive_new::new, Debug, MyConfigPrimitives)]
+#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
 pub struct ActivityMonitor {
 	pub delimitor: String,
 	pub calendar_id: String,
@@ -30,7 +30,7 @@ pub struct ActivityMonitor {
 	pub google_client_id: String,
 	pub google_client_secret: String,
 }
-#[derive(Default, Clone, derive_new::new, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, derive_new::new)]
 pub struct Timer {
 	pub hard_stop_coeff: f32,
 }

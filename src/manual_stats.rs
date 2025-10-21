@@ -8,9 +8,9 @@ use std::{
 };
 
 use clap::{Args, Subcommand};
-use color_eyre::eyre::{bail, ensure, Result};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use v_utils::{io::OpenMode, time::Timelike, Percent};
+use color_eyre::eyre::{Result, bail, ensure};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use v_utils::{Percent, io::OpenMode, time::Timelike};
 use xattr::FileExt as _;
 
 use crate::{
@@ -191,7 +191,7 @@ pub struct PrintArgs;
 #[derive(Args)]
 pub struct LastEvUpdateArgs;
 
-#[derive(Args, Copy, Default, Clone, Debug, Serialize, Deserialize, derive_new::new)]
+#[derive(Args, Clone, Copy, Debug, Default, Deserialize, Serialize, derive_new::new)]
 pub struct CounterStepArgs {
 	/// Counter specifically for cargo_watch recompiles, as the metric is incocmpatible with workflow of other languages.
 	#[arg(long)]
@@ -201,20 +201,20 @@ pub struct CounterStepArgs {
 	pub dev_runs: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Transcendential {
 	making_food: Option<usize>,
 	eating_food: Option<usize>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Sleep {
 	yd_to_bed_t_plus: Option<i32>,
 	from_bed_t_plus: Option<i32>,
 	from_bed_abs_diff_from_day_before: Option<i32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Morning {
 	alarm_to_run_M_colon_S: Option<Timelike>,
 	run: bool,
@@ -224,7 +224,7 @@ struct Morning {
 	breakfast_to_work: Option<usize>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 // could be called `_8h`
 struct Midday {
 	hours_of_work: Option<usize>,
@@ -232,7 +232,7 @@ struct Midday {
 	transcendential: Transcendential,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct Evening {
 	focus_meditation: usize, // fixed at 13m under current sota, but why not keep it flexible
 	nsdr: usize,
@@ -241,19 +241,19 @@ struct Evening {
 }
 
 ///// Accounts only for the time that is objectively wasted, aggregate positive ev situtations are not counted here.
-//#[derive(Serialize, Deserialize, Clone, Debug, Default, derive_new::new)]
+//#[derive(Clone, Debug, Default, Deserialize, Serialize, derive_new::new)]
 //struct Wasted {
 //	jofv: usize
 //	quazi_informational_content: usize,
 //}
 
-#[derive(Clone, Debug, Default, derive_new::new, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, derive_new::new)]
 struct Counters {
 	cargo_watch: usize,
 	dev_runs: usize,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 /// Unless specified otherwise, all times are in minutes
 pub struct Day {
 	date: String,
@@ -273,7 +273,7 @@ pub struct Day {
 	phone_locked_away: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 struct Streak {
 	pb: usize,
 	current: usize,
@@ -448,7 +448,7 @@ impl Day {
 	}
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 /// Immediate punishment for not meating day's standards
 pub struct Repercussions {
 	sleep_on_the_floor: bool,

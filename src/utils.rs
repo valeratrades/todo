@@ -3,7 +3,7 @@ use std::str::FromStr;
 use chrono::Duration;
 #[cfg(not(test))]
 use chrono::Utc;
-use color_eyre::eyre::{bail, Report, Result};
+use color_eyre::eyre::{Report, Result, bail};
 
 use crate::config::AppConfig;
 #[cfg(test)]
@@ -17,7 +17,7 @@ pub fn format_date(days_back: usize, config: &AppConfig) -> String {
 }
 
 /// Ends of each day-section as offset to wake-time
-#[derive(Clone, Debug, Default, derive_new::new, Copy)]
+#[derive(Clone, Copy, Debug, Default, derive_new::new)]
 pub struct DaySectionBorders {
 	pub morning_end: f32,
 	pub day_end: f32,

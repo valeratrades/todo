@@ -24,7 +24,7 @@ pub enum MilestonesCommands {
 	Healthcheck,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 struct Milestone {
 	title: String,
 	#[allow(dead_code)]
@@ -69,7 +69,7 @@ fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 	Ok(milestones)
 }
 
-#[derive(Debug, thiserror::Error, Clone, PartialEq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq)]
 #[error("Error on `{requested_tf}` milestone: {source}")]
 struct GetMilestoneError {
 	requested_tf: Timeframe,
@@ -77,7 +77,7 @@ struct GetMilestoneError {
 	source: MilestoneError,
 }
 
-#[derive(Debug, thiserror::Error, Clone, PartialEq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq)]
 enum MilestoneError {
 	#[error("Milestone is missing due_on date")]
 	MissingDueOn,

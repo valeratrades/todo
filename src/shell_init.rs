@@ -4,11 +4,11 @@ use derive_more::derive::{Display, FromStr};
 
 use crate::config::{AppConfig, EXE_NAME};
 
-#[derive(Clone, Debug, Args)]
+#[derive(Args, Clone, Debug)]
 pub struct ShellInitArgs {
 	shell: Shell,
 }
-#[derive(Debug, Clone, Copy, Display, FromStr)]
+#[derive(Clone, Copy, Debug, Display, FromStr)]
 enum Shell {
 	Dash,
 	Bash,

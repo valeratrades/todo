@@ -1,5 +1,4 @@
-use std::env;
-use std::io::Write;
+use std::{env, io::Write};
 
 use chrono::{SecondsFormat, Utc};
 use clap::{Args, Parser, Subcommand};
@@ -36,13 +35,13 @@ fn process_filename_as_project(relative_path: &str) -> String {
 	normalize_name_for_matching(name_without_ext)
 }
 
-#[derive(Debug, Clone, Args)]
+#[derive(Args, Clone, Debug)]
 pub struct ClockifyArgs {
 	#[command(subcommand)]
 	command: Command,
 }
 
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Clone, Debug, Subcommand)]
 pub enum Command {
 	/// Start a new time entry
 	Start(StartArgs),
@@ -54,7 +53,7 @@ pub enum Command {
 	ListProjects(ListProjectsArgs),
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Clone, Debug, Parser)]
 pub struct StartArgs {
 	/// Description for the time entry
 	pub description: String,
@@ -80,14 +79,14 @@ pub struct StartArgs {
 	pub billable: bool,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Clone, Debug, Parser)]
 pub struct StopArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
 	pub workspace: Option<String>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Clone, Debug, Parser)]
 pub struct ListProjectsArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
@@ -517,7 +516,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 
 	let mut response = String::new();
 	std::io::stdin().read_line(&mut response)?;
-	
+
 	if response.trim().to_lowercase() == "y" || response.trim().to_lowercase() == "yes" {
 		let project_id = create_project(client, ws, input).await?;
 		println!("Created new project '{}' with ID: {}", input, project_id);
@@ -612,7 +611,7 @@ async fn fetch_tags(client: &reqwest::Client, ws: &str) -> Result<Vec<Tag>> {
 
 async fn create_project(client: &reqwest::Client, ws: &str, name: &str) -> Result<String> {
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects", ws);
-	
+
 	#[derive(Serialize)]
 	struct NewProject {
 		name: String,
@@ -620,14 +619,14 @@ async fn create_project(client: &reqwest::Client, ws: &str, name: &str) -> Resul
 		billable: bool,
 		public: bool,
 	}
-	
+
 	let new_project = NewProject {
 		name: name.to_string(),
 		color: "#2196F3".to_string(), // Default blue color
 		billable: false,
 		public: true,
 	};
-	
+
 	let created: Project = client
 		.post(url)
 		.json(&new_project)
@@ -639,7 +638,7 @@ async fn create_project(client: &reqwest::Client, ws: &str, name: &str) -> Resul
 		.json()
 		.await
 		.wrap_err("Failed to parse project creation response")?;
-	
+
 	Ok(created.id)
 }
 
