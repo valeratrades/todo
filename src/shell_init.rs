@@ -30,13 +30,15 @@ alias tdo="{exe_name} open"
 alias tda="{exe_name} add"
 
 # {exe_name}s-blocker
-alias tdp="{exe_name} blocker pop"
-alias tdb="{exe_name} blocker add"
-alias tdbs="{exe_name} blocker list"
-alias tdbc="{exe_name} blocker current"
+alias tbp="{exe_name} blocker pop"
+alias tba="{exe_name} blocker add"
 alias tbr="{exe_name} blocker resume"
-alias tbp="{exe_name} blocker pause"
+alias tbh="{exe_name} blocker halt"
 alias tbo="{exe_name} blocker open"
+alias tbs="{exe_name} blocker set-project"
+
+alias tbl="{exe_name} blocker list"
+alias tbc="{exe_name} blocker current"
 "#
 		)
 	}

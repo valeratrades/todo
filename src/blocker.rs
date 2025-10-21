@@ -63,11 +63,11 @@ pub enum Command {
 		touch: bool,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
-	Project { relative_path: String },
+	SetProject { relative_path: String },
 	/// Resume tracking time on the current blocker task via Clockify
 	Resume(ResumeArgs),
 	/// Pause tracking time via Clockify
-	Pause(PauseArgs),
+	Halt(HaltArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -94,7 +94,7 @@ pub struct ResumeArgs {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub struct PauseArgs {
+pub struct HaltArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
 	pub workspace: Option<String>,
@@ -424,7 +424,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Spawn background process to check for changes after editor closes
 			spawn_blocker_comparison_process(relative_path.clone())?;
 		}
-		Command::Project { relative_path } => {
+		Command::SetProject { relative_path } => {
 			// Resolve the project path using pattern matching
 			let resolved_path = resolve_project_path(&relative_path)?;
 
@@ -467,7 +467,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				.await
 			})?;
 		}
-		Command::Pause(pause_args) => {
+		Command::Halt(pause_args) => {
 			// Disable tracking state
 			set_blocker_tracking_state(false)?;
 
