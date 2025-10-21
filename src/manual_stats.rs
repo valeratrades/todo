@@ -152,12 +152,13 @@ pub enum ManualSubcommands {
 }
 #[derive(Args)]
 pub struct EvArgs {
+	#[arg(allow_hyphen_values = true)]
 	pub ev: i32,
 	#[arg(short, long)]
 	pub open: bool,
-	#[arg(short, long, allow_hyphen_values = true)]
+	#[arg(short, long)]
 	pub change: bool,
-	#[arg(short, long, default_value = "true", allow_hyphen_values = true)]
+	#[arg(short, long, default_value = "true")]
 	pub replace: bool,
 }
 impl EvArgs {
