@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io::Write, path::Path};
 
 use clap::{Args, Parser, Subcommand};
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -15,15 +15,9 @@ static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
 static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
 static BLOCKER_CURRENT_CACHE_FILENAME: &str = "blocker_current_cache.txt";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct WorkspaceSettings {
 	legacy: bool,
-}
-
-impl Default for WorkspaceSettings {
-	fn default() -> Self {
-		Self { legacy: false }
-	}
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -68,6 +62,9 @@ pub enum Command {
 	Resume(ResumeArgs),
 	/// Pause tracking time via Clockify
 	Halt(HaltArgs),
+	/// Apply formatting to the blocker file.
+	/// Here mostly for completeness, as formatting is automatically applied on all the provided methods for natively modifying the file.
+	Format,
 }
 
 #[derive(Clone, Debug, Parser)]
@@ -143,6 +140,53 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 	std::fs::read_to_string(&cache_path).ok()
 }
 
+/// Format blocker list content according to standardization rules:
+/// 1. Lines not starting with `^#* ` get prefixed with `- ` (markdown list format)
+/// 2. Always have 1 empty line above `^#* ` lines (unless the line above also starts with `#`)
+/// 3. Remove all other empty lines for standardization
+fn format_blocker_content(content: &str) -> String {
+	let lines: Vec<&str> = content.lines().collect();
+	let mut formatted_lines: Vec<String> = Vec::new();
+
+	for line in lines.iter() {
+		let trimmed = line.trim();
+
+		// Skip empty lines - we'll add them back strategically
+		if trimmed.is_empty() {
+			continue;
+		}
+
+		// Check if current line is a header (starts with # followed by space or another #)
+		let is_header = trimmed.starts_with('#') && (trimmed.len() > 1 && (trimmed.chars().nth(1) == Some(' ') || trimmed.chars().nth(1) == Some('#')));
+
+		// If this is a header and we have previous lines, check if we need an empty line before it
+		if is_header && !formatted_lines.is_empty() {
+			// Check if the previous non-empty line was also a header
+			let last_line = formatted_lines.last().unwrap();
+			let prev_is_header = last_line.trim().starts_with('#');
+
+			// Add empty line before header only if previous line wasn't a header
+			if !prev_is_header {
+				formatted_lines.push(String::new());
+			}
+
+			formatted_lines.push(trimmed.to_string());
+		} else if is_header {
+			// First line is a header, no empty line needed
+			formatted_lines.push(trimmed.to_string());
+		} else {
+			// Not a header - ensure it starts with "- "
+			if trimmed.starts_with("- ") {
+				formatted_lines.push(trimmed.to_string());
+			} else {
+				formatted_lines.push(format!("- {}", trimmed));
+			}
+		}
+	}
+
+	formatted_lines.join("\n")
+}
+
 fn get_current_blocker(relative_path: &str) -> Option<String> {
 	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
 	let blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
@@ -163,7 +207,7 @@ fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 		let parts: Vec<&str> = relative_path.split('/').collect();
 		Ok(Some(parts[0].to_string()))
 	} else {
-		return Err(eyre!("Relative path can contain at most one slash, found {}: {}", slash_count, relative_path));
+		bail!("Relative path can contain at most one slash, found {}: {}", slash_count, relative_path);
 	}
 }
 
@@ -216,7 +260,7 @@ async fn stop_current_tracking(workspace: Option<&str>) -> Result<()> {
 }
 
 async fn start_tracking_for_task(description: String, relative_path: &str, resume_args: &ResumeArgs, workspace_override: Option<&str>) -> Result<()> {
-	let workspace = workspace_override.or_else(|| resume_args.workspace.as_deref());
+	let workspace = workspace_override.or(resume_args.workspace.as_deref());
 
 	// Determine legacy mode from workspace settings
 	let legacy = if let Some(ws) = workspace {
@@ -245,7 +289,7 @@ fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 	let current_exe = std::env::current_exe()?;
 
 	Command::new(current_exe)
-		.args(&["blocker", "--relative-path", &relative_path, "current"])
+		.args(["blocker", "--relative-path", &relative_path, "current"])
 		.env("_BLOCKER_BACKGROUND_CHECK", "1")
 		.spawn()?;
 
@@ -253,6 +297,18 @@ fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 }
 
 fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
+	// Read and format the blocker file
+	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	if blocker_path.exists() {
+		let content = std::fs::read_to_string(&blocker_path)?;
+		let formatted = format_blocker_content(&content);
+
+		// Only write back if content changed
+		if content != formatted {
+			std::fs::write(&blocker_path, formatted)?;
+		}
+	}
+
 	let cached_current = load_current_blocker_cache(relative_path);
 	let actual_current = get_current_blocker(relative_path);
 
@@ -323,7 +379,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			}
 
 			blockers.push(name.clone());
-			std::fs::write(&blocker_path, blockers.join("\n"))?;
+			let content = blockers.join("\n");
+			let formatted = format_blocker_content(&content);
+			std::fs::write(&blocker_path, formatted)?;
 
 			// Save current blocker to cache
 			save_current_blocker_cache(&relative_path, Some(name.clone()))?;
@@ -354,7 +412,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			}
 
 			blockers.pop();
-			std::fs::write(&blocker_path, blockers.join("\n"))?;
+			let content = blockers.join("\n");
+			let formatted = format_blocker_content(&content);
+			std::fs::write(&blocker_path, formatted)?;
 
 			// Save current blocker to cache
 			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
@@ -379,10 +439,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			}
 		}
 		Command::List => {
-			let sprint_header = match std::fs::read_to_string(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH)) {
-				Ok(s) => Some(s),
-				Err(_) => None,
-			};
+			let sprint_header = std::fs::read_to_string(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH)).ok();
 			if let Some(s) = sprint_header {
 				println!("{s}");
 			}
@@ -449,7 +506,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			set_blocker_tracking_state(true)?;
 
 			tokio::runtime::Runtime::new()?.block_on(async {
-				let workspace = workspace_from_path.as_deref().or_else(|| resume_args.workspace.as_deref());
+				let workspace = workspace_from_path.as_deref().or(resume_args.workspace.as_deref());
 
 				// Determine legacy mode from workspace settings
 				let legacy = if let Some(ws) = workspace { get_workspace_legacy_setting(ws)? } else { false };
@@ -471,8 +528,24 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Disable tracking state
 			set_blocker_tracking_state(false)?;
 
-			let workspace = workspace_from_path.as_deref().or_else(|| pause_args.workspace.as_deref());
+			let workspace = workspace_from_path.as_deref().or(pause_args.workspace.as_deref());
 			tokio::runtime::Runtime::new()?.block_on(async { clockify::stop_time_entry_with_defaults(workspace).await })?;
+		}
+		Command::Format => {
+			// Read, format, and write back the blocker file
+			if blocker_path.exists() {
+				let content = std::fs::read_to_string(&blocker_path)?;
+				let formatted = format_blocker_content(&content);
+
+				if content != formatted {
+					std::fs::write(&blocker_path, formatted)?;
+					println!("Formatted blocker file: {}", relative_path);
+				} else {
+					println!("Blocker file already formatted: {}", relative_path);
+				}
+			} else {
+				return Err(eyre!("Blocker file does not exist: {}", relative_path));
+			}
 		}
 	};
 	Ok(())
@@ -483,7 +556,7 @@ fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 	use std::process::Command;
 
 	let state_dir = STATE_DIR.get().unwrap();
-	let output = Command::new("find").args(&[state_dir.to_str().unwrap(), "-name", "*.md", "-type", "f"]).output()?;
+	let output = Command::new("find").args([state_dir.to_str().unwrap(), "-name", "*.md", "-type", "f"]).output()?;
 
 	if !output.status.success() {
 		return Err(eyre!("Failed to search for files"));
