@@ -140,51 +140,154 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 	std::fs::read_to_string(&cache_path).ok()
 }
 
+/// Line classification for blocker files
+#[derive(Clone, Debug, PartialEq)]
+enum LineType {
+	/// Content line - headers or list items (contributes to blocker list)
+	Content,
+	/// Comment line - tab-indented explanatory text (does not contribute to blocker list)
+	Comment,
+}
+
+/// Classify a line based on its content
+/// - Lines starting with tab are Comments
+/// - All other non-empty lines are Content
+/// - Returns None for empty lines
+fn classify_line(line: &str) -> Option<LineType> {
+	if line.is_empty() {
+		None
+	} else if line.starts_with('\t') {
+		Some(LineType::Comment)
+	} else {
+		Some(LineType::Content)
+	}
+}
+
 /// Format blocker list content according to standardization rules:
 /// 1. Lines not starting with `^#* ` get prefixed with `- ` (markdown list format)
 /// 2. Always have 1 empty line above `^#* ` lines (unless the line above also starts with `#`)
 /// 3. Remove all other empty lines for standardization
-fn format_blocker_content(content: &str) -> String {
+/// 4. Comment lines (tab-indented) are preserved and must follow Content or Comment lines
+fn format_blocker_content(content: &str) -> Result<String> {
 	let lines: Vec<&str> = content.lines().collect();
-	let mut formatted_lines: Vec<String> = Vec::new();
 
-	for line in lines.iter() {
-		let trimmed = line.trim();
-
-		// Skip empty lines - we'll add them back strategically
-		if trimmed.is_empty() {
-			continue;
-		}
-
-		// Check if current line is a header (starts with # followed by space or another #)
-		let is_header = trimmed.starts_with('#') && (trimmed.len() > 1 && (trimmed.chars().nth(1) == Some(' ') || trimmed.chars().nth(1) == Some('#')));
-
-		// If this is a header and we have previous lines, check if we need an empty line before it
-		if is_header && !formatted_lines.is_empty() {
-			// Check if the previous non-empty line was also a header
-			let last_line = formatted_lines.last().unwrap();
-			let prev_is_header = last_line.trim().starts_with('#');
-
-			// Add empty line before header only if previous line wasn't a header
-			if !prev_is_header {
-				formatted_lines.push(String::new());
+	// First pass: validate that comments don't follow empty lines
+	for (idx, line) in lines.iter().enumerate() {
+		if let Some(LineType::Comment) = classify_line(line) {
+			// Check if previous line was empty
+			if idx > 0 && lines[idx - 1].is_empty() {
+				return Err(eyre!(
+					"Comment line at position {} cannot follow an empty line. Comments must follow content or other comments.",
+					idx + 1
+				));
 			}
-
-			formatted_lines.push(trimmed.to_string());
-		} else if is_header {
-			// First line is a header, no empty line needed
-			formatted_lines.push(trimmed.to_string());
-		} else {
-			// Not a header - ensure it starts with "- "
-			if trimmed.starts_with("- ") {
-				formatted_lines.push(trimmed.to_string());
-			} else {
-				formatted_lines.push(format!("- {}", trimmed));
+			// Check if it's the first line
+			if idx == 0 {
+				return Err(eyre!(
+					"Comment line at position {} cannot be first line. Comments must follow content or other comments.",
+					idx + 1
+				));
 			}
 		}
 	}
 
-	formatted_lines.join("\n")
+	let mut formatted_lines: Vec<String> = Vec::new();
+
+	for line in lines.iter() {
+		let line_type = classify_line(line);
+
+		match line_type {
+			None => {
+				// Skip empty lines - we'll add them back strategically
+				continue;
+			}
+			Some(LineType::Comment) => {
+				// Preserve comment line with tab indentation
+				formatted_lines.push(line.to_string());
+			}
+			Some(LineType::Content) => {
+				let trimmed = line.trim();
+
+				// Check if current line is a header (starts with # followed by space or another #)
+				let is_header = trimmed.starts_with('#') && (trimmed.len() > 1 && (trimmed.chars().nth(1) == Some(' ') || trimmed.chars().nth(1) == Some('#')));
+
+				// If this is a header and we have previous lines, check if we need an empty line before it
+				if is_header && !formatted_lines.is_empty() {
+					// Check if the previous non-empty line was also a header
+					let last_line = formatted_lines.last().unwrap();
+					let prev_is_header = last_line.trim().starts_with('#');
+
+					// Add empty line before header only if previous line wasn't a header
+					if !prev_is_header {
+						formatted_lines.push(String::new());
+					}
+
+					formatted_lines.push(trimmed.to_string());
+				} else if is_header {
+					// First line is a header, no empty line needed
+					formatted_lines.push(trimmed.to_string());
+				} else {
+					// Not a header - ensure it starts with "- "
+					if trimmed.starts_with("- ") {
+						formatted_lines.push(trimmed.to_string());
+					} else {
+						formatted_lines.push(format!("- {}", trimmed));
+					}
+				}
+			}
+		}
+	}
+
+	Ok(formatted_lines.join("\n"))
+}
+
+/// Add a content line to the blocker file, preserving comments and formatting
+fn add_content_line(content: &str, new_line: &str) -> Result<String> {
+	// Parse content into lines, add the new content line, then format
+	let mut lines: Vec<&str> = content.lines().collect();
+	lines.push(new_line);
+	format_blocker_content(&lines.join("\n"))
+}
+
+/// Remove the last content line from the blocker file, preserving comments (except comments belonging to the removed line)
+fn pop_content_line(content: &str) -> Result<String> {
+	let lines: Vec<&str> = content.lines().collect();
+	let mut content_lines_indices: Vec<usize> = Vec::new();
+
+	// Find indices of all content lines
+	for (idx, line) in lines.iter().enumerate() {
+		if classify_line(line) == Some(LineType::Content) {
+			content_lines_indices.push(idx);
+		}
+	}
+
+	// Remove the last content line and its associated comments
+	if let Some(&last_content_idx) = content_lines_indices.last() {
+		// Find the next content line index (or end of file)
+		let next_content_idx = content_lines_indices.iter()
+			.rev()
+			.nth(1) // Get second-to-last content line
+			.map(|&idx| idx + 1) // Start keeping from the line after it
+			.unwrap_or(0); // Or keep nothing if this was the only content line
+
+		// Keep lines before the last content block, exclude the last content line and its comments
+		let new_lines: Vec<&str> = lines
+			.iter()
+			.enumerate()
+			.filter(|(idx, _)| {
+				// Find where the last content block starts (the last content line)
+				// And where it ends (next content line or EOF)
+				let is_before_last_block = *idx < last_content_idx;
+				is_before_last_block
+			})
+			.map(|(_, line)| *line)
+			.collect();
+
+		format_blocker_content(&new_lines.join("\n"))
+	} else {
+		// No content lines to remove
+		format_blocker_content(content)
+	}
 }
 
 fn get_current_blocker(relative_path: &str) -> Option<String> {
@@ -193,6 +296,8 @@ fn get_current_blocker(relative_path: &str) -> Option<String> {
 		.unwrap_or_else(|_| String::new())
 		.split('\n')
 		.filter(|s| !s.is_empty())
+		// Skip comment lines (tab-indented) - only consider content lines
+		.filter(|s| !s.starts_with('\t'))
 		.map(|s| s.to_owned())
 		.collect();
 	blockers.last().cloned()
@@ -301,7 +406,7 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
 	if blocker_path.exists() {
 		let content = std::fs::read_to_string(&blocker_path)?;
-		let formatted = format_blocker_content(&content);
+		let formatted = format_blocker_content(&content)?;
 
 		// Only write back if content changed
 		if content != formatted {
@@ -362,12 +467,6 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	let workspace_from_path = parse_workspace_from_path(&relative_path)?;
 
 	let blocker_path = STATE_DIR.get().unwrap().join(&relative_path);
-	let mut blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
-		.unwrap_or_else(|_| String::new())
-		.split('\n')
-		.filter(|s| !s.is_empty())
-		.map(|s| s.to_owned())
-		.collect();
 
 	match args.command {
 		Command::Add { name } => {
@@ -378,9 +477,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				});
 			}
 
-			blockers.push(name.clone());
-			let content = blockers.join("\n");
-			let formatted = format_blocker_content(&content);
+			// Read existing content, add new line, format and write
+			let existing_content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
+			let formatted = add_content_line(&existing_content, &name)?;
 			std::fs::write(&blocker_path, formatted)?;
 
 			// Save current blocker to cache
@@ -411,17 +510,18 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				});
 			}
 
-			blockers.pop();
-			let content = blockers.join("\n");
-			let formatted = format_blocker_content(&content);
+			// Read existing content, pop last content line, format and write
+			let existing_content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
+			let formatted = pop_content_line(&existing_content)?;
 			std::fs::write(&blocker_path, formatted)?;
 
-			// Save current blocker to cache
-			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
+			// Get the new current blocker after popping
+			let new_current = get_current_blocker(&relative_path);
+			save_current_blocker_cache(&relative_path, new_current.clone())?;
 
 			// If tracking is enabled and there's still a task, start tracking it
 			if is_blocker_tracking_enabled() {
-				if let Some(current_task) = blockers.last() {
+				if let Some(current_task) = new_current {
 					let default_resume_args = ResumeArgs {
 						workspace: None,
 						project: None,
@@ -443,19 +543,25 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			if let Some(s) = sprint_header {
 				println!("{s}");
 			}
-			println!("{}", blockers.join("\n"));
+			let content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
+			println!("{}", content);
 		}
-		Command::Current =>
-			if let Some(last) = blockers.last() {
+		Command::Current => {
+			if let Some(last) = get_current_blocker(&relative_path) {
+				// Strip leading "# " or "- " prefix
+				let stripped = last.strip_prefix("# ").or_else(|| last.strip_prefix("- ")).unwrap_or(&last);
+
 				const MAX_LEN: usize = 70;
-				match last.len() {
-					0..=MAX_LEN => println!("{}", last),
-					_ => println!("{}...", &last[..(MAX_LEN - 3)]),
+				match stripped.len() {
+					0..=MAX_LEN => println!("{}", stripped),
+					_ => println!("{}...", &stripped[..(MAX_LEN - 3)]),
 				}
-			},
+			}
+		}
 		Command::Open { file_path, touch } => {
 			// Save current blocker state to cache before opening
-			save_current_blocker_cache(&relative_path, blockers.last().cloned())?;
+			let current = get_current_blocker(&relative_path);
+			save_current_blocker_cache(&relative_path, current)?;
 
 			// Determine which file to open
 			let resolved_path = match file_path {
@@ -497,8 +603,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		}
 		Command::Resume(resume_args) => {
 			// Get current blocker task description
-			let description = match blockers.last() {
-				Some(task) => task.clone(),
+			let description = match get_current_blocker(&relative_path) {
+				Some(task) => task,
 				None => return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'")),
 			};
 
@@ -535,7 +641,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Read, format, and write back the blocker file
 			if blocker_path.exists() {
 				let content = std::fs::read_to_string(&blocker_path)?;
-				let formatted = format_blocker_content(&content);
+				let formatted = format_blocker_content(&content)?;
 
 				if content != formatted {
 					std::fs::write(&blocker_path, formatted)?;
@@ -645,5 +751,61 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 				None => Err(eyre!("No project selected")),
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_classify_line() {
+		assert_eq!(classify_line(""), None);
+		assert_eq!(classify_line("\tComment"), Some(LineType::Comment));
+		assert_eq!(classify_line("Content"), Some(LineType::Content));
+		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Content));
+	}
+
+	#[test]
+	fn test_comment_validation_errors() {
+		// Comment as first line
+		assert!(format_blocker_content("\tComment").is_err());
+		// Comment after empty line
+		assert!(format_blocker_content("- Task\n\n\tComment").is_err());
+	}
+
+	#[test]
+	fn test_comment_preservation() {
+		// Single and multiple comments
+		let input = "- Task 1\n\tComment 1\n- Task 2\n\tComment A\n\tComment B";
+		let expected = "- Task 1\n\tComment 1\n- Task 2\n\tComment A\n\tComment B";
+		assert_eq!(format_blocker_content(input).unwrap(), expected);
+	}
+
+	#[test]
+	fn test_header_empty_line_rules() {
+		// No empty line between headers
+		assert_eq!(format_blocker_content("# H1\n## H2").unwrap(), "# H1\n## H2");
+		// Empty line before header after item
+		assert_eq!(format_blocker_content("item\n\n# Header").unwrap(), "- item\n\n# Header");
+		// Valid header needs space: # vs #NoSpace
+		assert_eq!(format_blocker_content("#NoSpace").unwrap(), "- #NoSpace");
+	}
+
+	#[test]
+	fn test_add_pop_preserve_comments() {
+		let input = "- Task 1\n\tComment 1";
+		// Add preserves comments
+		assert_eq!(add_content_line(input, "Task 2").unwrap(), "- Task 1\n\tComment 1\n- Task 2");
+		// Pop preserves comments
+		let input2 = "- Task 1\n\tComment 1\n- Task 2\n\tComment 2";
+		assert_eq!(pop_content_line(input2).unwrap(), "- Task 1\n\tComment 1");
+	}
+
+	#[test]
+	fn test_empty_lines_removed() {
+		// Multiple empty lines collapsed
+		let input = "item 1\n\n\nitem 2\n\n\n\nitem 3";
+		assert_eq!(format_blocker_content(input).unwrap(), "- item 1\n- item 2\n- item 3");
 	}
 }
