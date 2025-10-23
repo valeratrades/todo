@@ -303,6 +303,11 @@ fn get_current_blocker(relative_path: &str) -> Option<String> {
 	blockers.last().cloned()
 }
 
+/// Strip leading "# " or "- " prefix from a blocker line
+fn strip_blocker_prefix(line: &str) -> &str {
+	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
+}
+
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 	let slash_count = relative_path.matches('/').count();
 
@@ -433,7 +438,8 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 						billable: false,
 					};
 
-					if let Err(e) = start_tracking_for_task(new_task.clone(), relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
+					let stripped_task = strip_blocker_prefix(new_task).to_string();
+					if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
 						eprintln!("Warning: Failed to start tracking for updated task: {}", e);
 					}
 				}
@@ -530,8 +536,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 						billable: false,
 					};
 
+					let stripped_task = strip_blocker_prefix(&current_task).to_string();
 					tokio::runtime::Runtime::new()?.block_on(async {
-						if let Err(e) = start_tracking_for_task(current_task.clone(), &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
+						if let Err(e) = start_tracking_for_task(stripped_task, &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
 							eprintln!("Warning: Failed to start tracking for previous task: {}", e);
 						}
 					});
@@ -546,18 +553,16 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			let content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
 			println!("{}", content);
 		}
-		Command::Current => {
+		Command::Current =>
 			if let Some(last) = get_current_blocker(&relative_path) {
-				// Strip leading "# " or "- " prefix
-				let stripped = last.strip_prefix("# ").or_else(|| last.strip_prefix("- ")).unwrap_or(&last);
+				let stripped = strip_blocker_prefix(&last);
 
 				const MAX_LEN: usize = 70;
 				match stripped.len() {
 					0..=MAX_LEN => println!("{}", stripped),
 					_ => println!("{}...", &stripped[..(MAX_LEN - 3)]),
 				}
-			}
-		}
+			},
 		Command::Open { file_path, touch } => {
 			// Save current blocker state to cache before opening
 			let current = get_current_blocker(&relative_path);
@@ -604,7 +609,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::Resume(resume_args) => {
 			// Get current blocker task description
 			let description = match get_current_blocker(&relative_path) {
-				Some(task) => task,
+				Some(task) => strip_blocker_prefix(&task).to_string(),
 				None => return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'")),
 			};
 
