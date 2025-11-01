@@ -41,7 +41,12 @@ pub enum Command {
 	/// adds one and only one blocker. The structure is **not** a tree for a reason:
 	/// - it forces prioritization (high leverage)
 	/// - solving top 1 thing can often unlock many smaller ones for free
-	Add { name: String },
+	Add {
+		name: String,
+		/// Project path or pattern to override the default project
+		#[arg(short = 'p', long)]
+		project: Option<String>,
+	},
 	/// Pop the last one
 	Pop,
 	/// Full list of blockers down from the main task
@@ -475,21 +480,32 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	let blocker_path = STATE_DIR.get().unwrap().join(&relative_path);
 
 	match args.command {
-		Command::Add { name } => {
+		Command::Add { name, project } => {
+			// Resolve the actual relative_path to use, either from --project flag or the default
+			let target_relative_path = if let Some(project_pattern) = project {
+				resolve_project_path(&project_pattern)?
+			} else {
+				relative_path.clone()
+			};
+
+			// Re-parse workspace from the target path
+			let target_workspace_from_path = parse_workspace_from_path(&target_relative_path)?;
+			let target_blocker_path = STATE_DIR.get().unwrap().join(&target_relative_path);
+
 			// If tracking is enabled, stop current task before adding new one
 			if is_blocker_tracking_enabled() {
 				tokio::runtime::Runtime::new()?.block_on(async {
-					let _ = stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
+					let _ = stop_current_tracking(target_workspace_from_path.as_deref()).await; // Ignore errors when stopping
 				});
 			}
 
 			// Read existing content, add new line, format and write
-			let existing_content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
+			let existing_content = std::fs::read_to_string(&target_blocker_path).unwrap_or_else(|_| String::new());
 			let formatted = add_content_line(&existing_content, &name)?;
-			std::fs::write(&blocker_path, formatted)?;
+			std::fs::write(&target_blocker_path, formatted)?;
 
 			// Save current blocker to cache
-			save_current_blocker_cache(&relative_path, Some(name.clone()))?;
+			save_current_blocker_cache(&target_relative_path, Some(name.clone()))?;
 
 			// If tracking is enabled, start tracking the new task
 			if is_blocker_tracking_enabled() {
@@ -502,7 +518,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				};
 
 				tokio::runtime::Runtime::new()?.block_on(async {
-					if let Err(e) = start_tracking_for_task(name, &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
+					if let Err(e) = start_tracking_for_task(name, &target_relative_path, &default_resume_args, target_workspace_from_path.as_deref()).await {
 						eprintln!("Warning: Failed to start tracking for new task: {}", e);
 					}
 				});
