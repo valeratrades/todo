@@ -213,23 +213,28 @@ fn format_blocker_content(content: &str) -> Result<String> {
 			Some(LineType::Content) => {
 				let trimmed = line.trim();
 
-				// Check if current line is a header (starts with # followed by space or another #)
-				let is_header = trimmed.starts_with('#') && (trimmed.len() > 1 && (trimmed.chars().nth(1) == Some(' ') || trimmed.chars().nth(1) == Some('#')));
+				let current_header_level = get_header_level(trimmed);
 
 				// If this is a header and we have previous lines, check if we need an empty line before it
-				if is_header && !formatted_lines.is_empty() {
-					// Check if the previous non-empty line was also a header
-					let last_line = formatted_lines.last().unwrap();
-					let prev_is_header = last_line.trim().starts_with('#');
+				if let Some(curr_level) = current_header_level {
+					if !formatted_lines.is_empty() {
+						let last_line = formatted_lines.last().unwrap();
+						let prev_header_level = get_header_level(last_line);
 
-					// Add empty line before header only if previous line wasn't a header
-					if !prev_is_header {
-						formatted_lines.push(String::new());
+						// Add empty line based on header level relationship:
+						// - No space if previous is larger rank (smaller number) than current
+						// - Space if previous is same or lower rank (same/larger number) than current
+						// - Space if previous line is not a header
+						let needs_space = match prev_header_level {
+							Some(prev_level) => prev_level >= curr_level, // same or lower rank (e.g., ## after # or ##)
+							None => true,                                 // previous line is not a header
+						};
+
+						if needs_space {
+							formatted_lines.push(String::new());
+						}
 					}
 
-					formatted_lines.push(trimmed.to_string());
-				} else if is_header {
-					// First line is a header, no empty line needed
 					formatted_lines.push(trimmed.to_string());
 				} else {
 					// Not a header - ensure it starts with "- "
@@ -311,6 +316,34 @@ fn get_current_blocker(relative_path: &str) -> Option<String> {
 /// Strip leading "# " or "- " prefix from a blocker line
 fn strip_blocker_prefix(line: &str) -> &str {
 	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
+}
+
+/// Get the header level (number of # characters) from a line
+/// Returns None if the line is not a header
+fn get_header_level(line: &str) -> Option<usize> {
+	let trimmed = line.trim();
+	if !trimmed.starts_with('#') {
+		return None;
+	}
+
+	let mut count = 0;
+	for ch in trimmed.chars() {
+		if ch == '#' {
+			count += 1;
+		} else {
+			break;
+		}
+	}
+
+	// Valid header must have space or another # after the # characters
+	if count > 0 && trimmed.len() > count {
+		let next_char = trimmed.chars().nth(count);
+		if next_char == Some(' ') || next_char == Some('#') {
+			return Some(count);
+		}
+	}
+
+	None
 }
 
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
@@ -805,10 +838,23 @@ mod tests {
 
 	#[test]
 	fn test_header_empty_line_rules() {
-		// No empty line between headers
+		// No empty line when going from larger rank (smaller #) to lower rank (more #)
 		assert_eq!(format_blocker_content("# H1\n## H2").unwrap(), "# H1\n## H2");
+		assert_eq!(format_blocker_content("# H1\n### H3").unwrap(), "# H1\n### H3");
+		assert_eq!(format_blocker_content("## H2\n### H3").unwrap(), "## H2\n### H3");
+
+		// Empty line when going from same rank to same rank
+		assert_eq!(format_blocker_content("# H1\n# H2").unwrap(), "# H1\n\n# H2");
+		assert_eq!(format_blocker_content("## H2a\n## H2b").unwrap(), "## H2a\n\n## H2b");
+
+		// Empty line when going from lower rank (more #) to higher rank (fewer #)
+		assert_eq!(format_blocker_content("## H2\n# H1").unwrap(), "## H2\n\n# H1");
+		assert_eq!(format_blocker_content("### H3\n# H1").unwrap(), "### H3\n\n# H1");
+		assert_eq!(format_blocker_content("### H3\n## H2").unwrap(), "### H3\n\n## H2");
+
 		// Empty line before header after item
 		assert_eq!(format_blocker_content("item\n\n# Header").unwrap(), "- item\n\n# Header");
+
 		// Valid header needs space: # vs #NoSpace
 		assert_eq!(format_blocker_content("#NoSpace").unwrap(), "- #NoSpace");
 	}
