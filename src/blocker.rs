@@ -145,27 +145,129 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 	std::fs::read_to_string(&cache_path).ok()
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum HeaderLevel {
+	One,
+	Two,
+	Three,
+	Four,
+	Five,
+}
+
+impl HeaderLevel {
+	/// Get the numeric level (1-5)
+	fn to_usize(&self) -> usize {
+		match self {
+			HeaderLevel::One => 1,
+			HeaderLevel::Two => 2,
+			HeaderLevel::Three => 3,
+			HeaderLevel::Four => 4,
+			HeaderLevel::Five => 5,
+		}
+	}
+
+	/// Create from numeric level (1-5)
+	fn from_usize(level: usize) -> Option<Self> {
+		match level {
+			1 => Some(HeaderLevel::One),
+			2 => Some(HeaderLevel::Two),
+			3 => Some(HeaderLevel::Three),
+			4 => Some(HeaderLevel::Four),
+			5 => Some(HeaderLevel::Five),
+			_ => None,
+		}
+	}
+}
+
 /// Line classification for blocker files
 #[derive(Clone, Debug, PartialEq)]
 enum LineType {
-	/// Content line - headers or list items (contributes to blocker list)
-	Content,
+	/// Header with level and text (without # prefix)
+	Header { level: HeaderLevel, text: String },
+	/// List item or other content line (contributes to blocker list)
+	Item,
 	/// Comment line - tab-indented explanatory text (does not contribute to blocker list)
 	Comment,
 }
 
+impl LineType {
+	/// Check if this line type is a header
+	#[allow(dead_code)]
+	fn is_header(&self) -> bool {
+		matches!(self, LineType::Header { .. })
+	}
+
+	/// Get the header level, or None if not a header
+	#[allow(dead_code)]
+	fn header_level(&self) -> Option<HeaderLevel> {
+		match self {
+			LineType::Header { level, .. } => Some(*level),
+			_ => None,
+		}
+	}
+
+	/// Get the header text, or None if not a header
+	#[allow(dead_code)]
+	fn header_text(&self) -> Option<&str> {
+		match self {
+			LineType::Header { text, .. } => Some(text),
+			_ => None,
+		}
+	}
+
+	/// Check if this line type contributes to the blocker list (headers and items)
+	fn is_content(&self) -> bool {
+		!matches!(self, LineType::Comment)
+	}
+}
+
 /// Classify a line based on its content
 /// - Lines starting with tab are Comments
-/// - All other non-empty lines are Content
+/// - Lines starting with # are Headers (levels 1-5)
+/// - All other non-empty lines are Items
 /// - Returns None for empty lines
 fn classify_line(line: &str) -> Option<LineType> {
 	if line.is_empty() {
-		None
-	} else if line.starts_with('\t') {
-		Some(LineType::Comment)
-	} else {
-		Some(LineType::Content)
+		return None;
 	}
+
+	if line.starts_with('\t') {
+		return Some(LineType::Comment);
+	}
+
+	let trimmed = line.trim();
+
+	// Check for headers (# with space after)
+	if trimmed.starts_with('#') {
+		let mut count = 0;
+		for ch in trimmed.chars() {
+			if ch == '#' {
+				count += 1;
+			} else {
+				break;
+			}
+		}
+
+		// Valid header must have space after the # characters
+		if count > 0 && trimmed.len() > count {
+			let next_char = trimmed.chars().nth(count);
+			if next_char == Some(' ') {
+				let text = trimmed[count + 1..].to_string();
+
+				// Warn if header is nested too deeply (level > 5)
+				if count > 5 {
+					eprintln!("Warning: Header level {} is too deep (max 5 supported). Treating as regular item: {}", count, trimmed);
+					return Some(LineType::Item);
+				}
+
+				if let Some(level) = HeaderLevel::from_usize(count) {
+					return Some(LineType::Header { level, text });
+				}
+			}
+		}
+	}
+
+	Some(LineType::Item)
 }
 
 /// Format blocker list content according to standardization rules:
@@ -210,39 +312,40 @@ fn format_blocker_content(content: &str) -> Result<String> {
 				// Preserve comment line with tab indentation
 				formatted_lines.push(line.to_string());
 			}
-			Some(LineType::Content) => {
-				let trimmed = line.trim();
+			Some(LineType::Header { level, text }) => {
+				// Check if we need an empty line before this header
+				if !formatted_lines.is_empty() {
+					let last_line = formatted_lines.last().unwrap();
+					let prev_line_type = classify_line(last_line);
 
-				let current_header_level = get_header_level(trimmed);
-
-				// If this is a header and we have previous lines, check if we need an empty line before it
-				if let Some(curr_level) = current_header_level {
-					if !formatted_lines.is_empty() {
-						let last_line = formatted_lines.last().unwrap();
-						let prev_header_level = get_header_level(last_line);
-
-						// Add empty line based on header level relationship:
-						// - No space if previous is larger rank (smaller number) than current
-						// - Space if previous is same or lower rank (same/larger number) than current
-						// - Space if previous line is not a header
-						let needs_space = match prev_header_level {
-							Some(prev_level) => prev_level >= curr_level, // same or lower rank (e.g., ## after # or ##)
-							None => true,                                 // previous line is not a header
-						};
-
-						if needs_space {
-							formatted_lines.push(String::new());
+					// Add empty line based on header level relationship:
+					// - No space if previous is larger rank (smaller level value) than current
+					// - Space if previous is same or lower rank (same/larger level value) than current
+					// - Space if previous line is not a header
+					let needs_space = match prev_line_type {
+						Some(LineType::Header { level: prev_level, .. }) => {
+							// Using derived Ord: One < Two < Three < Four < Five
+							prev_level >= level // same or lower rank (e.g., ## after # or ##)
 						}
-					}
+						_ => true, // previous line is not a header
+					};
 
+					if needs_space {
+						formatted_lines.push(String::new());
+					}
+				}
+
+				// Reconstruct the header line
+				let header_prefix = "#".repeat(level.to_usize());
+				formatted_lines.push(format!("{} {}", header_prefix, text));
+			}
+			Some(LineType::Item) => {
+				let trimmed = line.trim();
+				// Ensure it starts with "- "
+				if trimmed.starts_with("- ") {
 					formatted_lines.push(trimmed.to_string());
 				} else {
-					// Not a header - ensure it starts with "- "
-					if trimmed.starts_with("- ") {
-						formatted_lines.push(trimmed.to_string());
-					} else {
-						formatted_lines.push(format!("- {}", trimmed));
-					}
+					formatted_lines.push(format!("- {}", trimmed));
 				}
 			}
 		}
@@ -264,22 +367,17 @@ fn pop_content_line(content: &str) -> Result<String> {
 	let lines: Vec<&str> = content.lines().collect();
 	let mut content_lines_indices: Vec<usize> = Vec::new();
 
-	// Find indices of all content lines
+	// Find indices of all content lines (headers and items, not comments)
 	for (idx, line) in lines.iter().enumerate() {
-		if classify_line(line) == Some(LineType::Content) {
-			content_lines_indices.push(idx);
+		if let Some(line_type) = classify_line(line) {
+			if line_type.is_content() {
+				content_lines_indices.push(idx);
+			}
 		}
 	}
 
 	// Remove the last content line and its associated comments
 	if let Some(&last_content_idx) = content_lines_indices.last() {
-		// Find the next content line index (or end of file)
-		let next_content_idx = content_lines_indices.iter()
-			.rev()
-			.nth(1) // Get second-to-last content line
-			.map(|&idx| idx + 1) // Start keeping from the line after it
-			.unwrap_or(0); // Or keep nothing if this was the only content line
-
 		// Keep lines before the last content block, exclude the last content line and its comments
 		let new_lines: Vec<&str> = lines
 			.iter()
@@ -318,32 +416,42 @@ fn strip_blocker_prefix(line: &str) -> &str {
 	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
 }
 
-/// Get the header level (number of # characters) from a line
-/// Returns None if the line is not a header
-fn get_header_level(line: &str) -> Option<usize> {
-	let trimmed = line.trim();
-	if !trimmed.starts_with('#') {
-		return None;
-	}
+/// Parse the tree of parent headers above a task
+/// Returns a vector of header texts in order from top-level to immediate parent
+fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
+	let lines: Vec<&str> = content.lines().collect();
 
-	let mut count = 0;
-	for ch in trimmed.chars() {
-		if ch == '#' {
-			count += 1;
-		} else {
-			break;
+	// Find the index of the task line
+	let task_index = match lines.iter().position(|&line| {
+		// Match the task line exactly (after stripping prefix)
+		let stripped = strip_blocker_prefix(line);
+		stripped == task_line.strip_prefix("- ").unwrap_or(task_line)
+	}) {
+		Some(idx) => idx,
+		None => return Vec::new(),
+	};
+
+	let mut headers = Vec::new();
+	let mut current_level: Option<HeaderLevel> = None;
+
+	// Walk backwards from the task to find parent headers
+	for i in (0..task_index).rev() {
+		let line = lines[i];
+
+		// Classify the line
+		if let Some(LineType::Header { level, text }) = classify_line(line) {
+			// Only add headers that are parent levels (smaller level = higher in hierarchy)
+			// Using derived Ord: One < Two < Three < Four < Five
+			if current_level.is_none() || level < current_level.unwrap() {
+				headers.push(text);
+				current_level = Some(level);
+			}
 		}
 	}
 
-	// Valid header must have space or another # after the # characters
-	if count > 0 && trimmed.len() > count {
-		let next_char = trimmed.chars().nth(count);
-		if next_char == Some(' ') || next_char == Some('#') {
-			return Some(count);
-		}
-	}
-
-	None
+	// Reverse to get top-level first
+	headers.reverse();
+	headers
 }
 
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
@@ -418,10 +526,32 @@ async fn start_tracking_for_task(description: String, relative_path: &str, resum
 		false
 	};
 
+	// Read blocker file to parse parent headers for Clockify
+	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let parent_headers = if blocker_path.exists() {
+		let content = std::fs::read_to_string(&blocker_path)?;
+		let current_blocker = get_current_blocker(relative_path);
+		if let Some(current) = current_blocker {
+			parse_parent_headers(&content, &current)
+		} else {
+			Vec::new()
+		}
+	} else {
+		Vec::new()
+	};
+
+	// Build final description with parent headers
+	let final_description = if parent_headers.is_empty() {
+		description
+	} else {
+		let header_prefix = parent_headers.join(": ");
+		format!("{}: {}", header_prefix, description)
+	};
+
 	clockify::start_time_entry_with_defaults(
 		workspace,
 		resume_args.project.as_deref(),
-		description,
+		final_description,
 		resume_args.task.as_deref(),
 		resume_args.tags.as_deref(),
 		resume_args.billable,
@@ -816,8 +946,45 @@ mod tests {
 	fn test_classify_line() {
 		assert_eq!(classify_line(""), None);
 		assert_eq!(classify_line("\tComment"), Some(LineType::Comment));
-		assert_eq!(classify_line("Content"), Some(LineType::Content));
-		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Content));
+		assert_eq!(classify_line("Content"), Some(LineType::Item));
+		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Item));
+		assert_eq!(
+			classify_line("# Header 1"),
+			Some(LineType::Header {
+				level: HeaderLevel::One,
+				text: "Header 1".to_string()
+			})
+		);
+		assert_eq!(
+			classify_line("## Header 2"),
+			Some(LineType::Header {
+				level: HeaderLevel::Two,
+				text: "Header 2".to_string()
+			})
+		);
+		assert_eq!(
+			classify_line("### Header 3"),
+			Some(LineType::Header {
+				level: HeaderLevel::Three,
+				text: "Header 3".to_string()
+			})
+		);
+		assert_eq!(
+			classify_line("#### Header 4"),
+			Some(LineType::Header {
+				level: HeaderLevel::Four,
+				text: "Header 4".to_string()
+			})
+		);
+		assert_eq!(
+			classify_line("##### Header 5"),
+			Some(LineType::Header {
+				level: HeaderLevel::Five,
+				text: "Header 5".to_string()
+			})
+		);
+		assert_eq!(classify_line("#NoSpace"), Some(LineType::Item)); // Invalid header
+		assert_eq!(classify_line("###### Header 6"), Some(LineType::Item)); // Level 6 not supported, treated as item
 	}
 
 	#[test]
@@ -874,5 +1041,113 @@ mod tests {
 		// Multiple empty lines collapsed
 		let input = "item 1\n\n\nitem 2\n\n\n\nitem 3";
 		assert_eq!(format_blocker_content(input).unwrap(), "- item 1\n- item 2\n- item 3");
+	}
+
+	#[test]
+	fn test_line_type_methods() {
+		let h1 = LineType::Header {
+			level: HeaderLevel::One,
+			text: "Test".to_string(),
+		};
+		let h2 = LineType::Header {
+			level: HeaderLevel::Two,
+			text: "Test".to_string(),
+		};
+		let item = LineType::Item;
+		let comment = LineType::Comment;
+
+		// Test is_header
+		assert!(h1.is_header());
+		assert!(h2.is_header());
+		assert!(!item.is_header());
+		assert!(!comment.is_header());
+
+		// Test header_level
+		assert_eq!(h1.header_level(), Some(HeaderLevel::One));
+		assert_eq!(h2.header_level(), Some(HeaderLevel::Two));
+		assert_eq!(item.header_level(), None);
+		assert_eq!(comment.header_level(), None);
+
+		// Test header_text
+		assert_eq!(h1.header_text(), Some("Test"));
+		assert_eq!(h2.header_text(), Some("Test"));
+		assert_eq!(item.header_text(), None);
+		assert_eq!(comment.header_text(), None);
+
+		// Test is_content
+		assert!(h1.is_content());
+		assert!(h2.is_content());
+		assert!(item.is_content());
+		assert!(!comment.is_content());
+	}
+
+	#[test]
+	fn test_header_level_ordering() {
+		// Test that HeaderLevel has proper ordering (One < Two < Three < Four < Five)
+		assert!(HeaderLevel::One < HeaderLevel::Two);
+		assert!(HeaderLevel::Two < HeaderLevel::Three);
+		assert!(HeaderLevel::Three < HeaderLevel::Four);
+		assert!(HeaderLevel::Four < HeaderLevel::Five);
+
+		// Test to_usize
+		assert_eq!(HeaderLevel::One.to_usize(), 1);
+		assert_eq!(HeaderLevel::Two.to_usize(), 2);
+		assert_eq!(HeaderLevel::Three.to_usize(), 3);
+		assert_eq!(HeaderLevel::Four.to_usize(), 4);
+		assert_eq!(HeaderLevel::Five.to_usize(), 5);
+
+		// Test from_usize
+		assert_eq!(HeaderLevel::from_usize(1), Some(HeaderLevel::One));
+		assert_eq!(HeaderLevel::from_usize(2), Some(HeaderLevel::Two));
+		assert_eq!(HeaderLevel::from_usize(3), Some(HeaderLevel::Three));
+		assert_eq!(HeaderLevel::from_usize(4), Some(HeaderLevel::Four));
+		assert_eq!(HeaderLevel::from_usize(5), Some(HeaderLevel::Five));
+		assert_eq!(HeaderLevel::from_usize(6), None);
+		assert_eq!(HeaderLevel::from_usize(0), None);
+	}
+
+	#[test]
+	fn test_parse_parent_headers_simple() {
+		let content = "# Project A\n- task 1";
+		let headers = parse_parent_headers(content, "- task 1");
+		assert_eq!(headers, vec!["Project A"]);
+	}
+
+	#[test]
+	fn test_parse_parent_headers_nested() {
+		let content = "# Project A\n## Feature B\n### Component C\n- task 1";
+		let headers = parse_parent_headers(content, "- task 1");
+		assert_eq!(headers, vec!["Project A", "Feature B", "Component C"]);
+	}
+
+	#[test]
+	fn test_parse_parent_headers_with_siblings() {
+		let content = "# Project A\n## Feature B\n- task 1\n## Feature C\n- task 2";
+		let headers = parse_parent_headers(content, "- task 2");
+		assert_eq!(headers, vec!["Project A", "Feature C"]);
+
+		let task_description = "task 2";
+	}
+
+	#[test]
+	fn test_parse_parent_headers_skip_comments() {
+		let content = "# Project A\n\tComment here\n## Feature B\n\tAnother comment\n- task 1";
+		let headers = parse_parent_headers(content, "- task 1");
+		assert_eq!(headers, vec!["Project A", "Feature B"]);
+	}
+
+	#[test]
+	fn test_parse_parent_headers_no_headers() {
+		let content = "- task 1\n- task 2\n- task 3";
+		let headers = parse_parent_headers(content, "- task 3");
+		assert_eq!(headers, Vec::<String>::new());
+	}
+
+	#[test]
+	fn test_parse_parent_headers_multiple_levels_skipped() {
+		// Should only get direct ancestors, skipping intermediate levels
+		let content = "# Level 1\n### Level 3\n- task 1";
+		let headers = parse_parent_headers(content, "- task 1");
+		assert_eq!(headers, vec!["Level 1", "Level 3"]);
 	}
 }
