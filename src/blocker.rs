@@ -60,6 +60,9 @@ pub enum Command {
 		/// Create the file if it doesn't exist (touch)
 		#[arg(short = 't', long)]
 		touch: bool,
+		/// Set the opened file as chosen project after exiting the editor
+		#[arg(short = 's', long)]
+		set_project_after: bool,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
 	SetProject { relative_path: String },
@@ -574,6 +577,20 @@ fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 	Ok(())
 }
 
+fn set_current_project(resolved_path: &str) -> Result<()> {
+	// Validate the resolved path before saving
+	parse_workspace_from_path(resolved_path)?;
+	let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+	std::fs::write(&state_dir, resolved_path)?;
+
+	println!("Set current project to: {}", resolved_path);
+
+	// Spawn background process to check for clockify updates after project change
+	spawn_blocker_comparison_process(resolved_path.to_string())?;
+
+	Ok(())
+}
+
 fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	// Read and format the blocker file
 	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
@@ -742,7 +759,11 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 					_ => println!("{}...", &stripped[..(MAX_LEN - 3)]),
 				}
 			},
-		Command::Open { file_path, touch } => {
+		Command::Open {
+			file_path,
+			touch,
+			set_project_after,
+		} => {
 			// Save current blocker state to cache before opening
 			let current = get_current_blocker(&relative_path);
 			save_current_blocker_cache(&relative_path, current)?;
@@ -768,22 +789,18 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Open the file
 			v_utils::io::open(&path_to_open)?;
 
-			// Spawn background process to check for changes after editor closes
-			spawn_blocker_comparison_process(relative_path.clone())?;
+			// If set_project_after flag is set, update the current project
+			if set_project_after {
+				set_current_project(&resolved_path)?;
+			} else {
+				// Spawn background process to check for changes after editor closes
+				spawn_blocker_comparison_process(relative_path.clone())?;
+			}
 		}
 		Command::SetProject { relative_path } => {
 			// Resolve the project path using pattern matching
 			let resolved_path = resolve_project_path(&relative_path)?;
-
-			// Validate the resolved path before saving
-			parse_workspace_from_path(&resolved_path)?;
-			let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-			std::fs::write(&state_dir, &resolved_path)?;
-
-			println!("Set current project to: {}", resolved_path);
-
-			// Spawn background process to check for clockify updates after project change
-			spawn_blocker_comparison_process(resolved_path)?;
+			set_current_project(&resolved_path)?;
 		}
 		Command::Resume(resume_args) => {
 			// Get current blocker task description
