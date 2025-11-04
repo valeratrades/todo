@@ -9,18 +9,41 @@ pub static STATE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static EXE_NAME: &str = "todo";
 
-#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
+#[derive(Clone, Debug, MyConfigPrimitives, derive_new::new)]
 pub struct AppConfig {
-	pub github_token: String,
-	pub date_format: String,
-	pub todos: Todos,
-	pub timer: Timer,
+	pub todos: Option<Todos>,
+	pub timer: Option<Timer>,
+	pub milestones: Option<Milestones>,
+	pub manual_stats: Option<ManualStats>,
 }
+
+impl Default for AppConfig {
+	fn default() -> Self {
+		Self {
+			todos: None,
+			timer: None,
+			milestones: None,
+			manual_stats: None,
+		}
+	}
+}
+
 #[derive(Clone, Debug, Default, MyConfigPrimitives)]
 pub struct Todos {
 	pub path: PathBuf,
 	pub n_tasks_to_show: usize,
 }
+
+#[derive(Clone, Debug, MyConfigPrimitives)]
+pub struct Milestones {
+	pub github_token: String,
+}
+
+#[derive(Clone, Debug, MyConfigPrimitives)]
+pub struct ManualStats {
+	pub date_format: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Timer {
 	pub hard_stop_coeff: f32,
@@ -58,11 +81,11 @@ impl AppConfig {
 			}
 		};
 
-		if !settings.todos.path.exists() {
-			return Err(config::ConfigError::Message(format!(
-				"Configured 'todos' directory does not exist: {}",
-				settings.todos.path.display()
-			)));
+		// Only validate todos path if todos config is present
+		if let Some(ref todos) = settings.todos {
+			if !todos.path.exists() {
+				return Err(config::ConfigError::Message(format!("Configured 'todos' directory does not exist: {}", todos.path.display())));
+			}
 		}
 
 		if std::env::var("XDG_STATE_HOME").is_err() {

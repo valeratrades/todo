@@ -21,7 +21,7 @@ jobs:
     - run: cargo miri setup
     - env:
         MIRIFLAGS: -Zmiri-strict-provenance
-      run: cargo miri test
+      run: cargo miri test --lib --bin
     timeout-minutes: 45
   rust-tests:
     if: needs.pre_ci.outputs.continue

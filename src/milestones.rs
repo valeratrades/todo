@@ -46,9 +46,14 @@ pub fn milestones_command(config: AppConfig, args: MilestonesArgs) -> Result<()>
 }
 
 fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
+	let todos_config = config
+		.todos
+		.as_ref()
+		.ok_or_else(|| eyre!("todos config section is required for milestones command. Add [todos] section with path to your config"))?;
+
 	let todos_url_output = std::process::Command::new("git")
 		.args(["config", "--get", "remote.origin.url"])
-		.current_dir(&config.todos.path)
+		.current_dir(&todos_config.path)
 		.output()?
 		.stdout;
 	let todos_url = String::from_utf8(todos_url_output).unwrap().trim().to_string();
@@ -57,11 +62,16 @@ fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 
 	let url = format!("https://api.github.com/repos/{owner}/{repo}/milestones");
 
+	let milestones_config = config
+		.milestones
+		.as_ref()
+		.ok_or_else(|| eyre!("milestones config section is required. Add [milestones] section with github_token to your config"))?;
+
 	let client = Client::new();
 	let res = client
 		.get(&url)
 		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", config.github_token))
+		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.send()?;
 	info!(?res);
 

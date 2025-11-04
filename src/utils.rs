@@ -13,7 +13,8 @@ pub fn format_date(days_back: usize, config: &AppConfig) -> String {
 	let date = Utc::now() - Duration::days(days_back as i64);
 	let offset = same_day_buffer();
 
-	(date - offset).format(config.date_format.as_str()).to_string()
+	let format_str = config.manual_stats.as_ref().map(|ms| ms.date_format.as_str()).unwrap_or("%Y-%m-%d");
+	(date - offset).format(format_str).to_string()
 }
 
 /// Ends of each day-section as offset to wake-time
@@ -73,7 +74,9 @@ mod tests {
 		}
 
 		AppConfig {
-			date_format: "%Y-%m-%d".to_string(),
+			manual_stats: Some(crate::config::ManualStats {
+				date_format: "%Y-%m-%d".to_string(),
+			}),
 			..Default::default()
 		}
 	}
