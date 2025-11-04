@@ -115,13 +115,13 @@ struct Project {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Task {
 	id: String,
 	name: String,
-	#[serde(rename = "projectId")]
-	project_id: String,
+	_project_id: String,
 	#[serde(default)]
-	archived: bool,
+	_archived: bool,
 }
 
 #[derive(Deserialize)]
@@ -147,16 +147,13 @@ struct NewTimeEntry {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreatedEntry {
 	id: String,
 	description: String,
-	#[serde(rename = "workspaceId")]
 	workspace_id: String,
-	#[serde(rename = "projectId")]
 	project_id: Option<String>,
-	#[serde(rename = "taskId")]
 	task_id: Option<String>,
-	#[serde(rename = "timeInterval")]
 	time_interval: TimeInterval,
 }
 
