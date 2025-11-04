@@ -159,7 +159,7 @@ enum HeaderLevel {
 
 impl HeaderLevel {
 	/// Get the numeric level (1-5)
-	fn to_usize(&self) -> usize {
+	fn to_usize(self) -> usize {
 		match self {
 			HeaderLevel::One => 1,
 			HeaderLevel::Two => 2,
@@ -388,8 +388,8 @@ fn pop_content_line(content: &str) -> Result<String> {
 			.filter(|(idx, _)| {
 				// Find where the last content block starts (the last content line)
 				// And where it ends (next content line or EOF)
-				let is_before_last_block = *idx < last_content_idx;
-				is_before_last_block
+
+				*idx < last_content_idx
 			})
 			.map(|(_, line)| *line)
 			.collect();
@@ -1142,8 +1142,6 @@ mod tests {
 		let content = "# Project A\n## Feature B\n- task 1\n## Feature C\n- task 2";
 		let headers = parse_parent_headers(content, "- task 2");
 		assert_eq!(headers, vec!["Project A", "Feature C"]);
-
-		let task_description = "task 2";
 	}
 
 	#[test]

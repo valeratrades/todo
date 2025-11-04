@@ -15,22 +15,13 @@ pub struct AppConfig {
 	pub date_format: String,
 	pub todos: Todos,
 	pub timer: Timer,
-	pub activity_monitor: ActivityMonitor,
 }
-#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
+#[derive(Clone, Debug, Default, MyConfigPrimitives)]
 pub struct Todos {
 	pub path: PathBuf,
 	pub n_tasks_to_show: usize,
 }
-#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
-pub struct ActivityMonitor {
-	pub delimitor: String,
-	pub calendar_id: String,
-	pub google_calendar_refresh_token: String,
-	pub google_client_id: String,
-	pub google_client_secret: String,
-}
-#[derive(Clone, Debug, Default, Deserialize, derive_new::new)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Timer {
 	pub hard_stop_coeff: f32,
 }
@@ -44,7 +35,6 @@ impl AppConfig {
 				builder.build()?.try_deserialize()?
 			}
 			None => {
-				let app_name = env!("CARGO_PKG_NAME");
 				let app_name = env!("CARGO_PKG_NAME");
 				let xdg_dirs = xdg::BaseDirectories::with_prefix(app_name);
 				let xdg_conf_dir = xdg_dirs.get_config_home().unwrap().parent().unwrap().display().to_string();
