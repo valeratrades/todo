@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::OnceLock};
+use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
 
 use color_eyre::eyre::Result;
 use serde::Deserialize;
@@ -41,10 +41,13 @@ pub struct Timer {
 impl AppConfig {
 	pub fn read(path: Option<ExpandedPath>) -> Result<Self, config::ConfigError> {
 		let mut builder = config::Config::builder().add_source(config::Environment::default());
-		let settings: Self = match path {
-			Some(path) => {
-				let builder = builder.add_source(config::File::with_name(&path.to_string()).required(true));
-				builder.build()?.try_deserialize()?
+		let (settings, file_config): (Self, Option<config::Config>) = match path {
+			Some(ref p) => {
+				// Build file-only config for validation
+				let file_only = config::Config::builder().add_source(config::File::with_name(&p.to_string()).required(true)).build()?;
+				let builder = builder.add_source(config::File::with_name(&p.to_string()).required(true));
+				let raw = builder.build()?;
+				(raw.try_deserialize()?, Some(file_only))
 			}
 			None => {
 				let app_name = env!("CARGO_PKG_NAME");
@@ -55,13 +58,17 @@ impl AppConfig {
 					format!("{xdg_conf_dir}/{app_name}"),
 					format!("{xdg_conf_dir}/{app_name}/config"), //
 				];
+				// Build file-only config for validation
+				let mut file_builder = config::Config::builder();
 				for location in locations.iter() {
 					builder = builder.add_source(config::File::with_name(location).required(false));
+					file_builder = file_builder.add_source(config::File::with_name(location).required(false));
 				}
 				let raw: config::Config = builder.build()?;
+				let file_only = file_builder.build().ok();
 
-				match raw.try_deserialize() {
-					Ok(settings) => settings,
+				match raw.clone().try_deserialize() {
+					Ok(settings) => (settings, file_only),
 					Err(e) => {
 						eprintln!("Config file does not exist or is invalid:");
 						return Err(e);
@@ -69,6 +76,11 @@ impl AppConfig {
 				}
 			}
 		};
+
+		// Check for unknown configuration fields (only in file config, not env vars)
+		if let Some(file_cfg) = file_config {
+			Self::warn_unknown_fields(&file_cfg);
+		}
 
 		// Only validate todos path if todos config is present
 		if let Some(ref todos) = settings.todos {
@@ -95,5 +107,43 @@ impl AppConfig {
 		let _ = std::fs::create_dir_all(data_dir);
 
 		Ok(settings)
+	}
+
+	fn warn_unknown_fields(file_config: &config::Config) {
+		// Define all known top-level sections
+		let known_sections: HashSet<&str> = ["todos", "timer", "milestones", "manual_stats"].iter().copied().collect();
+
+		// Define known fields for each section
+		let known_todos_fields: HashSet<&str> = ["path", "n_tasks_to_show"].iter().copied().collect();
+		let known_timer_fields: HashSet<&str> = ["hard_stop_coeff"].iter().copied().collect();
+		let known_milestones_fields: HashSet<&str> = ["github_token"].iter().copied().collect();
+		let known_manual_stats_fields: HashSet<&str> = ["date_format"].iter().copied().collect();
+
+		// Get all keys from the file config and check for unknown sections
+		use std::collections::HashMap;
+		if let Ok(table) = file_config.clone().try_deserialize::<HashMap<String, serde_json::Value>>() {
+			for (section, value) in table.iter() {
+				if !known_sections.contains(section.as_str()) {
+					eprintln!("warning: unknown configuration section '[{section}]' will be ignored");
+				} else {
+					// Check for unknown fields within known sections
+					if let serde_json::Value::Object(fields) = value {
+						let known_fields = match section.as_str() {
+							"todos" => &known_todos_fields,
+							"timer" => &known_timer_fields,
+							"milestones" => &known_milestones_fields,
+							"manual_stats" => &known_manual_stats_fields,
+							_ => continue,
+						};
+
+						for field_name in fields.keys() {
+							if !known_fields.contains(field_name.as_str()) {
+								eprintln!("warning: unknown configuration field '[{section}].{field_name}' will be ignored");
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 }
