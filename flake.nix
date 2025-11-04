@@ -17,7 +17,7 @@
         };
         #NB: can't load rust-bin from nightly.latest, as there are week guarantees of which components will be available on each day.
         rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
-          extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" ];
+          extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" "miri" ];
         });
         pre-commit-check = pre-commit-hooks.lib.${system}.run (v-utils.files.preCommit { inherit pkgs; });
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
@@ -82,7 +82,7 @@
                 mkdir -p ./.cargo
                 cp -f ${(v-utils.files.rust.config { inherit pkgs; })} ./.cargo/config.toml
                 cp -f ${(v-utils.files.rust.clippy { inherit pkgs; })} ./.cargo/.clippy.toml
-                cp -f ${ (v-utils.files.rust.toolchain { inherit pkgs; }) } ./.cargo/rust-toolchain.toml
+                #cp -f ${ (v-utils.files.rust.toolchain { inherit pkgs; }) } ./.cargo/rust-toolchain.toml
                 cp -f ${(v-utils.files.rust.rustfmt { inherit pkgs; })} ./.rustfmt.toml
                 cp -f ${(v-utils.files.rust.deny { inherit pkgs; })} ./deny.toml
                 cp -f ${ (v-utils.files.gitignore { inherit pkgs; langs = [ "rs" ]; }) } ./.gitignore

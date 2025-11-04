@@ -9,23 +9,12 @@ pub static STATE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub static EXE_NAME: &str = "todo";
 
-#[derive(Clone, Debug, MyConfigPrimitives, derive_new::new)]
+#[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
 pub struct AppConfig {
 	pub todos: Option<Todos>,
 	pub timer: Option<Timer>,
 	pub milestones: Option<Milestones>,
 	pub manual_stats: Option<ManualStats>,
-}
-
-impl Default for AppConfig {
-	fn default() -> Self {
-		Self {
-			todos: None,
-			timer: None,
-			milestones: None,
-			manual_stats: None,
-		}
-	}
 }
 
 #[derive(Clone, Debug, Default, MyConfigPrimitives)]
