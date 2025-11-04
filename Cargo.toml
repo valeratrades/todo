@@ -25,6 +25,9 @@ v_utils = { version = "^2.7.11", features = ["io", "macros", "trades"] } #ga: rm
 xattr = "1.6.1"
 xdg = "3.0.0"
 
+[dev-dependencies]
+insta = "1.41"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lints.clippy]
 float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should be allowed

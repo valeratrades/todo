@@ -1167,4 +1167,31 @@ mod tests {
 		let headers = parse_parent_headers(content, "- task 1");
 		assert_eq!(headers, vec!["Level 1", "Level 3"]);
 	}
+
+	#[test]
+	fn test_format_idempotent_with_same_level_headers_at_end() {
+		// Bug: when opening and closing a file, we fail to add spaces between
+		// the headers of the same level at the end
+		let input = "- move these todos over into a persisted directory\n\tcomment\n- move all typst projects\n- rewrite custom.sh\n\tcomment\n\n# marketmonkey\n- go in-depth on possibilities\n\n# SocialNetworks in rust\n- test twitter\n\n## yt\n- test\n\n# math tools\n## gauss\n- finish it\n- move gaussian pivot over in there\n\n# git lfs: docs, music, etc\n# eww: don't restore if outdated\n# todo: blocker: doesn't add spaces between same level headers";
+
+		// First format
+		let formatted_once = format_blocker_content(input).unwrap();
+
+		// Simulate file write and read (write doesn't add trailing newline, read doesn't care)
+		// This is what happens in handle_background_blocker_check
+		let formatted_twice = format_blocker_content(&formatted_once).unwrap();
+
+		// Check that there are spaces between same-level headers at the end
+		assert!(
+			formatted_once.contains("# git lfs: docs, music, etc\n\n# eww: don't restore if outdated"),
+			"Missing space between first two headers"
+		);
+		assert!(
+			formatted_once.contains("# eww: don't restore if outdated\n\n# todo: blocker: doesn't add spaces between same level headers"),
+			"Missing space between last two headers"
+		);
+
+		// Should be idempotent
+		assert_eq!(formatted_once, formatted_twice, "Formatting should be idempotent");
+	}
 }
