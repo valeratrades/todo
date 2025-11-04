@@ -794,7 +794,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				set_current_project(&resolved_path)?;
 			} else {
 				// Spawn background process to check for changes after editor closes
-				spawn_blocker_comparison_process(relative_path.clone())?;
+				spawn_blocker_comparison_process(resolved_path.clone())?;
 			}
 		}
 		Command::SetProject { relative_path } => {
