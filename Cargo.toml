@@ -3,6 +3,10 @@ name = "todo"
 version = "0.2.1"
 edition = "2021"
 
+[features]
+default = []
+is_integration_test = []
+
 [dependencies]
 chrono = { version = "^0.4.42", features = ["serde"] }
 clap = { version = "^4.5.51", features = ["derive"] }
@@ -27,6 +31,11 @@ xdg = "3.0.0"
 
 [dev-dependencies]
 insta = "1.43"
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+required-features = ["is_integration_test"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lints.clippy]
