@@ -1,10 +1,10 @@
 [package]
 name = "todo"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 
 [features]
-default = ["is_integration_test"]
+default = []
 is_integration_test = []
 
 [dependencies]
@@ -36,7 +36,6 @@ insta = "1.43"
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
-required-features = ["is_integration_test"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lints.clippy]

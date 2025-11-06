@@ -65,8 +65,11 @@ mod tests {
 	use crate::config::AppConfig;
 
 	fn init_test(t: Option<(i32, u32, u32, u32, u32, u32)>) -> AppConfig {
-		std::env::set_var("WAKETIME", "05:00");
-		std::env::set_var("DAY_SECTION_BORDERS", "2.5:10:16");
+		// SAFETY: This is only used in tests and doesn't cause race conditions in single-threaded test execution
+		unsafe {
+			std::env::set_var("WAKETIME", "05:00");
+			std::env::set_var("DAY_SECTION_BORDERS", "2.5:10:16");
+		}
 
 		if let Some(t) = t {
 			let mock_now = chrono::Utc.with_ymd_and_hms(t.0, t.1, t.2, t.3, t.4, t.5).unwrap();
