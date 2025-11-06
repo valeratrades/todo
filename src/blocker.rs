@@ -268,7 +268,7 @@ fn typst_to_markdown(content: &str) -> Result<String> {
 		let node_text = child.clone().into_text();
 
 		// Try to interpret as Heading
-		if let Some(heading) = typst::syntax::ast::Heading::from_untyped(&child) {
+		if let Some(heading) = typst::syntax::ast::Heading::from_untyped(child) {
 			let level_num = heading.depth().get();
 			// Extract just the body text (without the = prefix)
 			let body_text = heading.body().to_untyped().clone().into_text();
@@ -280,7 +280,7 @@ fn typst_to_markdown(content: &str) -> Result<String> {
 
 		// Try to interpret as ListItem (bullet list)
 		// Typst uses "- item" which is identical to markdown, so just keep it
-		if let Some(_list_item) = typst::syntax::ast::ListItem::from_untyped(&child) {
+		if let Some(_list_item) = typst::syntax::ast::ListItem::from_untyped(child) {
 			let trimmed = node_text.trim();
 			if !trimmed.is_empty() {
 				markdown_lines.push(trimmed.to_string());
@@ -290,7 +290,7 @@ fn typst_to_markdown(content: &str) -> Result<String> {
 
 		// Try to interpret as EnumItem (numbered list)
 		// Convert numbered lists to markdown-style items with "- " prefix
-		if let Some(_enum_item) = typst::syntax::ast::EnumItem::from_untyped(&child) {
+		if let Some(_enum_item) = typst::syntax::ast::EnumItem::from_untyped(child) {
 			let trimmed = node_text.trim();
 			if !trimmed.is_empty() {
 				// For numbered items, just treat as regular items
