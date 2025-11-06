@@ -224,13 +224,105 @@ impl LineType {
 	}
 }
 
-/// Classify a line based on its content
+/// Normalize content based on file extension
+/// Converts file-specific syntax to a canonical markdown-like format:
+/// - .md: pass through as-is
+/// - .typ: convert Typst syntax to markdown (= to #, etc.)
+/// - other: pass through as-is
+fn normalize_content_by_extension(content: &str, file_path: &Path) -> Result<String> {
+	let extension = file_path.extension().and_then(|e| e.to_str());
+
+	match extension {
+		Some("md") => Ok(content.to_string()),
+		Some("typ") => typst_to_markdown(content),
+		_ => Ok(content.to_string()),
+	}
+}
+
+/// Convert Typst syntax to markdown format
+/// Typst uses = for headings (more = means deeper), we convert to # (more # means deeper)
+/// Typst list syntax is similar to markdown (- for bullets)
+fn typst_to_markdown(content: &str) -> Result<String> {
+	use typst::syntax::{SyntaxKind, ast::AstNode, parse};
+
+	// Parse the Typst source into a syntax tree
+	let syntax_node = parse(content);
+
+	// Walk the syntax tree and convert to markdown
+	let mut markdown_lines: Vec<String> = Vec::new();
+
+	// Traverse the syntax tree
+	for child in syntax_node.children() {
+		// Skip pure whitespace nodes (space, parbreak)
+		if matches!(child.kind(), SyntaxKind::Space | SyntaxKind::Parbreak) {
+			// Check if this is a significant parbreak (actual empty line in source)
+			let text = child.text();
+			if text.matches('\n').count() > 1 {
+				// Multiple newlines = intentional empty line
+				markdown_lines.push(String::new());
+			}
+			continue;
+		}
+
+		// Get the text content of this node
+		let node_text = child.clone().into_text();
+
+		// Try to interpret as Heading
+		if let Some(heading) = typst::syntax::ast::Heading::from_untyped(&child) {
+			let level_num = heading.depth().get();
+			// Extract just the body text (without the = prefix)
+			let body_text = heading.body().to_untyped().clone().into_text();
+			let trimmed_body = body_text.trim();
+			// Convert Typst heading (= foo) to markdown heading (# foo)
+			markdown_lines.push(format!("{} {}", "#".repeat(level_num), trimmed_body));
+			continue;
+		}
+
+		// Try to interpret as ListItem (bullet list)
+		// Typst uses "- item" which is identical to markdown, so just keep it
+		if let Some(_list_item) = typst::syntax::ast::ListItem::from_untyped(&child) {
+			let trimmed = node_text.trim();
+			if !trimmed.is_empty() {
+				markdown_lines.push(trimmed.to_string());
+			}
+			continue;
+		}
+
+		// Try to interpret as EnumItem (numbered list)
+		// Convert numbered lists to markdown-style items with "- " prefix
+		if let Some(_enum_item) = typst::syntax::ast::EnumItem::from_untyped(&child) {
+			let trimmed = node_text.trim();
+			if !trimmed.is_empty() {
+				// For numbered items, just treat as regular items
+				// Strip the number/+ prefix and convert to -
+				let item_text = if let Some(stripped) = trimmed.strip_prefix('+') {
+					stripped.trim()
+				} else {
+					// Handle numbered format like "1. item"
+					if let Some(pos) = trimmed.find('.') { trimmed[pos + 1..].trim() } else { trimmed }
+				};
+				markdown_lines.push(format!("- {}", item_text));
+			}
+			continue;
+		}
+
+		// For other content (paragraphs, text), keep as-is if non-empty
+		let trimmed = node_text.trim();
+		if !trimmed.is_empty() {
+			markdown_lines.push(trimmed.to_string());
+		}
+	}
+
+	Ok(markdown_lines.join("\n"))
+}
+
+/// Classify a line based on markdown syntax
 /// - Lines starting with tab are Comments
 /// - Lines starting with 2+ spaces (likely editor-converted tabs) are Comments
 /// - Lines starting with # are Headers (levels 1-5)
 /// - All other non-empty lines are Items
 /// - Returns None for empty lines
-fn classify_line(line: &str) -> Option<LineType> {
+fn classify_line_markdown(line: &str) -> Option<LineType> {
 	if line.is_empty() {
 		return None;
 	}
@@ -278,6 +370,12 @@ fn classify_line(line: &str) -> Option<LineType> {
 	}
 
 	Some(LineType::Item)
+}
+
+/// Classify a line based on its content (backwards compatibility wrapper)
+/// Uses markdown classification by default
+fn classify_line(line: &str) -> Option<LineType> {
+	classify_line_markdown(line)
 }
 
 /// Format blocker list content according to standardization rules:
@@ -610,11 +708,26 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
 	if blocker_path.exists() {
 		let content = std::fs::read_to_string(&blocker_path)?;
-		let formatted = format_blocker_content(&content)?;
+		// Normalize content based on file extension (e.g., convert .typ to markdown)
+		let normalized = normalize_content_by_extension(&content, &blocker_path)?;
+		let formatted = format_blocker_content(&normalized)?;
+
+		// Check if this is a Typst file that needs to be converted to markdown
+		let extension = blocker_path.extension().and_then(|e| e.to_str());
+		let write_path = if extension == Some("typ") {
+			// Convert .typ to .md
+			blocker_path.with_extension("md")
+		} else {
+			blocker_path.clone()
+		};
 
 		// Only write back if content changed
 		if content != formatted {
-			std::fs::write(&blocker_path, formatted)?;
+			std::fs::write(&write_path, formatted)?;
+			// If we converted from .typ to .md, remove the old .typ file
+			if extension == Some("typ") {
+				std::fs::remove_file(&blocker_path)?;
+			}
 		}
 	}
 
@@ -856,11 +969,30 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Read, format, and write back the blocker file
 			if blocker_path.exists() {
 				let content = std::fs::read_to_string(&blocker_path)?;
-				let formatted = format_blocker_content(&content)?;
+				// Normalize content based on file extension (e.g., convert .typ to markdown)
+				let normalized = normalize_content_by_extension(&content, &blocker_path)?;
+				let formatted = format_blocker_content(&normalized)?;
+
+				// Check if this is a Typst file that needs to be converted to markdown
+				let extension = blocker_path.extension().and_then(|e| e.to_str());
+				let (write_path, new_relative_path) = if extension == Some("typ") {
+					// Convert .typ to .md
+					let new_path = blocker_path.with_extension("md");
+					let new_rel = relative_path.strip_suffix(".typ").unwrap_or(&relative_path).to_string() + ".md";
+					(new_path, new_rel)
+				} else {
+					(blocker_path.clone(), relative_path.clone())
+				};
 
 				if content != formatted {
-					std::fs::write(&blocker_path, formatted)?;
-					println!("Formatted blocker file: {}", relative_path);
+					std::fs::write(&write_path, formatted)?;
+					// If we converted from .typ to .md, remove the old .typ file
+					if extension == Some("typ") {
+						std::fs::remove_file(&blocker_path)?;
+						println!("Converted and formatted blocker file: {} -> {}", relative_path, new_relative_path);
+					} else {
+						println!("Formatted blocker file: {}", relative_path);
+					}
 				} else {
 					println!("Blocker file already formatted: {}", relative_path);
 				}
@@ -877,7 +1009,10 @@ fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 	use std::process::Command;
 
 	let state_dir = STATE_DIR.get().unwrap();
-	let output = Command::new("find").args([state_dir.to_str().unwrap(), "-name", "*.md", "-type", "f"]).output()?;
+	// Search for both .md and .typ files
+	let output = Command::new("find")
+		.args([state_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f"])
+		.output()?;
 
 	if !output.status.success() {
 		return Err(eyre!("Failed to search for files"));
@@ -1229,6 +1364,71 @@ mod tests {
 		let content = "# Level 1\n### Level 3\n- task 1";
 		let headers = parse_parent_headers(content, "- task 1");
 		assert_eq!(headers, vec!["Level 1", "Level 3"]);
+	}
+
+	#[test]
+	fn test_typst_to_markdown_headings() {
+		// Test Typst heading conversion (= to #)
+		let typst_input = "= Level 1\n== Level 2\n=== Level 3";
+		let expected = "# Level 1\n## Level 2\n### Level 3";
+		assert_eq!(typst_to_markdown(typst_input).unwrap(), expected);
+	}
+
+	#[test]
+	fn test_typst_to_markdown_lists() {
+		// Test Typst bullet list (same as markdown)
+		let typst_input = "- First item\n- Second item";
+		let expected = "- First item\n- Second item";
+		assert_eq!(typst_to_markdown(typst_input).unwrap(), expected);
+	}
+
+	#[test]
+	fn test_typst_to_markdown_enum_lists() {
+		// Test Typst numbered list conversion
+		let typst_input = "+ First\n+ Second";
+		let markdown = typst_to_markdown(typst_input).unwrap();
+		// Should convert to markdown list items
+		assert!(markdown.contains("- First"));
+		assert!(markdown.contains("- Second"));
+	}
+
+	#[test]
+	fn test_typst_to_markdown_mixed() {
+		// Test mixed content
+		let typst_input = "= Project\n- task 1\n- task 2";
+		let markdown = typst_to_markdown(typst_input).unwrap();
+		assert!(markdown.contains("# Project"));
+		assert!(markdown.contains("- task 1"));
+		assert!(markdown.contains("- task 2"));
+	}
+
+	#[test]
+	fn test_normalize_content_markdown() {
+		use std::path::PathBuf;
+		let content = "# Header\n- item";
+		let path = PathBuf::from("test.md");
+		// For .md files, content should pass through unchanged
+		assert_eq!(normalize_content_by_extension(content, &path).unwrap(), content);
+	}
+
+	#[test]
+	fn test_normalize_content_typst() {
+		use std::path::PathBuf;
+		let content = "= Header\n- item";
+		let path = PathBuf::from("test.typ");
+		// For .typ files, should convert to markdown
+		let result = normalize_content_by_extension(content, &path).unwrap();
+		assert!(result.contains("# Header"));
+		assert!(result.contains("- item"));
+	}
+
+	#[test]
+	fn test_normalize_content_plain() {
+		use std::path::PathBuf;
+		let content = "plain text\nmore text";
+		let path = PathBuf::from("test.txt");
+		// For other extensions, content should pass through unchanged
+		assert_eq!(normalize_content_by_extension(content, &path).unwrap(), content);
 	}
 
 	#[test]
