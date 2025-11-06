@@ -226,6 +226,7 @@ impl LineType {
 
 /// Classify a line based on its content
 /// - Lines starting with tab are Comments
+/// - Lines starting with 2+ spaces (likely editor-converted tabs) are Comments
 /// - Lines starting with # are Headers (levels 1-5)
 /// - All other non-empty lines are Items
 /// - Returns None for empty lines
@@ -235,6 +236,12 @@ fn classify_line(line: &str) -> Option<LineType> {
 	}
 
 	if line.starts_with('\t') {
+		return Some(LineType::Comment);
+	}
+
+	// Treat lines starting with 2+ spaces as comments (likely from editor tab-to-space conversion)
+	// We check for at least 2 spaces to avoid misclassifying accidentally indented content
+	if line.starts_with("  ") && !line.trim_start().starts_with('-') {
 		return Some(LineType::Comment);
 	}
 
@@ -312,8 +319,15 @@ fn format_blocker_content(content: &str) -> Result<String> {
 				continue;
 			}
 			Some(LineType::Comment) => {
-				// Preserve comment line with tab indentation
-				formatted_lines.push(line.to_string());
+				// Normalize comment lines to tab indentation (convert leading spaces to tab)
+				if line.starts_with('\t') {
+					// Already tab-indented, preserve as-is
+					formatted_lines.push(line.to_string());
+				} else {
+					// Space-indented, convert to tab
+					let trimmed = line.trim_start();
+					formatted_lines.push(format!("\t{}", trimmed));
+				}
 			}
 			Some(LineType::Header { level, text }) => {
 				// Check if we need an empty line before this header
@@ -964,7 +978,10 @@ mod tests {
 		assert_eq!(classify_line(""), None);
 		assert_eq!(classify_line("\tComment"), Some(LineType::Comment));
 		assert_eq!(classify_line("Content"), Some(LineType::Item));
-		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Item));
+		// Lines with 2+ leading spaces are now treated as comments (likely tab-to-space conversion)
+		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Comment));
+		// But space-indented list items (with -) are still items
+		assert_eq!(classify_line("  - Indented list item"), Some(LineType::Item));
 		assert_eq!(
 			classify_line("# Header 1"),
 			Some(LineType::Header {
@@ -1058,6 +1075,54 @@ mod tests {
 		// Multiple empty lines collapsed
 		let input = "item 1\n\n\nitem 2\n\n\n\nitem 3";
 		assert_eq!(format_blocker_content(input).unwrap(), "- item 1\n- item 2\n- item 3");
+	}
+
+	#[test]
+	fn test_space_indented_comments_converted_to_tabs() {
+		// Comments with leading spaces (e.g., from editor tab-to-space conversion) should be converted to tab-indented
+		let input = "- Task 1\n    Comment with 4 spaces\n- Task 2";
+		let expected = "- Task 1\n\tComment with 4 spaces\n- Task 2";
+		assert_eq!(format_blocker_content(input).unwrap(), expected);
+
+		// Multiple space-indented comments
+		let input2 = "- Task 1\n    Comment 1\n    Comment 2\n- Task 2";
+		let expected2 = "- Task 1\n\tComment 1\n\tComment 2\n- Task 2";
+		assert_eq!(format_blocker_content(input2).unwrap(), expected2);
+
+		// Mixed: some tabs, some spaces (should normalize to tabs)
+		let input3 = "- Task 1\n\tTab comment\n    Space comment\n- Task 2";
+		let expected3 = "- Task 1\n\tTab comment\n\tSpace comment\n- Task 2";
+		assert_eq!(format_blocker_content(input3).unwrap(), expected3);
+
+		// Comments with varying amounts of leading spaces (2+ spaces)
+		let input4 = "- Task 1\n  Comment with 2 spaces\n   Comment with 3 spaces\n      Comment with 6 spaces";
+		let expected4 = "- Task 1\n\tComment with 2 spaces\n\tComment with 3 spaces\n\tComment with 6 spaces";
+		assert_eq!(format_blocker_content(input4).unwrap(), expected4);
+
+		// Space-indented comments after headers
+		let input5 = "# Section 1\n- Task 1\n    Comment about task 1";
+		let expected5 = "# Section 1\n- Task 1\n\tComment about task 1";
+		assert_eq!(format_blocker_content(input5).unwrap(), expected5);
+	}
+
+	#[test]
+	fn test_space_indented_comments_edge_cases() {
+		// Single space should NOT be treated as comment (too ambiguous)
+		let input = "- Task 1\n Content with one space";
+		let expected = "- Task 1\n- Content with one space";
+		assert_eq!(format_blocker_content(input).unwrap(), expected);
+
+		// Space-indented list items (with -) should remain as items, not become comments
+		let input2 = "- Task 1\n  - Subtask with 2 spaces and dash";
+		let expected2 = "- Task 1\n- Subtask with 2 spaces and dash";
+		assert_eq!(format_blocker_content(input2).unwrap(), expected2);
+
+		// Idempotency: formatting space-indented comments twice should yield same result
+		let input3 = "- Task 1\n    Comment";
+		let formatted_once = format_blocker_content(input3).unwrap();
+		let formatted_twice = format_blocker_content(&formatted_once).unwrap();
+		assert_eq!(formatted_once, formatted_twice);
+		assert_eq!(formatted_once, "- Task 1\n\tComment");
 	}
 
 	#[test]

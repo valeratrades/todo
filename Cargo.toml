@@ -4,7 +4,7 @@ version = "0.2.1"
 edition = "2021"
 
 [features]
-default = []
+default = ["is_integration_test"]
 is_integration_test = []
 
 [dependencies]

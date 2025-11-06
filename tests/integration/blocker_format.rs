@@ -71,7 +71,9 @@ const INITIAL_CONTENT: &str = "\
 # math tools
 ## gauss
 - finish it
+		a space-indented comment comment
 - move gaussian pivot over in there
+	   another space-indented comment
 
 # git lfs: docs, music, etc
 # eww: don't restore if outdated
@@ -85,32 +87,34 @@ fn test_blocker_format_adds_spaces() {
 
 	let formatted = setup.read_blocker_file();
 	insta::assert_snapshot!(formatted, @r"
-    - move these todos over into a persisted directory
-    	comment
-    - move all typst projects
-    - rewrite custom.sh
-    	comment
+	- move these todos over into a persisted directory
+		comment
+	- move all typst projects
+	- rewrite custom.sh
+		comment
 
-    # marketmonkey
-    - go in-depth on possibilities
+	# marketmonkey
+	- go in-depth on possibilities
 
-    # SocialNetworks in rust
-    - test twitter
+	# SocialNetworks in rust
+	- test twitter
 
-    ## yt
-    - test
+	## yt
+	- test
 
-    # math tools
-    ## gauss
-    - finish it
-    - move gaussian pivot over in there
+	# math tools
+	## gauss
+	- finish it
+			a space-indented comment comment
+	- move gaussian pivot over in there
+		   another space-indented comment
 
-    # git lfs: docs, music, etc
+	# git lfs: docs, music, etc
 
-    # eww: don't restore if outdated
+	# eww: don't restore if outdated
 
-    # todo: blocker: doesn't add spaces between same level headers
-    ");
+	# todo: blocker: doesn't add spaces between same level headers
+	");
 }
 
 #[test]
