@@ -484,10 +484,10 @@ fn pop_content_line(content: &str) -> Result<String> {
 
 	// Find indices of all content lines (headers and items, not comments)
 	for (idx, line) in lines.iter().enumerate() {
-		if let Some(line_type) = classify_line(line) {
-			if line_type.is_content() {
-				content_lines_indices.push(idx);
-			}
+		if let Some(line_type) = classify_line(line)
+			&& line_type.is_content()
+		{
+			content_lines_indices.push(idx);
 		}
 	}
 
@@ -849,23 +849,23 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			save_current_blocker_cache(&relative_path, new_current.clone())?;
 
 			// If tracking is enabled and there's still a task, start tracking it
-			if is_blocker_tracking_enabled() {
-				if let Some(current_task) = new_current {
-					let default_resume_args = ResumeArgs {
-						workspace: None,
-						project: None,
-						task: None,
-						tags: None,
-						billable: false,
-					};
+			if is_blocker_tracking_enabled()
+				&& let Some(current_task) = new_current
+			{
+				let default_resume_args = ResumeArgs {
+					workspace: None,
+					project: None,
+					task: None,
+					tags: None,
+					billable: false,
+				};
 
-					let stripped_task = strip_blocker_prefix(&current_task).to_string();
-					tokio::runtime::Runtime::new()?.block_on(async {
-						if let Err(e) = start_tracking_for_task(stripped_task, &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
-							eprintln!("Warning: Failed to start tracking for previous task: {}", e);
-						}
-					});
-				}
+				let stripped_task = strip_blocker_prefix(&current_task).to_string();
+				tokio::runtime::Runtime::new()?.block_on(async {
+					if let Err(e) = start_tracking_for_task(stripped_task, &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
+						eprintln!("Warning: Failed to start tracking for previous task: {}", e);
+					}
+				});
 			}
 		}
 		Command::List => {
@@ -1035,16 +1035,16 @@ fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 		};
 
 		// Extract filename without extension for matching
-		if let Some(filename) = Path::new(&relative_path).file_stem() {
-			if let Some(filename_str) = filename.to_str() {
-				let pattern_lower = pattern.to_lowercase();
-				let filename_lower = filename_str.to_lowercase();
-				let path_lower = relative_path.to_lowercase();
+		if let Some(filename) = Path::new(&relative_path).file_stem()
+			&& let Some(filename_str) = filename.to_str()
+		{
+			let pattern_lower = pattern.to_lowercase();
+			let filename_lower = filename_str.to_lowercase();
+			let path_lower = relative_path.to_lowercase();
 
-				// Check if pattern matches filename OR appears anywhere in the path (case-insensitive)
-				if filename_lower.contains(&pattern_lower) || path_lower.contains(&pattern_lower) {
-					matches.push(relative_path.to_string());
-				}
+			// Check if pattern matches filename OR appears anywhere in the path (case-insensitive)
+			if filename_lower.contains(&pattern_lower) || path_lower.contains(&pattern_lower) {
+				matches.push(relative_path.to_string());
 			}
 		}
 	}

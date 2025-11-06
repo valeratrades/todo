@@ -402,10 +402,10 @@ async fn get_active_workspace(client: &reqwest::Client) -> Result<String> {
 
 async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Result<String> {
 	// If input looks like an ID (UUID-ish), try it directly by fetching it
-	if looks_like_id(input) {
-		if let Ok(id) = fetch_project_by_id(client, ws, input).await {
-			return Ok(id);
-		}
+	if looks_like_id(input)
+		&& let Ok(id) = fetch_project_by_id(client, ws, input).await
+	{
+		return Ok(id);
 	}
 	// Otherwise search by name (exact, then case-insensitive substring)
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects?archived=false&name={}", urlencoding::encode(input));
@@ -468,10 +468,10 @@ async fn fetch_project_by_id(client: &reqwest::Client, ws: &str, id: &str) -> Re
 }
 
 async fn resolve_task(client: &reqwest::Client, ws: &str, project_id: &str, input: &str) -> Result<String> {
-	if looks_like_id(input) {
-		if let Ok(id) = fetch_task_by_id(client, ws, project_id, input).await {
-			return Ok(id);
-		}
+	if looks_like_id(input)
+		&& let Ok(id) = fetch_task_by_id(client, ws, project_id, input).await
+	{
+		return Ok(id);
 	}
 	// Clockify tasks listing is per project
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects/{}/tasks?page-size=200", ws, project_id);
