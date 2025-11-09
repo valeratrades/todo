@@ -19,4 +19,4 @@ fn ensure_binary_compiled() {
 }
 
 mod blocker_format;
-mod config_warnings;
+// mod config_warnings; //dbg: temporarily disabled, as we're failing to make directory for `STATE_DIR` while in nixos eval env
