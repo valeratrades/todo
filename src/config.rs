@@ -89,7 +89,7 @@ impl AppConfig {
 			return Err(config::ConfigError::Message(format!("Configured 'todos' directory does not exist: {}", todos.path.display())));
 		}
 
-		#[cfg(not(test))]
+		#[cfg(not(feature = "is_integration_test"))]
 		{
 			if std::env::var("XDG_STATE_HOME").is_err() {
 				eprintln!("warning: XDG_STATE_HOME is not set, pointing it to ~/.local/state");
@@ -102,38 +102,31 @@ impl AppConfig {
 			let _ = std::fs::create_dir_all(state_dir);
 		}
 
-		#[cfg(test)]
+		#[cfg(not(feature = "is_integration_test"))]
 		{
-			let state_dir = STATE_DIR.get_or_init(|| {
-				std::env::var("XDG_STATE_HOME")
-					.map(PathBuf::from)
-					.unwrap_or_else(|_| std::env::temp_dir())
-					.join(format!("{EXE_NAME}/"))
-			});
-			let _ = std::fs::create_dir_all(state_dir);
+			if std::env::var("XDG_CACHE_HOME").is_err() {
+				eprintln!("warning: XDG_CACHE_HOME is not set, pointing it to ~/.cache");
+				// SAFETY: Only called during initialization, before any threads are spawned
+				unsafe {
+					std::env::set_var("XDG_CACHE_HOME", "~/.cache");
+				}
+			}
+			let cache_dir = CACHE_DIR.get_or_init(|| std::env::var("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("~/.cache").join(EXE_NAME)));
+			let _ = std::fs::create_dir_all(cache_dir);
 		}
 
-		#[cfg(not(test))]
-		if std::env::var("XDG_CACHE_HOME").is_err() {
-			eprintln!("warning: XDG_CACHE_HOME is not set, pointing it to ~/.cache");
-			// SAFETY: Only called during initialization, before any threads are spawned
-			unsafe {
-				std::env::set_var("XDG_CACHE_HOME", "~/.cache");
+		#[cfg(not(feature = "is_integration_test"))]
+		{
+			if std::env::var("XDG_DATA_HOME").is_err() {
+				eprintln!("warning: XDG_DATA_HOME is not set, pointing it to ~/.local/share");
+				// SAFETY: Only called during initialization, before any threads are spawned
+				unsafe {
+					std::env::set_var("XDG_DATA_HOME", "~/.local/share");
+				}
 			}
+			let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
+			let _ = std::fs::create_dir_all(data_dir);
 		}
-		let cache_dir = CACHE_DIR.get_or_init(|| std::env::var("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("~/.cache").join(EXE_NAME)));
-		let _ = std::fs::create_dir_all(cache_dir);
-
-		#[cfg(not(test))]
-		if std::env::var("XDG_DATA_HOME").is_err() {
-			eprintln!("warning: XDG_DATA_HOME is not set, pointing it to ~/.local/share");
-			// SAFETY: Only called during initialization, before any threads are spawned
-			unsafe {
-				std::env::set_var("XDG_DATA_HOME", "~/.local/share");
-			}
-		}
-		let data_dir = DATA_DIR.get_or_init(|| std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap().join(format!("{EXE_NAME}/")));
-		let _ = std::fs::create_dir_all(data_dir);
 
 		Ok(settings)
 	}

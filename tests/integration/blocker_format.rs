@@ -3,6 +3,9 @@ use std::{fs, path::PathBuf, process::Command};
 use tempfile::TempDir;
 
 fn get_binary_path() -> PathBuf {
+	// Ensure binary is compiled with is_integration_test feature
+	crate::ensure_binary_compiled();
+
 	// Get the path to the compiled binary
 	let mut path = std::env::current_exe().unwrap();
 	path.pop(); // Remove test binary name
