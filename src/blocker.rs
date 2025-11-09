@@ -526,6 +526,29 @@ fn get_current_blocker(relative_path: &str) -> Option<String> {
 	blockers.last().cloned()
 }
 
+/// Get the current blocker with parent headers prepended (joined by ": ")
+fn get_current_blocker_with_headers(relative_path: &str) -> Option<String> {
+	let current = get_current_blocker(relative_path)?;
+	let stripped = strip_blocker_prefix(&current);
+
+	// Read blocker file to parse parent headers
+	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let parent_headers = if blocker_path.exists() {
+		let content = std::fs::read_to_string(&blocker_path).ok()?;
+		parse_parent_headers(&content, &current)
+	} else {
+		Vec::new()
+	};
+
+	// Build final output with parent headers
+	if parent_headers.is_empty() {
+		Some(stripped.to_string())
+	} else {
+		let header_prefix = parent_headers.join(": ");
+		Some(format!("{}: {}", header_prefix, stripped))
+	}
+}
+
 /// Strip leading "# " or "- " prefix from a blocker line
 fn strip_blocker_prefix(line: &str) -> &str {
 	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
@@ -641,27 +664,8 @@ async fn start_tracking_for_task(description: String, relative_path: &str, resum
 		false
 	};
 
-	// Read blocker file to parse parent headers for Clockify
-	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
-	let parent_headers = if blocker_path.exists() {
-		let content = std::fs::read_to_string(&blocker_path)?;
-		let current_blocker = get_current_blocker(relative_path);
-		if let Some(current) = current_blocker {
-			parse_parent_headers(&content, &current)
-		} else {
-			Vec::new()
-		}
-	} else {
-		Vec::new()
-	};
-
-	// Build final description with parent headers
-	let final_description = if parent_headers.is_empty() {
-		description
-	} else {
-		let header_prefix = parent_headers.join(": ");
-		format!("{}: {}", header_prefix, description)
-	};
+	// Get current blocker with parent headers prepended
+	let final_description = get_current_blocker_with_headers(relative_path).unwrap_or(description);
 
 	clockify::start_time_entry_with_defaults(
 		workspace,
@@ -877,13 +881,11 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			println!("{}", content);
 		}
 		Command::Current =>
-			if let Some(last) = get_current_blocker(&relative_path) {
-				let stripped = strip_blocker_prefix(&last);
-
+			if let Some(output) = get_current_blocker_with_headers(&relative_path) {
 				const MAX_LEN: usize = 70;
-				match stripped.len() {
-					0..=MAX_LEN => println!("{}", stripped),
-					_ => println!("{}...", &stripped[..(MAX_LEN - 3)]),
+				match output.len() {
+					0..=MAX_LEN => println!("{}", output),
+					_ => println!("{}...", &output[..(MAX_LEN - 3)]),
 				}
 			},
 		Command::Open {
@@ -930,32 +932,22 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			set_current_project(&resolved_path)?;
 		}
 		Command::Resume(resume_args) => {
-			// Get current blocker task description
-			let description = match get_current_blocker(&relative_path) {
-				Some(task) => strip_blocker_prefix(&task).to_string(),
-				None => return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'")),
-			};
+			// Check that there is a current blocker
+			if get_current_blocker(&relative_path).is_none() {
+				return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'"));
+			}
 
 			// Enable tracking state
 			set_blocker_tracking_state(true)?;
 
+			// Use the shared start_tracking_for_task function which handles parent headers
 			tokio::runtime::Runtime::new()?.block_on(async {
-				let workspace = workspace_from_path.as_deref().or(resume_args.workspace.as_deref());
-
-				// Determine legacy mode from workspace settings
-				let legacy = if let Some(ws) = workspace { get_workspace_legacy_setting(ws)? } else { false };
-
-				clockify::start_time_entry_with_defaults(
-					workspace,
-					resume_args.project.as_deref(),
-					description,
-					resume_args.task.as_deref(),
-					resume_args.tags.as_deref(),
-					resume_args.billable,
-					legacy,
-					Some(&relative_path), // Pass the relative_path for legacy mode
-				)
-				.await
+				// Pass empty description since start_tracking_for_task will get it from get_current_blocker_with_headers
+				if let Err(e) = start_tracking_for_task(String::new(), &relative_path, &resume_args, workspace_from_path.as_deref()).await {
+					eprintln!("Failed to start tracking: {e}");
+					return Err(e);
+				}
+				Ok(())
 			})?;
 		}
 		Command::Halt(pause_args) => {
