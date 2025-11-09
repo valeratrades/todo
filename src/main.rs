@@ -9,7 +9,7 @@ mod shell_init;
 pub mod utils;
 use clap::{Parser, Subcommand};
 use config::AppConfig;
-#[cfg(not(feature = "is_integration_test"))]
+#[cfg(not(test))]
 use v_utils::clientside;
 
 const MANUAL_PATH_APPENDIX: &str = "manual_stats/";
@@ -42,7 +42,7 @@ enum Commands {
 }
 
 fn main() {
-	#[cfg(not(feature = "is_integration_test"))]
+	#[cfg(not(test))]
 	clientside!();
 	let cli = Cli::parse();
 
