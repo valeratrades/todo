@@ -102,6 +102,17 @@ impl AppConfig {
 			let _ = std::fs::create_dir_all(state_dir);
 		}
 
+		#[cfg(feature = "is_integration_test")]
+		{
+			let state_dir = STATE_DIR.get_or_init(|| {
+				std::env::var("XDG_STATE_HOME")
+					.map(PathBuf::from)
+					.unwrap_or_else(|_| std::env::temp_dir())
+					.join(format!("{EXE_NAME}/"))
+			});
+			let _ = std::fs::create_dir_all(state_dir);
+		}
+
 		#[cfg(not(feature = "is_integration_test"))]
 		{
 			if std::env::var("XDG_CACHE_HOME").is_err() {
