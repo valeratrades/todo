@@ -46,6 +46,9 @@ pub enum Command {
 		/// Project path or pattern to override the default project
 		#[arg(short = 'p', long)]
 		project: Option<String>,
+		/// Mark as urgent (equivalent to --project urgent, creates if doesn't exist)
+		#[arg(short = 'u', long)]
+		urgent: bool,
 	},
 	/// Pop the last one
 	Pop,
@@ -802,6 +805,18 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 		save_current_blocker_cache(relative_path, actual_current)?;
 	}
 
+	// After formatting, check for urgent files and auto-switch if found
+	if let Some(urgent_path) = check_for_urgent_file() {
+		let current_project_path = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		let current_project = std::fs::read_to_string(&current_project_path).unwrap_or_else(|_| "blockers.txt".to_string());
+
+		// Only switch if we're not already on the urgent project
+		if current_project != urgent_path {
+			eprintln!("Detected urgent file, switching to: {}", urgent_path);
+			set_current_project(&urgent_path)?;
+		}
+	}
+
 	Ok(())
 }
 
@@ -828,11 +843,16 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	let blocker_path = STATE_DIR.get().unwrap().join(&relative_path);
 
 	match args.command {
-		Command::Add { name, project } => {
-			// Resolve the actual relative_path to use, either from --project flag or the default
-			let target_relative_path = if let Some(project_pattern) = project {
+		Command::Add { name, project, urgent } => {
+			// Resolve the actual relative_path to use
+			let target_relative_path = if urgent {
+				// --urgent flag takes precedence: use "urgent.md" and create if needed
+				"urgent.md".to_string()
+			} else if let Some(project_pattern) = project {
+				// --project flag provided
 				resolve_project_path(&project_pattern)?
 			} else {
+				// Use default project
 				relative_path.clone()
 			};
 
@@ -845,6 +865,11 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				tokio::runtime::Runtime::new()?.block_on(async {
 					let _ = stop_current_tracking(target_workspace_from_path.as_deref()).await; // Ignore errors when stopping
 				});
+			}
+
+			// Create parent directories if they don't exist (for urgent or other paths)
+			if let Some(parent) = target_blocker_path.parent() {
+				std::fs::create_dir_all(parent)?;
 			}
 
 			// Read existing content, add new line, format and write
@@ -1104,6 +1129,29 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 			}
 		}
 	}
+}
+
+/// Check if an urgent file (urgent.md or urgent.typ) exists in the current directory
+/// Returns the relative path to the urgent file if found
+fn check_for_urgent_file() -> Option<String> {
+	use std::env;
+
+	// Get current working directory
+	let cwd = env::current_dir().ok()?;
+
+	// Check for urgent.md
+	let urgent_md = cwd.join("urgent.md");
+	if urgent_md.exists() {
+		return Some("urgent.md".to_string());
+	}
+
+	// Check for urgent.typ
+	let urgent_typ = cwd.join("urgent.typ");
+	if urgent_typ.exists() {
+		return Some("urgent.typ".to_string());
+	}
+
+	None
 }
 
 #[cfg(test)]
