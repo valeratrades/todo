@@ -680,6 +680,33 @@ async fn start_tracking_for_task(description: String, relative_path: &str, resum
 	.await
 }
 
+/// Helper to create default resume args (used in multiple places)
+fn create_default_resume_args() -> ResumeArgs {
+	ResumeArgs {
+		workspace: None,
+		project: None,
+		task: None,
+		tags: None,
+		billable: false,
+	}
+}
+
+/// Helper to restart tracking for the current blocker in a project
+/// This is used when switching tasks or projects while tracking is enabled
+fn restart_tracking_for_project(relative_path: &str, workspace: Option<&str>) -> Result<()> {
+	if let Some(current_blocker) = get_current_blocker(relative_path) {
+		let default_resume_args = create_default_resume_args();
+		let stripped_task = strip_blocker_prefix(&current_blocker).to_string();
+
+		tokio::runtime::Runtime::new()?.block_on(async {
+			if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace).await {
+				eprintln!("Warning: Failed to start tracking for task: {}", e);
+			}
+		});
+	}
+	Ok(())
+}
+
 fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 	use std::process::Command;
 
@@ -696,10 +723,33 @@ fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Validate the resolved path before saving
 	parse_workspace_from_path(resolved_path)?;
+
+	// Get the old project path before updating
 	let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+	let old_project = std::fs::read_to_string(&state_dir).ok();
+
+	// Check if the project actually changed
+	let project_changed = old_project.as_ref().map_or(true, |old| old != resolved_path);
+
+	// Save the new project path
 	std::fs::write(&state_dir, resolved_path)?;
 
 	println!("Set current project to: {}", resolved_path);
+
+	// If project changed and tracking is enabled, handle the transition
+	if project_changed && is_blocker_tracking_enabled() {
+		// Stop tracking on the old project
+		if let Some(old_path) = &old_project {
+			let old_workspace = parse_workspace_from_path(old_path).ok().flatten();
+			tokio::runtime::Runtime::new()?.block_on(async {
+				let _ = stop_current_tracking(old_workspace.as_deref()).await;
+			});
+		}
+
+		// Start tracking on the new project if it has a current blocker
+		let new_workspace = parse_workspace_from_path(resolved_path)?.as_ref().map(|s| s.to_string());
+		restart_tracking_for_project(resolved_path, new_workspace.as_deref())?;
+	}
 
 	// Spawn background process to check for clockify updates after project change
 	spawn_blocker_comparison_process(resolved_path.to_string())?;
@@ -744,22 +794,9 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 
 			tokio::runtime::Runtime::new()?.block_on(async {
 				let _ = stop_current_tracking(workspace_from_path.as_deref()).await;
-
-				if let Some(new_task) = &actual_current {
-					let default_resume_args = ResumeArgs {
-						workspace: None,
-						project: None,
-						task: None,
-						tags: None,
-						billable: false,
-					};
-
-					let stripped_task = strip_blocker_prefix(new_task).to_string();
-					if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
-						eprintln!("Warning: Failed to start tracking for updated task: {}", e);
-					}
-				}
 			});
+
+			restart_tracking_for_project(relative_path, workspace_from_path.as_deref())?;
 		}
 
 		save_current_blocker_cache(relative_path, actual_current)?;
@@ -820,19 +857,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// If tracking is enabled, start tracking the new task
 			if is_blocker_tracking_enabled() {
-				let default_resume_args = ResumeArgs {
-					workspace: None,
-					project: None,
-					task: None,
-					tags: None,
-					billable: false,
-				};
-
-				tokio::runtime::Runtime::new()?.block_on(async {
-					if let Err(e) = start_tracking_for_task(name, &target_relative_path, &default_resume_args, target_workspace_from_path.as_deref()).await {
-						eprintln!("Warning: Failed to start tracking for new task: {}", e);
-					}
-				});
+				restart_tracking_for_project(&target_relative_path, target_workspace_from_path.as_deref())?;
 			}
 		}
 		Command::Pop => {
@@ -853,23 +878,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			save_current_blocker_cache(&relative_path, new_current.clone())?;
 
 			// If tracking is enabled and there's still a task, start tracking it
-			if is_blocker_tracking_enabled()
-				&& let Some(current_task) = new_current
-			{
-				let default_resume_args = ResumeArgs {
-					workspace: None,
-					project: None,
-					task: None,
-					tags: None,
-					billable: false,
-				};
-
-				let stripped_task = strip_blocker_prefix(&current_task).to_string();
-				tokio::runtime::Runtime::new()?.block_on(async {
-					if let Err(e) = start_tracking_for_task(stripped_task, &relative_path, &default_resume_args, workspace_from_path.as_deref()).await {
-						eprintln!("Warning: Failed to start tracking for previous task: {}", e);
-					}
-				});
+			if is_blocker_tracking_enabled() {
+				restart_tracking_for_project(&relative_path, workspace_from_path.as_deref())?;
 			}
 		}
 		Command::List => {
