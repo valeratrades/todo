@@ -788,21 +788,27 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 		}
 	}
 
-	let cached_current = load_current_blocker_cache(relative_path);
-	let actual_current = get_current_blocker(relative_path);
+	// Get the default project for tracking (not the file that was just opened/formatted)
+	let default_project_path = {
+		let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		std::fs::read_to_string(&persisted_project_file).unwrap_or_else(|_| "blockers.txt".to_string())
+	};
+
+	let cached_current = load_current_blocker_cache(&default_project_path);
+	let actual_current = get_current_blocker(&default_project_path);
 
 	if cached_current != actual_current {
 		if is_blocker_tracking_enabled() {
-			let workspace_from_path = parse_workspace_from_path(relative_path)?;
+			let workspace_from_path = parse_workspace_from_path(&default_project_path)?;
 
 			tokio::runtime::Runtime::new()?.block_on(async {
 				let _ = stop_current_tracking(workspace_from_path.as_deref()).await;
 			});
 
-			restart_tracking_for_project(relative_path, workspace_from_path.as_deref())?;
+			restart_tracking_for_project(&default_project_path, workspace_from_path.as_deref())?;
 		}
 
-		save_current_blocker_cache(relative_path, actual_current)?;
+		save_current_blocker_cache(&default_project_path, actual_current)?;
 	}
 
 	// After formatting, check for urgent files and auto-switch if found
