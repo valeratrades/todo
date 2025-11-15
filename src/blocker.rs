@@ -391,7 +391,7 @@ fn classify_line(line: &str) -> Option<LineType> {
 
 /// Check if the content is semantically empty (only comments or whitespace, no actual content)
 fn is_semantically_empty(content: &str) -> bool {
-	content.lines().filter_map(|line| classify_line(line)).all(|line_type| !line_type.is_content())
+	content.lines().filter_map(classify_line).all(|line_type| !line_type.is_content())
 }
 
 /// Format blocker list content according to standardization rules:
@@ -745,7 +745,7 @@ fn set_current_project(resolved_path: &str) -> Result<()> {
 	let old_project = std::fs::read_to_string(&state_dir).ok();
 
 	// Check if the project actually changed
-	let project_changed = old_project.as_ref().map_or(true, |old| old != resolved_path);
+	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
 
 	// Save the new project path
 	std::fs::write(&state_dir, resolved_path)?;
@@ -1229,13 +1229,13 @@ fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 
 		// Check if this was the current project
 		let current_project_path = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-		if let Ok(current_project) = std::fs::read_to_string(&current_project_path) {
-			if current_project == relative_path {
-				// Switch back to default project
-				let default_project = "blockers.txt".to_string();
-				set_current_project(&default_project)?;
-				eprintln!("Switched to default project: {}", default_project);
-			}
+		if let Ok(current_project) = std::fs::read_to_string(&current_project_path)
+			&& current_project == relative_path
+		{
+			// Switch back to default project
+			let default_project = "blockers.txt".to_string();
+			set_current_project(&default_project)?;
+			eprintln!("Switched to default project: {}", default_project);
 		}
 	}
 
