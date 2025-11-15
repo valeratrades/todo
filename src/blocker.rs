@@ -49,6 +49,9 @@ pub enum Command {
 		/// Mark as urgent (equivalent to --project urgent, creates if doesn't exist)
 		#[arg(short = 'u', long)]
 		urgent: bool,
+		/// Create the file if it doesn't exist (touch)
+		#[arg(short = 't', long)]
+		touch: bool,
 	},
 	/// Pop the last one
 	Pop,
@@ -68,7 +71,12 @@ pub enum Command {
 		set_project_after: bool,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
-	SetProject { relative_path: String },
+	SetProject {
+		relative_path: String,
+		/// Create the file if it doesn't exist (touch)
+		#[arg(short = 't', long)]
+		touch: bool,
+	},
 	/// Resume tracking time on the current blocker task via Clockify
 	Resume(ResumeArgs),
 	/// Pause tracking time via Clockify
@@ -379,6 +387,11 @@ fn classify_line_markdown(line: &str) -> Option<LineType> {
 /// Uses markdown classification by default
 fn classify_line(line: &str) -> Option<LineType> {
 	classify_line_markdown(line)
+}
+
+/// Check if the content is semantically empty (only comments or whitespace, no actual content)
+fn is_semantically_empty(content: &str) -> bool {
+	content.lines().filter_map(|line| classify_line(line)).all(|line_type| !line_type.is_content())
 }
 
 /// Format blocker list content according to standardization rules:
@@ -811,6 +824,9 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 		save_current_blocker_cache(&default_project_path, actual_current)?;
 	}
 
+	// After formatting, cleanup urgent file if it's empty
+	cleanup_urgent_file_if_empty(relative_path)?;
+
 	// After formatting, check for urgent files and auto-switch if found
 	if let Some(urgent_path) = check_for_urgent_file() {
 		let current_project_path = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
@@ -849,7 +865,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	let blocker_path = STATE_DIR.get().unwrap().join(&relative_path);
 
 	match args.command {
-		Command::Add { name, project, urgent } => {
+		Command::Add { name, project, urgent, touch } => {
 			// Resolve the actual relative_path to use
 			let target_relative_path = if urgent {
 				// --urgent flag takes precedence: use "urgent.md" and create if needed
@@ -878,6 +894,11 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				std::fs::create_dir_all(parent)?;
 			}
 
+			// Create the file if it doesn't exist and touch flag is set
+			if touch && !target_blocker_path.exists() {
+				std::fs::write(&target_blocker_path, "")?;
+			}
+
 			// Read existing content, add new line, format and write
 			let existing_content = std::fs::read_to_string(&target_blocker_path).unwrap_or_else(|_| String::new());
 			let formatted = add_content_line(&existing_content, &name)?;
@@ -885,6 +906,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// Save current blocker to cache
 			save_current_blocker_cache(&target_relative_path, Some(name.clone()))?;
+
+			// Cleanup urgent file if it's now empty
+			cleanup_urgent_file_if_empty(&target_relative_path)?;
 
 			// If tracking is enabled, start tracking the new task
 			if is_blocker_tracking_enabled() {
@@ -907,6 +931,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Get the new current blocker after popping
 			let new_current = get_current_blocker(&relative_path);
 			save_current_blocker_cache(&relative_path, new_current.clone())?;
+
+			// Cleanup urgent file if it's now empty
+			cleanup_urgent_file_if_empty(&relative_path)?;
 
 			// If tracking is enabled and there's still a task, start tracking it
 			if is_blocker_tracking_enabled() {
@@ -967,9 +994,22 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				spawn_blocker_comparison_process(resolved_path.clone())?;
 			}
 		}
-		Command::SetProject { relative_path } => {
+		Command::SetProject { relative_path, touch } => {
 			// Resolve the project path using pattern matching
 			let resolved_path = resolve_project_path(&relative_path)?;
+
+			// Create the file if it doesn't exist and touch flag is set
+			if touch {
+				let project_blocker_path = STATE_DIR.get().unwrap().join(&resolved_path);
+				if !project_blocker_path.exists() {
+					// Create parent directories if they don't exist
+					if let Some(parent) = project_blocker_path.parent() {
+						std::fs::create_dir_all(parent)?;
+					}
+					std::fs::write(&project_blocker_path, "")?;
+				}
+			}
+
 			set_current_project(&resolved_path)?;
 		}
 		Command::Resume(resume_args) => {
@@ -1029,6 +1069,9 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				} else {
 					println!("Blocker file already formatted: {}", relative_path);
 				}
+
+				// Cleanup urgent file if it's now empty
+				cleanup_urgent_file_if_empty(&relative_path)?;
 			} else {
 				return Err(eyre!("Blocker file does not exist: {}", relative_path));
 			}
@@ -1158,6 +1201,45 @@ fn check_for_urgent_file() -> Option<String> {
 	}
 
 	None
+}
+
+/// Check if a relative path refers to an urgent file (urgent.md or urgent.typ)
+fn is_urgent_file(relative_path: &str) -> bool {
+	relative_path == "urgent.md" || relative_path == "urgent.typ"
+}
+
+/// Delete urgent file if it's semantically empty, and switch away from it if it was the current project
+fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
+	if !is_urgent_file(relative_path) {
+		return Ok(());
+	}
+
+	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	if !blocker_path.exists() {
+		return Ok(());
+	}
+
+	let content = std::fs::read_to_string(&blocker_path)?;
+	let normalized = normalize_content_by_extension(&content, &blocker_path)?;
+
+	if is_semantically_empty(&normalized) {
+		// Delete the urgent file
+		std::fs::remove_file(&blocker_path)?;
+		eprintln!("Removed empty urgent file: {}", relative_path);
+
+		// Check if this was the current project
+		let current_project_path = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		if let Ok(current_project) = std::fs::read_to_string(&current_project_path) {
+			if current_project == relative_path {
+				// Switch back to default project
+				let default_project = "blockers.txt".to_string();
+				set_current_project(&default_project)?;
+				eprintln!("Switched to default project: {}", default_project);
+			}
+		}
+	}
+
+	Ok(())
 }
 
 #[cfg(test)]
@@ -1485,6 +1567,36 @@ mod tests {
 		let path = PathBuf::from("test.txt");
 		// For other extensions, content should pass through unchanged
 		assert_eq!(normalize_content_by_extension(content, &path).unwrap(), content);
+	}
+
+	#[test]
+	fn test_is_semantically_empty() {
+		// Empty string is semantically empty
+		assert!(is_semantically_empty(""));
+
+		// Only whitespace is semantically empty
+		assert!(is_semantically_empty("   \n\n  \n"));
+
+		// Only comments is semantically empty
+		assert!(is_semantically_empty("\tComment 1\n\tComment 2"));
+
+		// Comments and whitespace is semantically empty
+		assert!(is_semantically_empty("\tComment\n\n\tAnother comment\n"));
+
+		// Any content makes it not empty
+		assert!(!is_semantically_empty("- Task 1"));
+		assert!(!is_semantically_empty("# Header"));
+		assert!(!is_semantically_empty("\tComment\n- Task"));
+		assert!(!is_semantically_empty("# Header\n\tComment"));
+	}
+
+	#[test]
+	fn test_is_urgent_file() {
+		assert!(is_urgent_file("urgent.md"));
+		assert!(is_urgent_file("urgent.typ"));
+		assert!(!is_urgent_file("blockers.md"));
+		assert!(!is_urgent_file("workspace/urgent.md"));
+		assert!(!is_urgent_file("urgent"));
 	}
 
 	#[test]
