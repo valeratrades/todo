@@ -37,9 +37,11 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 				Ok(m) => m,
 				Err(_) => bail!("Day object not initialized"),
 			};
-			let last_update_tag = file.get_xattr("user.last_ev_change").unwrap().unwrap();
+			let last_update_tag = file
+				.get_xattr("user.last_ev_change")?
+				.ok_or_else(|| color_eyre::eyre::eyre!("No last_ev_change xattr found on day file\nSuggestion: try to manually remove and re-initialize with `todo manual ev -r`"))?;
 			let last_update_str = String::from_utf8_lossy(&last_update_tag).into_owned();
-			let last_update_dt = chrono::DateTime::parse_from_rfc3339(&last_update_str).unwrap().with_timezone(&chrono::Utc);
+			let last_update_dt = chrono::DateTime::parse_from_rfc3339(&last_update_str)?.with_timezone(&chrono::Utc);
 
 			let now = chrono::Utc::now();
 			let full_hours_ago = now.signed_duration_since(last_update_dt).num_hours();
