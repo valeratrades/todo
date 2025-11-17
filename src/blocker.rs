@@ -69,6 +69,9 @@ pub enum Command {
 		/// Set the opened file as chosen project after exiting the editor
 		#[arg(short = 's', long)]
 		set_project_after: bool,
+		/// Mark as urgent (equivalent to --file-path urgent, opens urgent.md)
+		#[arg(short = 'u', long)]
+		urgent: bool,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
 	SetProject {
@@ -960,15 +963,21 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			file_path,
 			touch,
 			set_project_after,
+			urgent,
 		} => {
 			// Save current blocker state to cache before opening
 			let current = get_current_blocker(&relative_path);
 			save_current_blocker_cache(&relative_path, current)?;
 
 			// Determine which file to open
-			let resolved_path = match file_path {
-				Some(custom_path) => resolve_project_path(&custom_path)?,
-				None => relative_path.clone(),
+			let resolved_path = if urgent {
+				// --urgent flag takes precedence: use "urgent.md"
+				"urgent.md".to_string()
+			} else {
+				match file_path {
+					Some(custom_path) => resolve_project_path(&custom_path)?,
+					None => relative_path.clone(),
+				}
 			};
 
 			let path_to_open = STATE_DIR.get().unwrap().join(&resolved_path);
