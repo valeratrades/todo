@@ -44,7 +44,8 @@ enum Commands {
 	PerfEval(perf_eval::PerfEvalArgs),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
 	#[cfg(not(feature = "is_integration_test"))]
 	clientside!();
 	let cli = Cli::parse();
@@ -67,7 +68,7 @@ fn main() {
 		}
 		Commands::Blocker(args) => blocker::main(config, args),
 		Commands::Clockify(args) => clockify::main(config, args),
-		Commands::PerfEval(args) => perf_eval::main(config, args),
+		Commands::PerfEval(args) => perf_eval::main(config, args).await,
 	};
 
 	match success {

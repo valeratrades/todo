@@ -1,5 +1,6 @@
 use std::{fs::File, io::BufWriter};
 
+use ask_llm::{ImageContent, Message, Model, Role};
 use chrono::Local;
 use clap::Args;
 use color_eyre::eyre::{Context, Result};
@@ -24,7 +25,7 @@ fn save_screenshot_png(image_buffer: &image::RgbaImage, path: &std::path::Path) 
 	Ok(())
 }
 
-pub fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
+pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	let cache_dir = CACHE_DIR.get().ok_or_else(|| color_eyre::eyre::eyre!("CACHE_DIR not initialized"))?;
 
 	let now = Local::now();
@@ -44,6 +45,7 @@ pub fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	}
 
 	let timestamp = now.format("%H-%M-%S").to_string();
+	let mut screenshot_images = Vec::new();
 
 	// Capture all outputs
 	for (i, output) in outputs.iter().enumerate() {
@@ -56,7 +58,40 @@ pub fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 
 		save_screenshot_png(&image_buffer, &screenshot_path)?;
 
-		println!("Screenshot saved to: {}", screenshot_path.display());
+		// Convert to base64 for LLM
+		let png_bytes = std::fs::read(&screenshot_path).wrap_err("Failed to read saved screenshot")?;
+		let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_bytes);
+
+		screenshot_images.push(ImageContent {
+			base64_data,
+			media_type: "image/png".to_string(),
+		});
+
+		tracing::debug!("Screenshot saved to: {}", screenshot_path.display());
+	}
+
+	// Analyze all screenshots with LLM
+	println!("\nAnalyzing screenshots...");
+	let prompt = "Describe what the user is doing on each screen in 1-3 sentences. Be concise and focus on the main activity.";
+
+	let message = Message::new_with_text_and_images(Role::User, prompt.to_string(), screenshot_images);
+
+	let mut conv = ask_llm::Conversation::new();
+	conv.0.push(message);
+
+	match ask_llm::conversation(&conv, Model::Medium, Some(4096), None).await {
+		Ok(response) => {
+			if response.text.is_empty() {
+				eprintln!("Warning: Got empty response from LLM");
+			} else {
+				println!("\n{}", response.text);
+			}
+			tracing::info!("Cost: {:.4} cents", response.cost_cents);
+		}
+		Err(e) => {
+			eprintln!("Error calling LLM: {:?}", e);
+			return Err(e);
+		}
 	}
 
 	Ok(())

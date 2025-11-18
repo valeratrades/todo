@@ -8,6 +8,8 @@ default = []
 is_integration_test = []
 
 [dependencies]
+ask_llm = { path = "../ask_llm", default-features = false }
+base64 = "0.22"
 chrono = { version = "^0.4.42", features = ["serde"] }
 clap = { version = "^4.5.51", features = ["derive"] }
 clap_complete = "4.5.60"

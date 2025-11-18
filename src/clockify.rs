@@ -172,7 +172,7 @@ pub async fn start_time_entry_with_defaults(
 	task: Option<&str>,
 	tags: Option<&str>,
 	billable: bool,
-	legacy: bool,
+	fully_qualified: bool,
 	filename: Option<&str>,
 ) -> Result<()> {
 	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
@@ -184,9 +184,9 @@ pub async fn start_time_entry_with_defaults(
 		None => get_active_workspace(&client).await?,
 	};
 
-	// Handle legacy mode vs normal mode
-	let (project_id, final_description) = if legacy {
-		// Legacy mode: use hardcoded project ID and prefix description with processed filename
+	// Handle fully_qualified mode (legacy clockify mode) vs normal mode
+	let (project_id, final_description) = if fully_qualified {
+		// Fully-qualified mode (legacy): use hardcoded project ID and prefix description with processed filename
 		let project_prefix = match filename {
 			Some(fname) => process_filename_as_project(fname),
 			None => {
@@ -194,12 +194,12 @@ pub async fn start_time_entry_with_defaults(
 				let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
 				match std::fs::read_to_string(&persisted_project_file) {
 					Ok(cached_filename) => process_filename_as_project(&cached_filename),
-					Err(_) => return Err(eyre!("Legacy mode requires a filename for project prefix")),
+					Err(_) => return Err(eyre!("Fully-qualified mode (legacy) requires a filename for project prefix")),
 				}
 			}
 		};
 
-		println!("Using legacy mode with project ID: {} and prefix: {}", LEGACY_PROJECT_ID, project_prefix);
+		println!("Using fully-qualified mode (legacy) with project ID: {} and prefix: {}", LEGACY_PROJECT_ID, project_prefix);
 		let prefixed_description = format!("{}: {}", project_prefix, description);
 		(Some(LEGACY_PROJECT_ID.to_string()), prefixed_description)
 	} else {
