@@ -11,7 +11,7 @@ use crate::config::{AppConfig, CACHE_DIR};
 #[derive(Args, Debug)]
 pub struct PerfEvalArgs {}
 
-fn save_screenshot_png(image_buffer: &image::RgbaImage, path: &std::path::Path) -> Result<()> {
+fn save_screenshot_png(image_buffer: &image24::RgbaImage, path: &std::path::Path) -> Result<()> {
 	let file = File::create(path).wrap_err(format!("Failed to create file: {}", path.display()))?;
 	let writer = BufWriter::new(file);
 
@@ -103,24 +103,26 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	let prompt = format!(
 		r#"You are analyzing screenshots of a user's workspace to assess how relevant their current activity is to their stated goals.
 
-Daily objectives (1d milestones):
-{}
+Task identified as current blocker. You're also partially judging relevance of it against daily objectives.
+// eg if we are configuring nvim as it's blocking us from codign efficiently, that's already not directly related. But if it gets set to coding an unrelated task or say playing some game, - that's completely off.
+{current_blocker}
 
-Current blocker/task:
-{}
+Daily objectives. Main reference point for judging relevance:
+// normally, the `current_blocker` will be relevant to one specific point outlined here, so interpret that one more as a contextual guide as to what should be happening this very moment.
+{daily_milestones}
 
-Static task axis (always-useful activities):
-{}
+Static task axis (activities judged as always useful, even if I'm procrastinating on the current blocker (but, obviously, reduced relevance weight)):
+{static_milestones}
 
-Please analyze the screenshots and rate the relevance of the user's current activity on a scale from -10 to +10, where:
-- -10 = Completely counterproductive/distracting
-- 0 = Neutral/unrelated
-- +10 = Directly working on goals
+Please analyze the screenshots and rate the relevance of the user's current activity on a scale from 0 to 10, where:
+- 0 = Completely unrelated or counterproductive
+- 5 = Somewhat related
+- 10 = Directly working at the goal; being productive
 
 When scoring, consider:
 1. Primary: Relevance to the current blocker and daily objectives (full weight)
 2. Static: Relevance to the static task axis (1/3 weight)
-3. If an activity is relevant to BOTH primary goals AND static activities, that should increase the overall score
+3. If an activity is relevant to both primary goals and static activities, that should further increase the score
 
 Provide a brief 1-2 sentence explanation.
 
@@ -128,11 +130,11 @@ Format your response EXACTLY as follows:
 <score>N</score>
 <explanation>Your explanation here</explanation>
 
-Replace N with an integer from -10 to +10."#,
-		daily_milestones, current_blocker, static_milestones
+Replace N with an integer from 0 to 10."#
 	);
 
 	let message = Message::new_with_text_and_images(Role::User, prompt, screenshot_images);
+	tracing::debug!(?message);
 
 	let mut conv = ask_llm::Conversation::new();
 	conv.0.push(message);
@@ -148,7 +150,7 @@ Replace N with an integer from -10 to +10."#,
 
 			let score_int: i32 = score_raw.trim().parse().wrap_err(format!("Failed to parse score as integer: '{}'", score_raw))?;
 
-			if !(-10..=10).contains(&score_int) {
+			if !(0..=10).contains(&score_int) {
 				return Err(color_eyre::eyre::eyre!("Score out of range: {}", score_int));
 			}
 
