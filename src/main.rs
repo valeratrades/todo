@@ -48,6 +48,10 @@ enum Commands {
 async fn main() {
 	#[cfg(not(feature = "is_integration_test"))]
 	clientside!();
+
+	// Initialize tracing/logging (ignore if already initialized)
+	let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
+
 	let cli = Cli::parse();
 
 	let config = match AppConfig::read(cli.config) {
@@ -61,7 +65,7 @@ async fn main() {
 	// All the functions here can rely on config being correct.
 	let success = match cli.command {
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
-		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command),
+		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command).await,
 		Commands::Init(args) => {
 			shell_init::output(config, args);
 			Ok(())
