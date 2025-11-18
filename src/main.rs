@@ -5,6 +5,7 @@ pub mod config;
 mod manual_stats;
 mod milestones;
 pub mod mocks;
+mod perf_eval;
 mod shell_init;
 pub mod utils;
 use clap::{Parser, Subcommand};
@@ -39,6 +40,8 @@ enum Commands {
 	Blocker(blocker::BlockerArgs),
 	/// Clockify time tracking
 	Clockify(clockify::ClockifyArgs),
+	/// Performance evaluation with screenshots
+	PerfEval(perf_eval::PerfEvalArgs),
 }
 
 fn main() {
@@ -64,6 +67,7 @@ fn main() {
 		}
 		Commands::Blocker(args) => blocker::main(config, args),
 		Commands::Clockify(args) => clockify::main(config, args),
+		Commands::PerfEval(args) => perf_eval::main(config, args),
 	};
 
 	match success {
