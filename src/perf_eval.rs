@@ -10,23 +10,7 @@ use crate::config::{AppConfig, CACHE_DIR};
 #[derive(Args, Debug)]
 pub struct PerfEvalArgs {}
 
-fn take_screenshot(path: &std::path::Path) -> Result<()> {
-	// Create Wayshot connection
-	let wayshot = WayshotConnection::new().wrap_err("Failed to connect to Wayland compositor. Are you running a wlroots-based compositor (Sway, Hyprland, etc.)?")?;
-
-	// Get list of outputs
-	let outputs = wayshot.get_all_outputs();
-
-	if outputs.is_empty() {
-		return Err(color_eyre::eyre::eyre!("No outputs found"));
-	}
-
-	// Try to capture the first output (usually the main screen)
-	let image_buffer = wayshot
-		.screenshot_single_output(&outputs[0], false)
-		.map_err(|e| color_eyre::eyre::eyre!("Failed to capture screenshot from output: {:?}", e))?;
-
-	// Save as PNG manually since libwayshot's image dependency might not have PNG support
+fn save_screenshot_png(image_buffer: &image::RgbaImage, path: &std::path::Path) -> Result<()> {
 	let file = File::create(path).wrap_err(format!("Failed to create file: {}", path.display()))?;
 	let writer = BufWriter::new(file);
 
@@ -35,7 +19,6 @@ fn take_screenshot(path: &std::path::Path) -> Result<()> {
 	encoder.set_depth(png::BitDepth::Eight);
 
 	let mut writer = encoder.write_header().wrap_err("Failed to write PNG header")?;
-
 	writer.write_image_data(image_buffer.as_raw()).wrap_err("Failed to write PNG data")?;
 
 	Ok(())
@@ -50,13 +33,31 @@ pub fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	// Create the date directory if it doesn't exist
 	std::fs::create_dir_all(&date_dir).wrap_err(format!("Failed to create directory: {}", date_dir.display()))?;
 
-	let filename = format!("s1-{}.png", now.format("%H-%M-%S"));
-	let screenshot_path = date_dir.join(filename);
+	// Create Wayshot connection
+	let wayshot = WayshotConnection::new().wrap_err("Failed to connect to Wayland compositor. Are you running a wlroots-based compositor (Sway, Hyprland, etc.)?")?;
 
-	// Take the screenshot
-	take_screenshot(&screenshot_path)?;
+	// Get list of outputs
+	let outputs = wayshot.get_all_outputs();
 
-	println!("Screenshot saved to: {}", screenshot_path.display());
+	if outputs.is_empty() {
+		return Err(color_eyre::eyre::eyre!("No outputs found"));
+	}
+
+	let timestamp = now.format("%H-%M-%S").to_string();
+
+	// Capture all outputs
+	for (i, output) in outputs.iter().enumerate() {
+		let filename = format!("{timestamp}-s{i}.png");
+		let screenshot_path = date_dir.join(filename);
+
+		let image_buffer = wayshot
+			.screenshot_single_output(output, false)
+			.map_err(|e| color_eyre::eyre::eyre!("Failed to capture screenshot from output {i}: {e:?}"))?;
+
+		save_screenshot_png(&image_buffer, &screenshot_path)?;
+
+		println!("Screenshot saved to: {}", screenshot_path.display());
+	}
 
 	Ok(())
 }
