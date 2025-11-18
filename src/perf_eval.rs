@@ -1,29 +1,14 @@
-use std::{fs::File, io::BufWriter, process::Command};
+use std::process::Command;
 
 use ask_llm::{ImageContent, Message, Model, Role};
 use chrono::Local;
 use clap::Args;
 use color_eyre::eyre::{Context, Result};
-use libwayshot::WayshotConnection;
 
 use crate::config::{AppConfig, CACHE_DIR};
 
 #[derive(Args, Debug)]
 pub struct PerfEvalArgs {}
-
-fn save_screenshot_png(image_buffer: &image24::RgbaImage, path: &std::path::Path) -> Result<()> {
-	let file = File::create(path).wrap_err(format!("Failed to create file: {}", path.display()))?;
-	let writer = BufWriter::new(file);
-
-	let mut encoder = png::Encoder::new(writer, image_buffer.width(), image_buffer.height());
-	encoder.set_color(png::ColorType::Rgba);
-	encoder.set_depth(png::BitDepth::Eight);
-
-	let mut writer = encoder.write_header().wrap_err("Failed to write PNG header")?;
-	writer.write_image_data(image_buffer.as_raw()).wrap_err("Failed to write PNG data")?;
-
-	Ok(())
-}
 
 pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	let cache_dir = CACHE_DIR.get().ok_or_else(|| color_eyre::eyre::eyre!("CACHE_DIR not initialized"))?;
@@ -31,43 +16,113 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	let now = Local::now();
 	let date_dir = cache_dir.join(now.format("%Y-%m-%d").to_string());
 
-	// Create the date directory if it doesn't exist
-	std::fs::create_dir_all(&date_dir).wrap_err(format!("Failed to create directory: {}", date_dir.display()))?;
+	// Check for recent screenshots from watch-monitors daemon
+	if date_dir.exists() {
+		// Find the most recent screenshot
+		let mut most_recent: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
 
-	// Create Wayshot connection
-	let wayshot = WayshotConnection::new().wrap_err("Failed to connect to Wayland compositor. Are you running a wlroots-based compositor (Sway, Hyprland, etc.)?")?;
+		if let Ok(entries) = std::fs::read_dir(&date_dir) {
+			for entry in entries.flatten() {
+				let path = entry.path();
+				if path.extension().and_then(|s| s.to_str()) == Some("png") {
+					if let Ok(metadata) = std::fs::metadata(&path) {
+						if let Ok(modified) = metadata.modified() {
+							if most_recent.is_none() || modified > most_recent.as_ref().unwrap().1 {
+								most_recent = Some((path, modified));
+							}
+						}
+					}
+				}
+			}
+		}
 
-	// Get list of outputs
-	let outputs = wayshot.get_all_outputs();
-
-	if outputs.is_empty() {
-		return Err(color_eyre::eyre::eyre!("No outputs found"));
+		if let Some((recent_path, modified_time)) = most_recent {
+			if let Ok(elapsed) = modified_time.elapsed() {
+				if elapsed.as_secs() > 61 {
+					return Err(color_eyre::eyre::eyre!(
+						"Most recent screenshot is {} seconds old (found at: {}).\n\
+						The watch-monitors daemon should be running to provide fresh screenshots.\n\
+						Start it with: todo watch-monitors\n\
+						Or enable the systemd service: services.todo-watch-monitors.enable = true;",
+						elapsed.as_secs(),
+						recent_path.display()
+					));
+				}
+			}
+		} else {
+			return Err(color_eyre::eyre::eyre!(
+				"No screenshots found in {}.\n\
+				The watch-monitors daemon should be running to capture screenshots.\n\
+				Start it with: todo watch-monitors\n\
+				Or enable the systemd service: services.todo-watch-monitors.enable = true;",
+				date_dir.display()
+			));
+		}
+	} else {
+		return Err(color_eyre::eyre::eyre!(
+			"Screenshot directory does not exist: {}\n\
+			The watch-monitors daemon should be running to capture screenshots.\n\
+			Start it with: todo watch-monitors\n\
+			Or enable the systemd service: services.todo-watch-monitors.enable = true;",
+			date_dir.display()
+		));
 	}
 
-	let timestamp = now.format("%H-%M-%S").to_string();
+	// Load the most recent screenshot(s) instead of capturing new ones
 	let mut screenshot_images = Vec::new();
 
-	// Capture all outputs
-	for (i, output) in outputs.iter().enumerate() {
-		let filename = format!("{timestamp}-s{i}.png");
-		let screenshot_path = date_dir.join(filename);
+	// Collect all PNG files with their metadata
+	let mut entries_with_time: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+	for entry in std::fs::read_dir(&date_dir)?.filter_map(|e| e.ok()) {
+		let path = entry.path();
+		if path.extension().and_then(|s| s.to_str()) == Some("png") {
+			if let Ok(metadata) = std::fs::metadata(&path) {
+				if let Ok(modified) = metadata.modified() {
+					entries_with_time.push((path, modified));
+				}
+			}
+		}
+	}
 
-		let image_buffer = wayshot
-			.screenshot_single_output(output, false)
-			.map_err(|e| color_eyre::eyre::eyre!("Failed to capture screenshot from output {i}: {e:?}"))?;
+	if entries_with_time.is_empty() {
+		return Err(color_eyre::eyre::eyre!("No screenshots found in {}", date_dir.display()));
+	}
 
-		save_screenshot_png(&image_buffer, &screenshot_path)?;
+	// Sort by modification time (newest first)
+	entries_with_time.sort_by(|a, b| b.1.cmp(&a.1));
 
-		// Convert to base64 for LLM
-		let png_bytes = std::fs::read(&screenshot_path).wrap_err("Failed to read saved screenshot")?;
-		let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_bytes);
+	// Get the most recent timestamp
+	let most_recent_time = entries_with_time[0].1;
 
-		screenshot_images.push(ImageContent {
-			base64_data,
-			media_type: "image/png".to_string(),
-		});
+	// Load all screenshots from the most recent capture (within 2 seconds)
+	for (screenshot_path, modified_time) in entries_with_time {
+		let time_diff = if modified_time > most_recent_time {
+			modified_time.duration_since(most_recent_time).unwrap_or_default()
+		} else {
+			most_recent_time.duration_since(modified_time).unwrap_or_default()
+		};
 
-		tracing::debug!("Screenshot saved to: {}", screenshot_path.display());
+		if time_diff.as_secs() <= 2 {
+			let png_bytes = std::fs::read(&screenshot_path).wrap_err(format!("Failed to read screenshot: {}", screenshot_path.display()))?;
+
+			if png_bytes.is_empty() {
+				tracing::warn!("Skipping empty screenshot file: {}", screenshot_path.display());
+				continue;
+			}
+
+			let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png_bytes);
+
+			screenshot_images.push(ImageContent {
+				base64_data,
+				media_type: "image/png".to_string(),
+			});
+
+			tracing::debug!("Using screenshot: {}", screenshot_path.display());
+		}
+	}
+
+	if screenshot_images.is_empty() {
+		return Err(color_eyre::eyre::eyre!("Failed to load valid screenshots from {}", date_dir.display()));
 	}
 
 	// Get current blocker

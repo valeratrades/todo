@@ -8,6 +8,7 @@ pub mod mocks;
 mod perf_eval;
 mod shell_init;
 pub mod utils;
+mod watch_monitors;
 use clap::{Parser, Subcommand};
 use config::AppConfig;
 #[cfg(not(feature = "is_integration_test"))]
@@ -42,6 +43,8 @@ enum Commands {
 	Clockify(clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
 	PerfEval(perf_eval::PerfEvalArgs),
+	/// Watch monitors daemon - takes screenshots every 60s
+	WatchMonitors(watch_monitors::WatchMonitorsArgs),
 }
 
 #[tokio::main]
@@ -73,6 +76,7 @@ async fn main() {
 		Commands::Blocker(args) => blocker::main(config, args),
 		Commands::Clockify(args) => clockify::main(config, args),
 		Commands::PerfEval(args) => perf_eval::main(config, args).await,
+		Commands::WatchMonitors(args) => watch_monitors::main(config, args),
 	};
 
 	match success {
