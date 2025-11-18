@@ -5,30 +5,11 @@ use chrono::Local;
 use clap::Args;
 use color_eyre::eyre::{Context, Result};
 use libwayshot::WayshotConnection;
-use v_utils::other::Percent;
 
 use crate::config::{AppConfig, CACHE_DIR};
 
 #[derive(Args, Debug)]
 pub struct PerfEvalArgs {}
-
-/// Signed, bounded percent type (clamped to -100% to +100%)
-#[derive(Clone, Copy, Debug)]
-struct PercentS(Percent);
-
-impl PercentS {
-	fn new(value: f64) -> Self {
-		// Clamp to -1.0..=1.0 range
-		let clamped = value.clamp(-1.0, 1.0);
-		PercentS(Percent::from(clamped))
-	}
-}
-
-impl std::fmt::Display for PercentS {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{:+}", self.0)
-	}
-}
 
 fn save_screenshot_png(image_buffer: &image::RgbaImage, path: &std::path::Path) -> Result<()> {
 	let file = File::create(path).wrap_err(format!("Failed to create file: {}", path.display()))?;
@@ -131,25 +112,23 @@ Current blocker/task:
 Static task axis (always-useful activities):
 {}
 
-Please analyze the screenshots and provide TWO separate relevance scores:
+Please analyze the screenshots and rate the relevance of the user's current activity on a scale from -10 to +10, where:
+- -10 = Completely counterproductive/distracting
+- 0 = Neutral/unrelated
+- +10 = Directly working on goals
 
-1. PRIMARY SCORE: Rate relevance to the current blocker and daily objectives on a scale from -10 to +10, where:
-   - -10 = Completely counterproductive/distracting
-   - 0 = Neutral/unrelated
-   - +10 = Directly working on the blocker/daily objectives
+When scoring, consider:
+1. Primary: Relevance to the current blocker and daily objectives (full weight)
+2. Static: Relevance to the static task axis (1/3 weight)
+3. If an activity is relevant to BOTH primary goals AND static activities, that should increase the overall score
 
-2. STATIC SCORE: Rate relevance to the static task axis (always-useful activities) on a scale from -10 to +10
-
-3. Provide a brief 1-2 sentence explanation
-
-IMPORTANT: The static score should be weighted at 1/3 the importance of the primary score. If an activity is relevant to BOTH primary goals AND static activities, that strengthens the overall relevance signal.
+Provide a brief 1-2 sentence explanation.
 
 Format your response EXACTLY as follows:
-<primary_score>N</primary_score>
-<static_score>N</static_score>
+<score>N</score>
 <explanation>Your explanation here</explanation>
 
-Replace N with integers from -10 to +10."#,
+Replace N with an integer from -10 to +10."#,
 		daily_milestones, current_blocker, static_milestones
 	);
 
@@ -162,7 +141,7 @@ Replace N with integers from -10 to +10."#,
 		Ok(response) => {
 			tracing::debug!("LLM response text: {}", response.text);
 
-			// Parse score and explanation
+			// Parse score
 			let score_raw = response.extract_html_tag("score").inspect_err(|_e| {
 				eprintln!("Failed to extract <score> tag. Full response:\n{}\n", response.text);
 			})?;
@@ -173,15 +152,12 @@ Replace N with integers from -10 to +10."#,
 				return Err(color_eyre::eyre::eyre!("Score out of range: {}", score_int));
 			}
 
-			// Convert from -10..10 to -1.0..1.0 (just divide by 10)
-			let relevance_score = PercentS::new(score_int as f64 / 10.0);
-
 			let explanation = response.extract_html_tag("explanation").inspect_err(|_e| {
 				eprintln!("Failed to extract <explanation> tag. Full response:\n{}\n", response.text);
 			})?;
 
 			println!("\nCurrent blocker: {}", current_blocker);
-			println!("Relevance score: {} (raw: {}/10)", relevance_score, score_int);
+			println!("Relevance score: {}/10", score_int);
 			println!("\nExplanation: {}", explanation.trim());
 
 			tracing::info!("Cost: {:.4} cents", response.cost_cents);
