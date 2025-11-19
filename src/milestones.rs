@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use v_utils::prelude::*;
 
 use crate::config::{AppConfig, DATA_DIR};
@@ -33,19 +33,19 @@ struct Milestone {
 	description: Option<String>,
 }
 
-pub fn milestones_command(config: AppConfig, args: MilestonesArgs) -> Result<()> {
+pub async fn milestones_command(config: AppConfig, args: MilestonesArgs) -> Result<()> {
 	match args.command {
 		MilestonesCommands::Get { tf } => {
-			let retrieved_milestones = request_milestones(&config)?;
+			let retrieved_milestones = request_milestones(&config).await?;
 			let milestone = get_milestone(tf, &retrieved_milestones)?;
 			println!("{milestone}");
 			Ok(())
 		}
-		MilestonesCommands::Healthcheck => healthcheck(&config),
+		MilestonesCommands::Healthcheck => healthcheck(&config).await,
 	}
 }
 
-fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
+async fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 	let todos_config = config
 		.todos
 		.as_ref()
@@ -72,10 +72,11 @@ fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 		.get(&url)
 		.header("User-Agent", "Rust GitHub Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()?;
+		.send()
+		.await?;
 	info!(?res);
 
-	let milestones = res.json::<Vec<Milestone>>()?;
+	let milestones = res.json::<Vec<Milestone>>().await?;
 	Ok(milestones)
 }
 
@@ -157,12 +158,12 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 	Timeframe::from_naive(7, TimeframeDesignator::Years),
 ];
 
-fn healthcheck(config: &AppConfig) -> Result<()> {
+async fn healthcheck(config: &AppConfig) -> Result<()> {
 	use std::fs;
 
 	let healthcheck_path = DATA_DIR.get().unwrap().join(HEALTHCHECK_REL_PATH);
 
-	let retrieved_milestones = request_milestones(config)?;
+	let retrieved_milestones = request_milestones(config).await?;
 	let results = KEY_MILESTONES
 		.iter()
 		.map(|tf| get_milestone(*tf, &retrieved_milestones))

@@ -17,7 +17,7 @@ static BLOCKER_CURRENT_CACHE_FILENAME: &str = "blocker_current_cache.txt";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct WorkspaceSettings {
-	legacy: bool,
+	fully_qualified: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -58,7 +58,11 @@ pub enum Command {
 	/// Full list of blockers down from the main task
 	List,
 	/// Compactly show the last entry
-	Current,
+	Current {
+		/// Show fully-qualified path with project prepended
+		#[arg(short = 'f', long)]
+		fully_qualified: bool,
+	},
 	/// Just open the \`blockers\` file with $EDITOR. Text as interface.
 	Open {
 		/// Optional file path relative to state directory to open instead of the default blocker file
@@ -546,7 +550,8 @@ fn get_current_blocker(relative_path: &str) -> Option<String> {
 }
 
 /// Get the current blocker with parent headers prepended (joined by ": ")
-fn get_current_blocker_with_headers(relative_path: &str) -> Option<String> {
+/// If fully_qualified is true, prepend the project name from the relative_path
+fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) -> Option<String> {
 	let current = get_current_blocker(relative_path)?;
 	let stripped = strip_blocker_prefix(&current);
 
@@ -560,11 +565,23 @@ fn get_current_blocker_with_headers(relative_path: &str) -> Option<String> {
 	};
 
 	// Build final output with parent headers
-	if parent_headers.is_empty() {
+	let mut parts = Vec::new();
+
+	// Add project name if fully_qualified is true
+	if fully_qualified {
+		// Extract project name from relative_path (filename without extension)
+		let project_name = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str()).unwrap_or(relative_path);
+		parts.push(project_name.to_string());
+	}
+
+	// Add parent headers
+	parts.extend(parent_headers);
+
+	// Add the stripped task
+	if parts.is_empty() {
 		Some(stripped.to_string())
 	} else {
-		let header_prefix = parent_headers.join(": ");
-		Some(format!("{}: {}", header_prefix, stripped))
+		Some(format!("{}: {}", parts.join(": "), stripped))
 	}
 }
 
@@ -643,28 +660,33 @@ fn save_workspace_cache(cache: &WorkspaceCache) -> Result<()> {
 	Ok(())
 }
 
-fn get_workspace_legacy_setting(workspace: &str) -> Result<bool> {
+fn get_workspace_fully_qualified_setting(workspace: &str) -> Result<bool> {
 	let cache = load_workspace_cache();
 
 	if let Some(settings) = cache.workspaces.get(workspace) {
-		Ok(settings.legacy)
+		Ok(settings.fully_qualified)
 	} else {
 		// Ask user for preference
-		println!("Workspace '{}' legacy mode setting not found.", workspace);
-		print!("Use legacy mode for this workspace? [y/N]: ");
+		println!("Workspace '{}' fully-qualified mode setting not found.", workspace);
+		print!("Use fully-qualified mode (legacy) for this workspace? [y/N]: ");
 		Write::flush(&mut std::io::stdout())?;
 
 		let mut input = String::new();
 		std::io::stdin().read_line(&mut input)?;
-		let use_legacy = input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes";
+		let use_fully_qualified = input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes";
 
 		// Save the preference
 		let mut cache = load_workspace_cache();
-		cache.workspaces.insert(workspace.to_string(), WorkspaceSettings { legacy: use_legacy });
+		cache.workspaces.insert(
+			workspace.to_string(),
+			WorkspaceSettings {
+				fully_qualified: use_fully_qualified,
+			},
+		);
 		save_workspace_cache(&cache)?;
 
-		println!("Saved legacy mode preference for workspace '{}': {}", workspace, use_legacy);
-		Ok(use_legacy)
+		println!("Saved fully-qualified mode preference for workspace '{}': {}", workspace, use_fully_qualified);
+		Ok(use_fully_qualified)
 	}
 }
 
@@ -675,16 +697,16 @@ async fn stop_current_tracking(workspace: Option<&str>) -> Result<()> {
 async fn start_tracking_for_task(description: String, relative_path: &str, resume_args: &ResumeArgs, workspace_override: Option<&str>) -> Result<()> {
 	let workspace = workspace_override.or(resume_args.workspace.as_deref());
 
-	// Determine legacy mode from workspace settings
-	let legacy = if let Some(ws) = workspace {
-		get_workspace_legacy_setting(ws)?
+	// Determine fully_qualified mode from workspace settings (legacy mode for clockify)
+	let fully_qualified = if let Some(ws) = workspace {
+		get_workspace_fully_qualified_setting(ws)?
 	} else {
 		// If no workspace specified, use default (false)
 		false
 	};
 
-	// Get current blocker with parent headers prepended
-	let final_description = get_current_blocker_with_headers(relative_path).unwrap_or(description);
+	// Get current blocker with parent headers prepended (use fully_qualified for clockify legacy mode)
+	let final_description = get_current_blocker_with_headers(relative_path, fully_qualified).unwrap_or(description);
 
 	clockify::start_time_entry_with_defaults(
 		workspace,
@@ -693,7 +715,7 @@ async fn start_tracking_for_task(description: String, relative_path: &str, resum
 		resume_args.task.as_deref(),
 		resume_args.tags.as_deref(),
 		resume_args.billable,
-		legacy,
+		fully_qualified,
 		Some(relative_path),
 	)
 	.await
@@ -951,8 +973,8 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			let content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
 			println!("{}", content);
 		}
-		Command::Current =>
-			if let Some(output) = get_current_blocker_with_headers(&relative_path) {
+		Command::Current { fully_qualified } =>
+			if let Some(output) = get_current_blocker_with_headers(&relative_path, fully_qualified) {
 				const MAX_LEN: usize = 70;
 				match output.len() {
 					0..=MAX_LEN => println!("{}", output),

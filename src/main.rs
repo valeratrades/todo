@@ -8,6 +8,7 @@ pub mod mocks;
 mod perf_eval;
 mod shell_init;
 pub mod utils;
+mod watch_monitors;
 use clap::{Parser, Subcommand};
 use config::AppConfig;
 #[cfg(not(feature = "is_integration_test"))]
@@ -42,11 +43,18 @@ enum Commands {
 	Clockify(clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
 	PerfEval(perf_eval::PerfEvalArgs),
+	/// Watch monitors daemon - takes screenshots every 60s
+	WatchMonitors(watch_monitors::WatchMonitorsArgs),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
 	#[cfg(not(feature = "is_integration_test"))]
 	clientside!();
+
+	// Initialize tracing/logging (ignore if already initialized)
+	let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
+
 	let cli = Cli::parse();
 
 	let config = match AppConfig::read(cli.config) {
@@ -60,14 +68,15 @@ fn main() {
 	// All the functions here can rely on config being correct.
 	let success = match cli.command {
 		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
-		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command),
+		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command).await,
 		Commands::Init(args) => {
 			shell_init::output(config, args);
 			Ok(())
 		}
 		Commands::Blocker(args) => blocker::main(config, args),
 		Commands::Clockify(args) => clockify::main(config, args),
-		Commands::PerfEval(args) => perf_eval::main(config, args),
+		Commands::PerfEval(args) => perf_eval::main(config, args).await,
+		Commands::WatchMonitors(args) => watch_monitors::main(config, args),
 	};
 
 	match success {
