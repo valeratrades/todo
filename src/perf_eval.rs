@@ -24,30 +24,28 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 		if let Ok(entries) = std::fs::read_dir(&date_dir) {
 			for entry in entries.flatten() {
 				let path = entry.path();
-				if path.extension().and_then(|s| s.to_str()) == Some("png") {
-					if let Ok(metadata) = std::fs::metadata(&path) {
-						if let Ok(modified) = metadata.modified() {
-							if most_recent.is_none() || modified > most_recent.as_ref().unwrap().1 {
-								most_recent = Some((path, modified));
-							}
-						}
-					}
+				if path.extension().and_then(|s| s.to_str()) == Some("png")
+					&& let Ok(metadata) = std::fs::metadata(&path)
+					&& let Ok(modified) = metadata.modified()
+					&& (most_recent.is_none() || modified > most_recent.as_ref().unwrap().1)
+				{
+					most_recent = Some((path, modified));
 				}
 			}
 		}
 
 		if let Some((recent_path, modified_time)) = most_recent {
-			if let Ok(elapsed) = modified_time.elapsed() {
-				if elapsed.as_secs() > 61 {
-					return Err(color_eyre::eyre::eyre!(
-						"Most recent screenshot is {} seconds old (found at: {}).\n\
+			if let Ok(elapsed) = modified_time.elapsed()
+				&& elapsed.as_secs() > 61
+			{
+				return Err(color_eyre::eyre::eyre!(
+					"Most recent screenshot is {} seconds old (found at: {}).\n\
 						The watch-monitors daemon should be running to provide fresh screenshots.\n\
 						Start it with: todo watch-monitors\n\
 						Or enable the systemd service: services.todo-watch-monitors.enable = true;",
-						elapsed.as_secs(),
-						recent_path.display()
-					));
-				}
+					elapsed.as_secs(),
+					recent_path.display()
+				));
 			}
 		} else {
 			return Err(color_eyre::eyre::eyre!(
@@ -75,12 +73,11 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	let mut entries_with_time: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
 	for entry in std::fs::read_dir(&date_dir)?.filter_map(|e| e.ok()) {
 		let path = entry.path();
-		if path.extension().and_then(|s| s.to_str()) == Some("png") {
-			if let Ok(metadata) = std::fs::metadata(&path) {
-				if let Ok(modified) = metadata.modified() {
-					entries_with_time.push((path, modified));
-				}
-			}
+		if path.extension().and_then(|s| s.to_str()) == Some("png")
+			&& let Ok(metadata) = std::fs::metadata(&path)
+			&& let Ok(modified) = metadata.modified()
+		{
+			entries_with_time.push((path, modified));
 		}
 	}
 
@@ -114,11 +111,9 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 			};
 
 			// If more than 2 seconds apart, this is a new capture
-			if time_diff.as_secs() > 2 {
-				if !current_group.is_empty() {
-					capture_groups.push(current_group.clone());
-					current_group.clear();
-				}
+			if time_diff.as_secs() > 2 && !current_group.is_empty() {
+				capture_groups.push(current_group.clone());
+				current_group.clear();
 			}
 		}
 

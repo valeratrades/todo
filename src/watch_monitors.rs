@@ -34,15 +34,15 @@ fn cleanup_old_screenshots(cache_dir: &std::path::Path) -> Result<()> {
 
 		if path.is_dir() {
 			// Try to parse directory name as date (YYYY-MM-DD format)
-			if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-				if let Ok(dir_date) = chrono::NaiveDate::parse_from_str(dir_name, "%Y-%m-%d") {
-					let dir_datetime = dir_date.and_hms_opt(0, 0, 0).unwrap();
-					let dir_datetime_utc = chrono::DateTime::<Utc>::from_naive_utc_and_offset(dir_datetime, Utc);
+			if let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
+				&& let Ok(dir_date) = chrono::NaiveDate::parse_from_str(dir_name, "%Y-%m-%d")
+			{
+				let dir_datetime = dir_date.and_hms_opt(0, 0, 0).unwrap();
+				let dir_datetime_utc = chrono::DateTime::<Utc>::from_naive_utc_and_offset(dir_datetime, Utc);
 
-					if dir_datetime_utc < threshold {
-						tracing::info!("Removing old screenshot directory: {}", path.display());
-						std::fs::remove_dir_all(&path)?;
-					}
+				if dir_datetime_utc < threshold {
+					tracing::info!("Removing old screenshot directory: {}", path.display());
+					std::fs::remove_dir_all(&path)?;
 				}
 			}
 		}
