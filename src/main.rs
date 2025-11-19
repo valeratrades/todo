@@ -73,7 +73,7 @@ async fn main() {
 			shell_init::output(config, args);
 			Ok(())
 		}
-		Commands::Blocker(args) => blocker::main(config, args),
+		Commands::Blocker(args) => blocker::main(config, args).await,
 		Commands::Clockify(args) => clockify::main(config, args),
 		Commands::PerfEval(args) => perf_eval::main(config, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(config, args),

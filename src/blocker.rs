@@ -734,16 +734,14 @@ fn create_default_resume_args() -> ResumeArgs {
 
 /// Helper to restart tracking for the current blocker in a project
 /// This is used when switching tasks or projects while tracking is enabled
-fn restart_tracking_for_project(relative_path: &str, workspace: Option<&str>) -> Result<()> {
+async fn restart_tracking_for_project(relative_path: &str, workspace: Option<&str>) -> Result<()> {
 	if let Some(current_blocker) = get_current_blocker(relative_path) {
 		let default_resume_args = create_default_resume_args();
 		let stripped_task = strip_blocker_prefix(&current_blocker).to_string();
 
-		tokio::runtime::Runtime::new()?.block_on(async {
-			if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace).await {
-				eprintln!("Warning: Failed to start tracking for task: {}", e);
-			}
-		});
+		if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace).await {
+			eprintln!("Warning: Failed to start tracking for task: {}", e);
+		}
 	}
 	Ok(())
 }
@@ -761,7 +759,7 @@ fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
 	Ok(())
 }
 
-fn set_current_project(resolved_path: &str) -> Result<()> {
+async fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Validate the resolved path before saving
 	parse_workspace_from_path(resolved_path)?;
 
@@ -782,14 +780,12 @@ fn set_current_project(resolved_path: &str) -> Result<()> {
 		// Stop tracking on the old project
 		if let Some(old_path) = &old_project {
 			let old_workspace = parse_workspace_from_path(old_path).ok().flatten();
-			tokio::runtime::Runtime::new()?.block_on(async {
-				let _ = stop_current_tracking(old_workspace.as_deref()).await;
-			});
+			let _ = stop_current_tracking(old_workspace.as_deref()).await;
 		}
 
 		// Start tracking on the new project if it has a current blocker
 		let new_workspace = parse_workspace_from_path(resolved_path)?.as_ref().map(|s| s.to_string());
-		restart_tracking_for_project(resolved_path, new_workspace.as_deref())?;
+		restart_tracking_for_project(resolved_path, new_workspace.as_deref()).await?;
 	}
 
 	// Spawn background process to check for clockify updates after project change
@@ -798,7 +794,7 @@ fn set_current_project(resolved_path: &str) -> Result<()> {
 	Ok(())
 }
 
-fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
+async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	// Read and format the blocker file
 	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
 	if blocker_path.exists() {
@@ -839,18 +835,16 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 		if is_blocker_tracking_enabled() {
 			let workspace_from_path = parse_workspace_from_path(&default_project_path)?;
 
-			tokio::runtime::Runtime::new()?.block_on(async {
-				let _ = stop_current_tracking(workspace_from_path.as_deref()).await;
-			});
+			let _ = stop_current_tracking(workspace_from_path.as_deref()).await;
 
-			restart_tracking_for_project(&default_project_path, workspace_from_path.as_deref())?;
+			restart_tracking_for_project(&default_project_path, workspace_from_path.as_deref()).await?;
 		}
 
 		save_current_blocker_cache(&default_project_path, actual_current)?;
 	}
 
 	// After formatting, cleanup urgent file if it's empty
-	cleanup_urgent_file_if_empty(relative_path)?;
+	cleanup_urgent_file_if_empty(relative_path).await?;
 
 	// After formatting, check for urgent files and auto-switch if found
 	if let Some(urgent_path) = check_for_urgent_file() {
@@ -860,14 +854,14 @@ fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 		// Only switch if we're not already on the urgent project
 		if current_project != urgent_path {
 			eprintln!("Detected urgent file, switching to: {}", urgent_path);
-			set_current_project(&urgent_path)?;
+			set_current_project(&urgent_path).await?;
 		}
 	}
 
 	Ok(())
 }
 
-pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
+pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	let relative_path = match args.relative_path {
 		Some(f) => f,
 		None => {
@@ -881,7 +875,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 	// Handle background blocker check
 	if std::env::var("_BLOCKER_BACKGROUND_CHECK").is_ok() {
-		return handle_background_blocker_check(&relative_path);
+		return handle_background_blocker_check(&relative_path).await;
 	}
 
 	// Parse workspace from path if it contains a slash
@@ -893,8 +887,13 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 		Command::Add { name, project, urgent, touch } => {
 			// Resolve the actual relative_path to use
 			let target_relative_path = if urgent {
-				// --urgent flag takes precedence: use "urgent.md" and create if needed
-				"urgent.md".to_string()
+				// --urgent flag takes precedence: use workspace-specific "urgent.md"
+				// Extract workspace from current project if it exists
+				if let Some(workspace) = workspace_from_path.as_ref() {
+					format!("{}/urgent.md", workspace)
+				} else {
+					"urgent.md".to_string()
+				}
 			} else if let Some(project_pattern) = project {
 				// --project flag provided
 				resolve_project_path(&project_pattern)?
@@ -909,9 +908,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// If tracking is enabled, stop current task before adding new one
 			if is_blocker_tracking_enabled() {
-				tokio::runtime::Runtime::new()?.block_on(async {
-					let _ = stop_current_tracking(target_workspace_from_path.as_deref()).await; // Ignore errors when stopping
-				});
+				let _ = stop_current_tracking(target_workspace_from_path.as_deref()).await; // Ignore errors when stopping
 			}
 
 			// Create parent directories if they don't exist (for urgent or other paths)
@@ -933,19 +930,17 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			save_current_blocker_cache(&target_relative_path, Some(name.clone()))?;
 
 			// Cleanup urgent file if it's now empty
-			cleanup_urgent_file_if_empty(&target_relative_path)?;
+			cleanup_urgent_file_if_empty(&target_relative_path).await?;
 
 			// If tracking is enabled, start tracking the new task
 			if is_blocker_tracking_enabled() {
-				restart_tracking_for_project(&target_relative_path, target_workspace_from_path.as_deref())?;
+				restart_tracking_for_project(&target_relative_path, target_workspace_from_path.as_deref()).await?;
 			}
 		}
 		Command::Pop => {
 			// If tracking is enabled, stop current task before popping
 			if is_blocker_tracking_enabled() {
-				tokio::runtime::Runtime::new()?.block_on(async {
-					let _ = stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
-				});
+				let _ = stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
 			}
 
 			// Read existing content, pop last content line, format and write
@@ -958,11 +953,11 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			save_current_blocker_cache(&relative_path, new_current.clone())?;
 
 			// Cleanup urgent file if it's now empty
-			cleanup_urgent_file_if_empty(&relative_path)?;
+			cleanup_urgent_file_if_empty(&relative_path).await?;
 
 			// If tracking is enabled and there's still a task, start tracking it
 			if is_blocker_tracking_enabled() {
-				restart_tracking_for_project(&relative_path, workspace_from_path.as_deref())?;
+				restart_tracking_for_project(&relative_path, workspace_from_path.as_deref()).await?;
 			}
 		}
 		Command::List => {
@@ -993,8 +988,13 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// Determine which file to open
 			let resolved_path = if urgent {
-				// --urgent flag takes precedence: use "urgent.md"
-				"urgent.md".to_string()
+				// --urgent flag takes precedence: use workspace-specific "urgent.md"
+				// Extract workspace from current project if it exists
+				if let Some(workspace) = workspace_from_path.as_ref() {
+					format!("{}/urgent.md", workspace)
+				} else {
+					"urgent.md".to_string()
+				}
 			} else {
 				match file_path {
 					Some(custom_path) => resolve_project_path(&custom_path)?,
@@ -1019,7 +1019,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// If set_project_after flag is set, update the current project
 			if set_project_after {
-				set_current_project(&resolved_path)?;
+				set_current_project(&resolved_path).await?;
 			} else {
 				// Spawn background process to check for changes after editor closes
 				spawn_blocker_comparison_process(resolved_path.clone())?;
@@ -1041,7 +1041,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				}
 			}
 
-			set_current_project(&resolved_path)?;
+			set_current_project(&resolved_path).await?;
 		}
 		Command::Resume(resume_args) => {
 			// Check that there is a current blocker
@@ -1053,21 +1053,18 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			set_blocker_tracking_state(true)?;
 
 			// Use the shared start_tracking_for_task function which handles parent headers
-			tokio::runtime::Runtime::new()?.block_on(async {
-				// Pass empty description since start_tracking_for_task will get it from get_current_blocker_with_headers
-				if let Err(e) = start_tracking_for_task(String::new(), &relative_path, &resume_args, workspace_from_path.as_deref()).await {
-					eprintln!("Failed to start tracking: {e}");
-					return Err(e);
-				}
-				Ok(())
-			})?;
+			// Pass empty description since start_tracking_for_task will get it from get_current_blocker_with_headers
+			if let Err(e) = start_tracking_for_task(String::new(), &relative_path, &resume_args, workspace_from_path.as_deref()).await {
+				eprintln!("Failed to start tracking: {e}");
+				return Err(e);
+			}
 		}
 		Command::Halt(pause_args) => {
 			// Disable tracking state
 			set_blocker_tracking_state(false)?;
 
 			let workspace = workspace_from_path.as_deref().or(pause_args.workspace.as_deref());
-			tokio::runtime::Runtime::new()?.block_on(async { clockify::stop_time_entry_with_defaults(workspace).await })?;
+			clockify::stop_time_entry_with_defaults(workspace).await?;
 		}
 		Command::Format => {
 			// Read, format, and write back the blocker file
@@ -1102,7 +1099,7 @@ pub fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				}
 
 				// Cleanup urgent file if it's now empty
-				cleanup_urgent_file_if_empty(&relative_path)?;
+				cleanup_urgent_file_if_empty(&relative_path).await?;
 			} else {
 				return Err(eyre!("Blocker file does not exist: {}", relative_path));
 			}
@@ -1211,36 +1208,59 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 	}
 }
 
-/// Check if an urgent file (urgent.md or urgent.typ) exists in the current directory
+/// Check if an urgent file (urgent.md or urgent.typ) exists in the STATE_DIR
 /// Returns the relative path to the urgent file if found
+/// Checks both root-level urgent files and workspace-specific urgent files
 fn check_for_urgent_file() -> Option<String> {
-	use std::env;
+	let state_dir = STATE_DIR.get().unwrap();
 
-	// Get current working directory
-	let cwd = env::current_dir().ok()?;
-
-	// Check for urgent.md
-	let urgent_md = cwd.join("urgent.md");
+	// Check for root-level urgent.md
+	let urgent_md = state_dir.join("urgent.md");
 	if urgent_md.exists() {
 		return Some("urgent.md".to_string());
 	}
 
-	// Check for urgent.typ
-	let urgent_typ = cwd.join("urgent.typ");
+	// Check for root-level urgent.typ
+	let urgent_typ = state_dir.join("urgent.typ");
 	if urgent_typ.exists() {
 		return Some("urgent.typ".to_string());
+	}
+
+	// Check for workspace-specific urgent files
+	// Look for */urgent.md and */urgent.typ in STATE_DIR
+	if let Ok(entries) = std::fs::read_dir(state_dir) {
+		for entry in entries.flatten() {
+			if let Ok(metadata) = entry.metadata() {
+				if metadata.is_dir() {
+					let workspace_name = entry.file_name();
+
+					// Check workspace/urgent.md
+					let ws_urgent_md = entry.path().join("urgent.md");
+					if ws_urgent_md.exists() {
+						return Some(format!("{}/urgent.md", workspace_name.to_string_lossy()));
+					}
+
+					// Check workspace/urgent.typ
+					let ws_urgent_typ = entry.path().join("urgent.typ");
+					if ws_urgent_typ.exists() {
+						return Some(format!("{}/urgent.typ", workspace_name.to_string_lossy()));
+					}
+				}
+			}
+		}
 	}
 
 	None
 }
 
 /// Check if a relative path refers to an urgent file (urgent.md or urgent.typ)
+/// Handles both root-level and workspace-specific urgent files (e.g., workspace/urgent.md)
 fn is_urgent_file(relative_path: &str) -> bool {
-	relative_path == "urgent.md" || relative_path == "urgent.typ"
+	relative_path == "urgent.md" || relative_path == "urgent.typ" || relative_path.ends_with("/urgent.md") || relative_path.ends_with("/urgent.typ")
 }
 
 /// Delete urgent file if it's semantically empty, and switch away from it if it was the current project
-fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
+async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 	if !is_urgent_file(relative_path) {
 		return Ok(());
 	}
@@ -1265,7 +1285,7 @@ fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 		{
 			// Switch back to default project
 			let default_project = "blockers.txt".to_string();
-			set_current_project(&default_project)?;
+			set_current_project(&default_project).await?;
 			eprintln!("Switched to default project: {}", default_project);
 		}
 	}
@@ -1623,11 +1643,19 @@ mod tests {
 
 	#[test]
 	fn test_is_urgent_file() {
+		// Root-level urgent files
 		assert!(is_urgent_file("urgent.md"));
 		assert!(is_urgent_file("urgent.typ"));
+
+		// Workspace-specific urgent files
+		assert!(is_urgent_file("workspace/urgent.md"));
+		assert!(is_urgent_file("workspace/urgent.typ"));
+		assert!(is_urgent_file("workspace1/urgent.md"));
+
+		// Non-urgent files
 		assert!(!is_urgent_file("blockers.md"));
-		assert!(!is_urgent_file("workspace/urgent.md"));
 		assert!(!is_urgent_file("urgent"));
+		assert!(!is_urgent_file("workspace/blockers.md"));
 	}
 
 	#[test]
