@@ -93,17 +93,51 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 
 	// Get the most recent timestamp
 	let most_recent_time = entries_with_time[0].1;
+	let five_minutes_ago = most_recent_time - std::time::Duration::from_secs(5 * 60);
 
-	// Load all screenshots from the most recent capture (within 2 seconds)
-	for (screenshot_path, modified_time) in entries_with_time {
-		let time_diff = if modified_time > most_recent_time {
-			modified_time.duration_since(most_recent_time).unwrap_or_default()
-		} else {
-			most_recent_time.duration_since(modified_time).unwrap_or_default()
-		};
+	// Group screenshots by capture time (within 2 seconds tolerance)
+	let mut capture_groups: Vec<Vec<std::path::PathBuf>> = Vec::new();
+	let mut current_group: Vec<std::path::PathBuf> = Vec::new();
+	let mut last_time: Option<std::time::SystemTime> = None;
 
-		if time_diff.as_secs() <= 2 {
-			let png_bytes = std::fs::read(&screenshot_path).wrap_err(format!("Failed to read screenshot: {}", screenshot_path.display()))?;
+	for (screenshot_path, modified_time) in &entries_with_time {
+		// Skip screenshots older than 5 minutes
+		if *modified_time < five_minutes_ago {
+			continue;
+		}
+
+		if let Some(lt) = last_time {
+			let time_diff = if *modified_time > lt {
+				modified_time.duration_since(lt).unwrap_or_default()
+			} else {
+				lt.duration_since(*modified_time).unwrap_or_default()
+			};
+
+			// If more than 2 seconds apart, this is a new capture
+			if time_diff.as_secs() > 2 {
+				if !current_group.is_empty() {
+					capture_groups.push(current_group.clone());
+					current_group.clear();
+				}
+			}
+		}
+
+		current_group.push(screenshot_path.clone());
+		last_time = Some(*modified_time);
+	}
+
+	// Add the last group if non-empty
+	if !current_group.is_empty() {
+		capture_groups.push(current_group);
+	}
+
+	// Take up to 5 most recent capture groups
+	let captures_to_use = capture_groups.iter().take(5);
+
+	// Load all screenshots from the selected captures
+	for capture_group in captures_to_use {
+		for screenshot_path in capture_group {
+			let png_bytes = std::fs::read(screenshot_path).wrap_err(format!("Failed to read screenshot: {}", screenshot_path.display()))?;
 
 			if png_bytes.is_empty() {
 				tracing::warn!("Skipping empty screenshot file: {}", screenshot_path.display());
@@ -124,6 +158,9 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	if screenshot_images.is_empty() {
 		return Err(color_eyre::eyre::eyre!("Failed to load valid screenshots from {}", date_dir.display()));
 	}
+
+	let num_captures = capture_groups.len().min(5);
+	tracing::info!("Loaded {} screenshot capture(s) from the last 5 minutes", num_captures);
 
 	// Get current blocker
 	let blocker_output = Command::new(std::env::current_exe()?)
@@ -156,10 +193,12 @@ pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
 	// Analyze all screenshots with LLM
 	println!("\nAnalyzing screenshots...");
 	let prompt = format!(
-		r#"You are analyzing screenshots of a user's workspace to assess how relevant their current activity is to their stated goals.
+		r#"You are analyzing screenshots of a user's workspace taken over the last 5 minutes to assess how relevant their activity is to their stated goals.
+
+IMPORTANT: You are receiving up to 5 screenshot captures (taken ~60 seconds apart), showing progression over time. Look at how the user's activity has evolved and what progress (if any) they are making toward their goals.
 
 Task identified as current blocker. You're also partially judging relevance of it against daily objectives.
-// eg if we are configuring nvim as it's blocking us from codign efficiently, that's already not directly related. But if it gets set to coding an unrelated task or say playing some game, - that's completely off.
+// eg if we are configuring nvim as it's blocking us from coding efficiently, that's already not directly related. But if it gets set to coding an unrelated task or say playing some game, - that's completely off.
 {current_blocker}
 
 Daily objectives. Main reference point for judging relevance:
@@ -169,7 +208,7 @@ Daily objectives. Main reference point for judging relevance:
 Static task axis (activities judged as always useful, even if I'm procrastinating on the current blocker (but, obviously, reduced relevance weight)):
 {static_milestones}
 
-Please analyze the screenshots and rate the relevance of the user's current activity on a scale from 0 to 10, where:
+Please analyze the screenshots chronologically (most recent first) and rate the overall relevance on a scale from 0 to 10, where:
 - 0 = Completely unrelated or counterproductive
 - 5 = Somewhat related
 - 10 = Directly working at the goal; being productive
@@ -178,8 +217,9 @@ When scoring, consider:
 1. Primary: Relevance to the current blocker and daily objectives (full weight)
 2. Static: Relevance to the static task axis (1/3 weight)
 3. If an activity is relevant to both primary goals and static activities, that should further increase the score
+4. Progress over time: Are they making forward progress on goals, or staying stuck/distracted?
 
-Provide a brief 1-2 sentence explanation.
+Provide a brief 1-2 sentence explanation that mentions the progression if applicable.
 
 Format your response EXACTLY as follows:
 <score>N</score>
