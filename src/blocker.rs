@@ -14,6 +14,7 @@ static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
 static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
 static BLOCKER_CURRENT_CACHE_FILENAME: &str = "blocker_current_cache.txt";
+static PRE_URGENT_PROJECT_FILENAME: &str = "pre_urgent_project.txt";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct WorkspaceSettings {
@@ -770,6 +771,17 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Check if the project actually changed
 	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
 
+	// If switching to urgent, save the previous project
+	if is_urgent_file(resolved_path) {
+		if let Some(old_path) = &old_project {
+			if !is_urgent_file(old_path) {
+				// Save non-urgent project before switching to urgent
+				let pre_urgent_path = STATE_DIR.get().unwrap().join(PRE_URGENT_PROJECT_FILENAME);
+				std::fs::write(&pre_urgent_path, old_path)?;
+			}
+		}
+	}
+
 	// Save the new project path
 	std::fs::write(&state_dir, resolved_path)?;
 
@@ -1283,10 +1295,24 @@ async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 		if let Ok(current_project) = std::fs::read_to_string(&current_project_path)
 			&& current_project == relative_path
 		{
-			// Switch back to default project
-			let default_project = "blockers.txt".to_string();
-			set_current_project(&default_project).await?;
-			eprintln!("Switched to default project: {}", default_project);
+			// Try to restore the previous project before urgent
+			let pre_urgent_path = STATE_DIR.get().unwrap().join(PRE_URGENT_PROJECT_FILENAME);
+			let restore_project = if let Ok(prev_project) = std::fs::read_to_string(&pre_urgent_path) {
+				// Clean up the pre-urgent cache file
+				let _ = std::fs::remove_file(&pre_urgent_path);
+				prev_project
+			} else {
+				// Fallback to a sensible default if no previous project was saved
+				// Try to find any non-urgent project file, or use empty string to trigger error handling
+				String::new()
+			};
+
+			if !restore_project.is_empty() {
+				set_current_project(&restore_project).await?;
+				eprintln!("Restored previous project: {}", restore_project);
+			} else {
+				eprintln!("No previous project found to restore after urgent completion");
+			}
 		}
 	}
 
