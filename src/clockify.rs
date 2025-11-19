@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::config::{AppConfig, CACHE_DIR};
 
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
-static LEGACY_PROJECT_ID: &str = "66d83316b6114535ad872316";
 
 // Helper function to convert underscores to spaces for name matching
 fn normalize_name_for_matching(name: &str) -> String {
@@ -184,9 +183,36 @@ pub async fn start_time_entry_with_defaults(
 		None => get_active_workspace(&client).await?,
 	};
 
+	// Determine the project to use (from cache or parameter)
+	let cached_project = if project.is_none() {
+		let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		std::fs::read_to_string(&persisted_project_file).ok()
+	} else {
+		None
+	};
+
+	let processed_project = cached_project.as_ref().map(|filename| process_filename_as_project(filename));
+
+	let project_name = match project {
+		Some(p) => p,
+		None => match &processed_project {
+			Some(processed) => {
+				println!("Using cached project (processed from filename): {}", processed);
+				processed.as_str()
+			}
+			None => {
+				return Err(eyre!(
+					"--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'"
+				));
+			}
+		},
+	};
+
+	let resolved_project_id = resolve_project(&client, &workspace_id, project_name).await?;
+
 	// Handle fully_qualified mode (legacy clockify mode) vs normal mode
-	let (project_id, final_description) = if fully_qualified {
-		// Fully-qualified mode (legacy): use hardcoded project ID and prefix description with processed filename
+	let final_description = if fully_qualified {
+		// Fully-qualified mode: prefix description with processed filename
 		let project_prefix = match filename {
 			Some(fname) => process_filename_as_project(fname),
 			None => {
@@ -199,38 +225,13 @@ pub async fn start_time_entry_with_defaults(
 			}
 		};
 
-		println!("Using fully-qualified mode (legacy) with project ID: {} and prefix: {}", LEGACY_PROJECT_ID, project_prefix);
-		let prefixed_description = format!("{}: {}", project_prefix, description);
-		(Some(LEGACY_PROJECT_ID.to_string()), prefixed_description)
+		println!("Using fully-qualified mode (legacy) with project: {} and prefix: {}", project_name, project_prefix);
+		format!("{}: {}", project_prefix, description)
 	} else {
-		// Normal mode: resolve project as before
-		let cached_project = if project.is_none() {
-			let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-			std::fs::read_to_string(&persisted_project_file).ok()
-		} else {
-			None
-		};
-
-		let processed_project = cached_project.as_ref().map(|filename| process_filename_as_project(filename));
-
-		let project_name = match project {
-			Some(p) => p,
-			None => match &processed_project {
-				Some(processed) => {
-					println!("Using cached project (processed from filename): {}", processed);
-					processed.as_str()
-				}
-				None => {
-					return Err(eyre!(
-						"--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'"
-					));
-				}
-			},
-		};
-
-		let resolved_project_id = resolve_project(&client, &workspace_id, project_name).await?;
-		(Some(resolved_project_id), description)
+		description
 	};
+
+	let project_id = Some(resolved_project_id);
 
 	let task_id = if let Some(t) = task {
 		let pid = project_id.as_ref().ok_or_else(|| eyre!("--task requires --project to be set"))?;
