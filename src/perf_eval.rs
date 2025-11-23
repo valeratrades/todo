@@ -8,9 +8,21 @@ use color_eyre::eyre::{Context, Result};
 use crate::config::{AppConfig, CACHE_DIR};
 
 #[derive(Args, Debug)]
-pub struct PerfEvalArgs {}
+pub struct PerfEvalArgs {
+	/// GitHub API token (can also be set via GITHUB_KEY env var)
+	#[arg(long)]
+	pub github_key: Option<String>,
+}
 
-pub async fn main(_config: AppConfig, _args: PerfEvalArgs) -> Result<()> {
+pub async fn main(_config: AppConfig, args: PerfEvalArgs) -> Result<()> {
+	// Set GITHUB_KEY env var if provided via flag
+	if let Some(ref github_key) = args.github_key {
+		// SAFETY: Only called during initialization, before spawning threads for the LLM call
+		unsafe {
+			std::env::set_var("GITHUB_KEY", github_key);
+		}
+	}
+
 	let cache_dir = CACHE_DIR.get().ok_or_else(|| color_eyre::eyre::eyre!("CACHE_DIR not initialized"))?;
 
 	let now = Local::now();
