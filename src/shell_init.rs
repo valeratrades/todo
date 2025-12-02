@@ -25,6 +25,11 @@ alias tm="{exe_name} manual"
 alias tmc="tm ev -c --" # `--` allows for negative values (as otherwise they are interpreted as flags)
 alias tmr="tm ev -r --"
 
+# {exe_name}s-milestones //HACK: same prefix as manual
+alias tmh="{exe_name} milestones healthcheck"
+alias tmg="{exe_name} milestones get"
+alias tme="{exe_name} milestones edit"
+
 # {exe_name}s-{exe_name}s
 alias tdo="{exe_name} open"
 alias tda="{exe_name} add"
