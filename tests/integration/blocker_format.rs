@@ -18,6 +18,7 @@ struct TestSetup {
 	_temp_dir: TempDir,
 	blocker_file: PathBuf,
 	xdg_state_home: PathBuf,
+	xdg_data_home: PathBuf,
 	relative_path: String,
 }
 
@@ -25,14 +26,18 @@ impl TestSetup {
 	fn new(initial_content: &str, filename: &str) -> Self {
 		let temp_dir = tempfile::tempdir().unwrap();
 		// XDG_STATE_HOME/todo/ becomes the state directory
-		let state_dir = temp_dir.path().join("todo");
+		let state_dir = temp_dir.path().join("state").join("todo");
 		fs::create_dir_all(&state_dir).unwrap();
-		let blocker_file = state_dir.join(filename);
+		// XDG_DATA_HOME/todo/blockers/ becomes the blockers directory
+		let blockers_dir = temp_dir.path().join("data").join("todo").join("blockers");
+		fs::create_dir_all(&blockers_dir).unwrap();
+		let blocker_file = blockers_dir.join(filename);
 
 		fs::write(&blocker_file, initial_content).unwrap();
 
 		Self {
-			xdg_state_home: temp_dir.path().to_path_buf(),
+			xdg_state_home: temp_dir.path().join("state"),
+			xdg_data_home: temp_dir.path().join("data"),
 			blocker_file,
 			_temp_dir: temp_dir,
 			relative_path: filename.to_string(),
@@ -51,6 +56,7 @@ impl TestSetup {
 		let output = Command::new(get_binary_path())
 			.args(["blocker", "--relative-path", &self.relative_path, "format"])
 			.env("XDG_STATE_HOME", &self.xdg_state_home)
+			.env("XDG_DATA_HOME", &self.xdg_data_home)
 			.output()
 			.unwrap();
 

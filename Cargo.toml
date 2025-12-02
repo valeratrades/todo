@@ -33,7 +33,7 @@ tracing = "^0.1.41"
 tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
 typst = "0.14.0"
 urlencoding = "^2.1.3"
-v_utils = { version = "^2.9.2", features = ["io", "macros", "trades"] }
+v_utils = { version = "^2.9.2", features = ["io", "macros", "trades", "xdg"] }
 xattr = "1.6.1"
 xdg = "3.0.0"
 

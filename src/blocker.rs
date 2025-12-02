@@ -10,6 +10,10 @@ use crate::{
 	milestones::SPRINT_HEADER_REL_PATH,
 };
 
+fn blockers_dir() -> std::path::PathBuf {
+	v_utils::xdg_data_dir!("blockers")
+}
+
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
 static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
@@ -538,7 +542,7 @@ fn pop_content_line(content: &str) -> Result<String> {
 }
 
 fn get_current_blocker(relative_path: &str) -> Option<String> {
-	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let blocker_path = blockers_dir().join(relative_path);
 	let blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
 		.unwrap_or_else(|_| String::new())
 		.split('\n')
@@ -557,7 +561,7 @@ fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) 
 	let stripped = strip_blocker_prefix(&current);
 
 	// Read blocker file to parse parent headers
-	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let blocker_path = blockers_dir().join(relative_path);
 	let parent_headers = if blocker_path.exists() {
 		let content = std::fs::read_to_string(&blocker_path).ok()?;
 		parse_parent_headers(&content, &current)
@@ -806,7 +810,7 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 
 async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	// Read and format the blocker file
-	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let blocker_path = blockers_dir().join(relative_path);
 	if blocker_path.exists() {
 		let content = std::fs::read_to_string(&blocker_path)?;
 		// Normalize content based on file extension (e.g., convert .typ to markdown)
@@ -891,7 +895,7 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 	// Parse workspace from path if it contains a slash
 	let workspace_from_path = parse_workspace_from_path(&relative_path)?;
 
-	let blocker_path = STATE_DIR.get().unwrap().join(&relative_path);
+	let blocker_path = blockers_dir().join(&relative_path);
 
 	match args.command {
 		Command::Add { name, project, urgent, touch } => {
@@ -914,7 +918,7 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// Re-parse workspace from the target path
 			let target_workspace_from_path = parse_workspace_from_path(&target_relative_path)?;
-			let target_blocker_path = STATE_DIR.get().unwrap().join(&target_relative_path);
+			let target_blocker_path = blockers_dir().join(&target_relative_path);
 
 			// If tracking is enabled, stop current task before adding new one
 			if is_blocker_tracking_enabled() {
@@ -1016,7 +1020,7 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 				}
 			};
 
-			let path_to_open = STATE_DIR.get().unwrap().join(&resolved_path);
+			let path_to_open = blockers_dir().join(&resolved_path);
 
 			// Create the file if it doesn't exist and touch flag is set
 			if touch && !path_to_open.exists() {
@@ -1045,7 +1049,7 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 
 			// Create the file if it doesn't exist and touch flag is set
 			if touch {
-				let project_blocker_path = STATE_DIR.get().unwrap().join(&resolved_path);
+				let project_blocker_path = blockers_dir().join(&resolved_path);
 				if !project_blocker_path.exists() {
 					// Create parent directories if they don't exist
 					if let Some(parent) = project_blocker_path.parent() {
@@ -1126,10 +1130,10 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 	use std::process::Command;
 
-	let state_dir = STATE_DIR.get().unwrap();
+	let blockers_dir = blockers_dir();
 	// Search for both .md and .typ files
 	let output = Command::new("find")
-		.args([state_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f"])
+		.args([blockers_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f"])
 		.output()?;
 
 	if !output.status.success() {
@@ -1145,11 +1149,11 @@ fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 			continue;
 		}
 
-		// Convert absolute path to relative path from STATE_DIR
-		let relative_path = if let Ok(rel_path) = Path::new(file_path).strip_prefix(state_dir) {
+		// Convert absolute path to relative path from blockers_dir
+		let relative_path = if let Ok(rel_path) = Path::new(file_path).strip_prefix(&blockers_dir) {
 			rel_path.to_string_lossy().to_string()
 		} else {
-			continue; // Skip files not in STATE_DIR
+			continue; // Skip files not in blockers_dir
 		};
 
 		// Extract filename without extension for matching
@@ -1222,27 +1226,27 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 	}
 }
 
-/// Check if an urgent file (urgent.md or urgent.typ) exists in the STATE_DIR
+/// Check if an urgent file (urgent.md or urgent.typ) exists in the blockers_dir
 /// Returns the relative path to the urgent file if found
 /// Checks both root-level urgent files and workspace-specific urgent files
 fn check_for_urgent_file() -> Option<String> {
-	let state_dir = STATE_DIR.get().unwrap();
+	let blockers_dir = blockers_dir();
 
 	// Check for root-level urgent.md
-	let urgent_md = state_dir.join("urgent.md");
+	let urgent_md = blockers_dir.join("urgent.md");
 	if urgent_md.exists() {
 		return Some("urgent.md".to_string());
 	}
 
 	// Check for root-level urgent.typ
-	let urgent_typ = state_dir.join("urgent.typ");
+	let urgent_typ = blockers_dir.join("urgent.typ");
 	if urgent_typ.exists() {
 		return Some("urgent.typ".to_string());
 	}
 
 	// Check for workspace-specific urgent files
-	// Look for */urgent.md and */urgent.typ in STATE_DIR
-	if let Ok(entries) = std::fs::read_dir(state_dir) {
+	// Look for */urgent.md and */urgent.typ in blockers_dir
+	if let Ok(entries) = std::fs::read_dir(&blockers_dir) {
 		for entry in entries.flatten() {
 			if let Ok(metadata) = entry.metadata() {
 				if metadata.is_dir() {
@@ -1279,7 +1283,7 @@ async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 		return Ok(());
 	}
 
-	let blocker_path = STATE_DIR.get().unwrap().join(relative_path);
+	let blocker_path = blockers_dir().join(relative_path);
 	if !blocker_path.exists() {
 		return Ok(());
 	}
