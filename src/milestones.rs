@@ -46,30 +46,20 @@ pub async fn milestones_command(config: AppConfig, args: MilestonesArgs) -> Resu
 }
 
 async fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
-	let todos_config = config
-		.todos
-		.as_ref()
-		.ok_or_else(|| eyre!("todos config section is required for milestones command. Add [todos] section with path to your config"))?;
-
-	let todos_url_output = std::process::Command::new("git")
-		.args(["config", "--get", "remote.origin.url"])
-		.current_dir(&todos_config.path)
-		.output()?
-		.stdout;
-	let todos_url = String::from_utf8(todos_url_output).unwrap().trim().to_string();
-	let sections = todos_url.split("/").collect::<Vec<&str>>();
-	let (owner, repo) = (sections[sections.len() - 2], sections[sections.len() - 1]);
-
-	let url = format!("https://api.github.com/repos/{owner}/{repo}/milestones");
-
 	let milestones_config = config
 		.milestones
 		.as_ref()
-		.ok_or_else(|| eyre!("milestones config section is required. Add [milestones] section with github_token to your config"))?;
+		.ok_or_else(|| eyre!("milestones config section is required. Add [milestones] section with github_token and url to your config"))?;
+
+	// Parse owner/repo from URL (supports "owner/repo", "https://github.com/owner/repo", etc.)
+	let url_str = &milestones_config.url;
+	let (owner, repo) = parse_github_repo(url_str)?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/milestones");
 
 	let client = Client::new();
 	let res = client
-		.get(&url)
+		.get(&api_url)
 		.header("User-Agent", "Rust GitHub Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.send()
@@ -78,6 +68,34 @@ async fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
 
 	let milestones = res.json::<Vec<Milestone>>().await?;
 	Ok(milestones)
+}
+
+/// Parse owner and repo from various GitHub URL formats
+/// Supports: "owner/repo", "https://github.com/owner/repo", "git@github.com:owner/repo.git", etc.
+fn parse_github_repo(url: &str) -> Result<(String, String)> {
+	let url = url.trim();
+
+	// Handle "owner/repo" format directly
+	if !url.contains(':') && !url.contains("//") {
+		let parts: Vec<&str> = url.split('/').collect();
+		if parts.len() == 2 {
+			return Ok((parts[0].to_string(), parts[1].trim_end_matches(".git").to_string()));
+		}
+	}
+
+	// Handle URL formats
+	let sections: Vec<&str> = url.split('/').collect();
+	if sections.len() >= 2 {
+		let owner = sections[sections.len() - 2];
+		let repo = sections[sections.len() - 1].trim_end_matches(".git");
+
+		// For SSH format (git@github.com:owner/repo), owner might contain ':'
+		let owner = if owner.contains(':') { owner.split(':').last().unwrap_or(owner) } else { owner };
+
+		return Ok((owner.to_string(), repo.to_string()));
+	}
+
+	Err(eyre!("Could not parse GitHub repo from URL: {}", url))
 }
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq)]

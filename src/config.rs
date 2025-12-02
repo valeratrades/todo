@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf, sync::OnceLock};
+use std::{path::PathBuf, sync::OnceLock};
 
 use color_eyre::eyre::Result;
 use serde::Deserialize;
@@ -11,21 +11,16 @@ pub static EXE_NAME: &str = "todo";
 
 #[derive(Clone, Debug, Default, MyConfigPrimitives, derive_new::new)]
 pub struct AppConfig {
-	pub todos: Option<Todos>,
 	pub timer: Option<Timer>,
 	pub milestones: Option<Milestones>,
 	pub manual_stats: Option<ManualStats>,
 }
 
-#[derive(Clone, Debug, Default, MyConfigPrimitives)]
-pub struct Todos {
-	pub path: PathBuf,
-	pub n_tasks_to_show: usize,
-}
-
 #[derive(Clone, Debug, MyConfigPrimitives)]
 pub struct Milestones {
 	pub github_token: String,
+	/// GitHub repo URL for milestones (e.g., "https://github.com/owner/repo" or "owner/repo")
+	pub url: String,
 }
 
 #[derive(Clone, Debug, MyConfigPrimitives)]
@@ -82,13 +77,6 @@ impl AppConfig {
 			Self::warn_unknown_fields(&file_cfg);
 		}
 
-		// Only validate todos path if todos config is present
-		if let Some(ref todos) = settings.todos
-			&& !todos.path.exists()
-		{
-			return Err(config::ConfigError::Message(format!("Configured 'todos' directory does not exist: {}", todos.path.display())));
-		}
-
 		#[cfg(not(feature = "is_integration_test"))]
 		{
 			if std::env::var("XDG_STATE_HOME").is_err() {
@@ -143,17 +131,17 @@ impl AppConfig {
 	}
 
 	fn warn_unknown_fields(file_config: &config::Config) {
+		use std::collections::{HashMap, HashSet};
+
 		// Define all known top-level sections
-		let known_sections: HashSet<&str> = ["todos", "timer", "milestones", "manual_stats"].iter().copied().collect();
+		let known_sections: HashSet<&str> = ["timer", "milestones", "manual_stats"].iter().copied().collect();
 
 		// Define known fields for each section
-		let known_todos_fields: HashSet<&str> = ["path", "n_tasks_to_show"].iter().copied().collect();
 		let known_timer_fields: HashSet<&str> = ["hard_stop_coeff"].iter().copied().collect();
-		let known_milestones_fields: HashSet<&str> = ["github_token"].iter().copied().collect();
+		let known_milestones_fields: HashSet<&str> = ["github_token", "url"].iter().copied().collect();
 		let known_manual_stats_fields: HashSet<&str> = ["date_format"].iter().copied().collect();
 
 		// Get all keys from the file config and check for unknown sections
-		use std::collections::HashMap;
 		if let Ok(table) = file_config.clone().try_deserialize::<HashMap<String, serde_json::Value>>() {
 			for (section, value) in table.iter() {
 				if !known_sections.contains(section.as_str()) {
@@ -162,7 +150,6 @@ impl AppConfig {
 					// Check for unknown fields within known sections
 					if let serde_json::Value::Object(fields) = value {
 						let known_fields = match section.as_str() {
-							"todos" => &known_todos_fields,
 							"timer" => &known_timer_fields,
 							"milestones" => &known_milestones_fields,
 							"manual_stats" => &known_manual_stats_fields,
