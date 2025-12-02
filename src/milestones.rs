@@ -244,6 +244,9 @@ async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
 	let original_description = milestone.description.clone().unwrap_or_default();
 	let milestone_number = milestone.number;
 
+	// Check if milestone is outdated (due_on in the past)
+	let is_outdated = milestone.due_on.map(|d| d.signed_duration_since(Utc::now()).num_hours() < 0).unwrap_or(true);
+
 	// Write to temp file
 	let tmp_path = format!("/tmp/milestone_{}.md", tf);
 	fs::write(&tmp_path, &original_description)?;
@@ -263,18 +266,35 @@ async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
 		return Ok(());
 	}
 
+	// If outdated, calculate new due_on as today + timeframe
+	let new_due_on = if is_outdated {
+		let new_date = Utc::now() + tf.duration();
+		println!("Milestone was outdated, updating due date to {}", new_date.format("%Y-%m-%d"));
+		Some(new_date)
+	} else {
+		None
+	};
+
 	// Push update to GitHub
-	update_milestone_description(config, milestone_number, &new_description).await?;
+	update_milestone(config, milestone_number, &new_description, new_due_on).await?;
 	println!("Updated milestone '{}'", tf);
 
 	Ok(())
 }
 
-async fn update_milestone_description(config: &AppConfig, milestone_number: u64, description: &str) -> Result<()> {
+async fn update_milestone(config: &AppConfig, milestone_number: u64, description: &str, due_on: Option<DateTime<Utc>>) -> Result<()> {
 	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required"))?;
 
 	let (owner, repo) = parse_github_repo(&milestones_config.url)?;
 	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/milestones/{milestone_number}");
+
+	let mut body = serde_json::json!({
+		"description": description
+	});
+
+	if let Some(date) = due_on {
+		body["due_on"] = serde_json::Value::String(date.to_rfc3339());
+	}
 
 	let client = Client::new();
 	let res = client
@@ -282,9 +302,7 @@ async fn update_milestone_description(config: &AppConfig, milestone_number: u64,
 		.header("User-Agent", "Rust GitHub Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({
-			"description": description
-		}))
+		.json(&body)
 		.send()
 		.await?;
 
