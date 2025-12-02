@@ -716,8 +716,6 @@ async fn start_tracking_for_task(description: String, relative_path: &str, resum
 		resume_args.task.as_deref(),
 		resume_args.tags.as_deref(),
 		resume_args.billable,
-		fully_qualified,
-		Some(relative_path),
 	)
 	.await
 }
@@ -944,8 +942,12 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Cleanup urgent file if it's now empty
 			cleanup_urgent_file_if_empty(&target_relative_path).await?;
 
-			// If tracking is enabled, start tracking the new task
-			if is_blocker_tracking_enabled() {
+			// If adding to a different project (e.g., urgent), switch the current project
+			if target_relative_path != relative_path {
+				set_current_project(&target_relative_path).await?;
+			} else if is_blocker_tracking_enabled() {
+				// Only restart tracking here if we didn't switch projects
+				// (set_current_project already handles tracking restart)
 				restart_tracking_for_project(&target_relative_path, target_workspace_from_path.as_deref()).await?;
 			}
 		}

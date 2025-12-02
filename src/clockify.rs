@@ -163,17 +163,7 @@ struct TimeInterval {
 
 // Public functions for use by other modules
 // Functions with optional parameters for blocker integration
-#[allow(clippy::too_many_arguments)]
-pub async fn start_time_entry_with_defaults(
-	workspace: Option<&str>,
-	project: Option<&str>,
-	description: String,
-	task: Option<&str>,
-	tags: Option<&str>,
-	billable: bool,
-	fully_qualified: bool,
-	filename: Option<&str>,
-) -> Result<()> {
+pub async fn start_time_entry_with_defaults(workspace: Option<&str>, project: Option<&str>, description: String, task: Option<&str>, tags: Option<&str>, billable: bool) -> Result<()> {
 	let api_key = env::var("CLOCKIFY_API_KEY").wrap_err("Set CLOCKIFY_API_KEY in your environment with a valid API token")?;
 	let client = reqwest::Client::builder().default_headers(make_headers(&api_key)?).build()?;
 
@@ -210,26 +200,9 @@ pub async fn start_time_entry_with_defaults(
 
 	let resolved_project_id = resolve_project(&client, &workspace_id, project_name).await?;
 
-	// Handle fully_qualified mode (legacy clockify mode) vs normal mode
-	let final_description = if fully_qualified {
-		// Fully-qualified mode: prefix description with processed filename
-		let project_prefix = match filename {
-			Some(fname) => process_filename_as_project(fname),
-			None => {
-				// Fallback to cached filename if not provided
-				let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-				match std::fs::read_to_string(&persisted_project_file) {
-					Ok(cached_filename) => process_filename_as_project(&cached_filename),
-					Err(_) => return Err(eyre!("Fully-qualified mode (legacy) requires a filename for project prefix")),
-				}
-			}
-		};
-
-		println!("Using fully-qualified mode (legacy) with project: {} and prefix: {}", project_name, project_prefix);
-		format!("{}: {}", project_prefix, description)
-	} else {
-		description
-	};
+	// The description is already fully-qualified (includes project prefix) when fully_qualified=true,
+	// as it's handled by get_current_blocker_with_headers in blocker.rs
+	let final_description = description;
 
 	let project_id = Some(resolved_project_id);
 
