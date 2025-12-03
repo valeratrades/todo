@@ -411,11 +411,24 @@ fn is_semantically_empty(content: &str) -> bool {
 /// 2. Always have 1 empty line above `^#* ` lines (unless the line above also starts with `#`)
 /// 3. Remove all other empty lines for standardization
 /// 4. Comment lines (tab-indented) are preserved and must follow Content or Comment lines
+/// 5. Code blocks (``` ... ```) within comments can contain blank lines
 fn format_blocker_content(content: &str) -> Result<String> {
 	let lines: Vec<&str> = content.lines().collect();
 
-	// First pass: validate that comments don't follow empty lines
+	// First pass: validate that comments don't follow empty lines (outside of code blocks)
+	let mut in_code_block = false;
 	for (idx, line) in lines.iter().enumerate() {
+		// Track code block state - code blocks in comments are tab-indented with ```
+		let trimmed = line.trim_start_matches('\t').trim_start();
+		if trimmed.starts_with("```") {
+			in_code_block = !in_code_block;
+		}
+
+		// Skip validation inside code blocks - blank lines are allowed there
+		if in_code_block {
+			continue;
+		}
+
 		if let Some(LineType::Comment) = classify_line(line) {
 			// Check if previous line was empty
 			if idx > 0 && lines[idx - 1].is_empty() {
@@ -435,13 +448,23 @@ fn format_blocker_content(content: &str) -> Result<String> {
 	}
 
 	let mut formatted_lines: Vec<String> = Vec::new();
+	let mut in_code_block = false;
 
 	for line in lines.iter() {
+		// Track code block state for formatting
+		let trimmed_for_code = line.trim_start_matches('\t').trim_start();
+		if trimmed_for_code.starts_with("```") {
+			in_code_block = !in_code_block;
+		}
+
 		let line_type = classify_line(line);
 
 		match line_type {
 			None => {
-				// Skip empty lines - we'll add them back strategically
+				// Preserve empty lines inside code blocks, skip others
+				if in_code_block {
+					formatted_lines.push(String::new());
+				}
 				continue;
 			}
 			Some(LineType::Comment) => {

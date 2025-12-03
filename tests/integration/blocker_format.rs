@@ -280,3 +280,20 @@ fn test_blocker_format_typst_mixed_content() {
 	- another task
 	");
 }
+
+#[test]
+fn test_blocker_format_comment_with_code_block() {
+	// Test that code blocks within comments can contain blank lines
+	let content = r#"- switch to `curswant` and `curspos` for setting the jump target, with preservation of `curswant`
+	```rs
+	 // getcurpos() returns [bufnum, lnum, col, off, curswant]
+	  let curpos: Vec<i64> = api::call_function("getcurpos", ()).unwrap_or_default();
+	  let curswant = curpos.get(4).copied().unwrap_or(0);
+
+	  // cursor(line, col, off, curswant) - col=0 means use curswant
+	  let _ = api::call_function::<_, ()>("cursor", (target_line, 0, 0, curswant));
+	```"#;
+
+	let setup = TestSetup::new_md(content);
+	setup.run_format().expect("Format command should succeed - code blocks can have blank lines");
+}
