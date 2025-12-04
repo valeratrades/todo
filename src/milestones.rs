@@ -279,6 +279,9 @@ async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
 	update_milestone(config, milestone_number, &new_description, new_due_on).await?;
 	println!("Updated milestone '{}'", tf);
 
+	// Run healthcheck after update
+	healthcheck(config).await?;
+
 	Ok(())
 }
 
