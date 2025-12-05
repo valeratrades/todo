@@ -1226,12 +1226,15 @@ fn choose_project_with_fzf(matches: &[String], initial_query: &str) -> Result<Op
 
 /// Resolve project path using pattern matching - works for both project and open commands
 fn resolve_project_path(pattern: &str) -> Result<String> {
-	// First, check if it's already a valid path
-	if pattern.contains('/') || pattern.ends_with(".md") {
+	// If it contains a slash, treat as literal path (e.g., "workspace/project.md")
+	if pattern.contains('/') {
 		return Ok(pattern.to_string());
 	}
 
-	let matches = search_projects_by_pattern(pattern)?;
+	// Strip .md/.typ suffix for pattern matching, so "uni.md" matches like "uni"
+	let search_pattern = pattern.strip_suffix(".md").or_else(|| pattern.strip_suffix(".typ")).unwrap_or(pattern);
+
+	let matches = search_projects_by_pattern(search_pattern)?;
 
 	match matches.len() {
 		0 => Err(eyre!("No projects found matching pattern: {pattern}")),
