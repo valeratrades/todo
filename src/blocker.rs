@@ -1236,6 +1236,18 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 
 	let matches = search_projects_by_pattern(search_pattern)?;
 
+	// If pattern has an extension, check for exact match first
+	// e.g., "uni.md" should match "uni.md" exactly, not open fzf even if "uni_headless.md" also exists
+	if pattern.ends_with(".md") || pattern.ends_with(".typ") {
+		if let Some(exact_match) = matches.iter().find(|m| {
+			// Extract just the filename from the match path
+			Path::new(m).file_name().and_then(|f| f.to_str()) == Some(pattern)
+		}) {
+			eprintln!("Found exact match: {}", exact_match);
+			return Ok(exact_match.clone());
+		}
+	}
+
 	match matches.len() {
 		0 => Err(eyre!("No projects found matching pattern: {pattern}")),
 		1 => {
