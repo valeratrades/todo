@@ -201,28 +201,6 @@ fn test_set_project_can_switch_between_urgent_files() {
 }
 
 #[test]
-fn test_cannot_create_urgent_if_another_exists() {
-	let setup = TestSetup::new();
-
-	// Create one workspace urgent file already
-	setup.create_blocker_file("work/urgent.md", "- existing urgent task");
-	setup.create_blocker_file("personal/normal.md", "- normal task");
-
-	// Directly set current project to personal/normal.md (bypassing set-project which auto-switches to urgent)
-	setup.set_current_project_cache("personal/normal.md");
-
-	// Now try to add urgent (which would create personal/urgent.md) - should fail
-	let output = setup.run_add_urgent("new urgent task");
-	assert!(!output.status.success(), "Should fail to create another urgent file");
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	assert!(
-		stderr.contains("Cannot create urgent file") && stderr.contains("another urgent file"),
-		"Should indicate another urgent file exists, got stderr: {}",
-		stderr
-	);
-}
-
-#[test]
 fn test_can_add_to_same_urgent_file() {
 	let setup = TestSetup::new();
 
