@@ -796,16 +796,10 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Check if the project actually changed
 	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
 
-	// If currently on urgent and trying to switch to non-urgent, update pre_urgent_project instead
+	// If currently on urgent, don't allow switching away (unless switching to another urgent file)
 	if let Some(old_path) = &old_project {
 		if is_urgent_file(old_path) && !is_urgent_file(resolved_path) {
-			// Update the pre_urgent_project so we return to this project after urgent is done
-			let pre_urgent_path = STATE_DIR.get().unwrap().join(PRE_URGENT_PROJECT_FILENAME);
-			std::fs::write(&pre_urgent_path, resolved_path)?;
-			eprintln!(
-				"Cannot switch away from urgent project '{}'. Set '{}' as return project after urgent completion.",
-				old_path, resolved_path
-			);
+			eprintln!("Cannot switch away from urgent project '{}'. Complete urgent tasks first.", old_path);
 			return Ok(());
 		}
 	}

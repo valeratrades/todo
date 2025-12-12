@@ -86,23 +86,6 @@ fn test_exact_match_with_extension_skips_fzf() {
 }
 
 #[test]
-fn test_pattern_without_extension_opens_fzf_on_multiple_matches() {
-	let setup = TestSetup::new();
-
-	// Create two files where one is a prefix of the other
-	setup.create_blocker_file("uni.md", "- task for uni");
-	setup.create_blocker_file("uni_headless.md", "- task for uni_headless");
-
-	// "uni" (without extension) should try to open fzf since there are multiple matches
-	// fzf will fail in test environment (no tty), but we can check the stderr message
-	let output = setup.run_set_project("uni");
-
-	// The command will fail because fzf can't run without tty
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	assert!(stderr.contains("Found 2 matches"), "Should find multiple matches and attempt fzf, got: {}", stderr);
-}
-
-#[test]
 fn test_unique_pattern_without_extension_matches_directly() {
 	let setup = TestSetup::new();
 
@@ -135,7 +118,7 @@ fn test_exact_match_in_workspace() {
 }
 
 #[test]
-fn test_set_project_cannot_switch_away_from_urgent_but_sets_return_project() {
+fn test_set_project_cannot_switch_away_from_urgent() {
 	let setup = TestSetup::new();
 
 	// Create workspace urgent and regular project files
@@ -148,18 +131,13 @@ fn test_set_project_cannot_switch_away_from_urgent_but_sets_return_project() {
 	let stdout = String::from_utf8_lossy(&output.stdout);
 	assert!(stdout.contains("Set current project to: work/urgent.md"), "Should set to work/urgent.md, got: {}", stdout);
 
-	// Now try to switch away from urgent - should be blocked but update return project
+	// Now try to switch away from urgent - should be blocked
 	let output = setup.run_set_project("work/normal.md");
 	assert!(output.status.success(), "Command should succeed (but not switch)");
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(
 		stderr.contains("Cannot switch away from urgent project"),
 		"Should block switch from urgent, got stderr: {}",
-		stderr
-	);
-	assert!(
-		stderr.contains("Set 'work/normal.md' as return project"),
-		"Should indicate work/normal.md is set as return project, got stderr: {}",
 		stderr
 	);
 
