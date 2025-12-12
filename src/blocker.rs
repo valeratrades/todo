@@ -796,10 +796,16 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Check if the project actually changed
 	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
 
-	// If currently on urgent, don't allow switching away (unless switching to another urgent file)
+	// If currently on urgent and trying to switch to non-urgent, update pre_urgent_project instead
 	if let Some(old_path) = &old_project {
 		if is_urgent_file(old_path) && !is_urgent_file(resolved_path) {
-			eprintln!("Cannot switch away from urgent project '{}'. Complete urgent tasks first.", old_path);
+			// Update the pre_urgent_project so we return to this project after urgent is done
+			let pre_urgent_path = STATE_DIR.get().unwrap().join(PRE_URGENT_PROJECT_FILENAME);
+			std::fs::write(&pre_urgent_path, resolved_path)?;
+			eprintln!(
+				"Cannot switch away from urgent project '{}'. Set '{}' as return project after urgent completion.",
+				old_path, resolved_path
+			);
 			return Ok(());
 		}
 	}
@@ -933,12 +939,17 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Resolve the actual relative_path to use
 			let target_relative_path = if urgent {
 				// --urgent flag takes precedence: use workspace-specific "urgent.md"
-				// Extract workspace from current project if it exists
-				if let Some(workspace) = workspace_from_path.as_ref() {
+				// Requires a workspace context
+				let urgent_path = if let Some(workspace) = workspace_from_path.as_ref() {
 					format!("{}/urgent.md", workspace)
 				} else {
-					"urgent.md".to_string()
-				}
+					return Err(eyre!(
+						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')"
+					));
+				};
+				// Check if we can create this urgent file
+				check_urgent_creation_allowed(&urgent_path)?;
+				urgent_path
 			} else if let Some(project_pattern) = project {
 				// --project flag provided
 				resolve_project_path(&project_pattern)?
@@ -1038,12 +1049,19 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			// Determine which file to open
 			let resolved_path = if urgent {
 				// --urgent flag takes precedence: use workspace-specific "urgent.md"
-				// Extract workspace from current project if it exists
-				if let Some(workspace) = workspace_from_path.as_ref() {
+				// Requires a workspace context
+				let urgent_path = if let Some(workspace) = workspace_from_path.as_ref() {
 					format!("{}/urgent.md", workspace)
 				} else {
-					"urgent.md".to_string()
+					return Err(eyre!(
+						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')"
+					));
+				};
+				// Check if we can create this urgent file (only if touch is enabled)
+				if touch {
+					check_urgent_creation_allowed(&urgent_path)?;
 				}
+				urgent_path
 			} else {
 				match file_path {
 					Some(custom_path) => resolve_project_path(&custom_path)?,
@@ -1272,23 +1290,11 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 	}
 }
 
-/// Check if an urgent file (urgent.md or urgent.typ) exists in the blockers_dir
+/// Check if an urgent file (urgent.md or urgent.typ) exists in any workspace
 /// Returns the relative path to the urgent file if found
-/// Checks both root-level urgent files and workspace-specific urgent files
+/// Only checks workspace-specific urgent files (e.g., workspace/urgent.md)
 fn check_for_urgent_file() -> Option<String> {
 	let blockers_dir = blockers_dir();
-
-	// Check for root-level urgent.md
-	let urgent_md = blockers_dir.join("urgent.md");
-	if urgent_md.exists() {
-		return Some("urgent.md".to_string());
-	}
-
-	// Check for root-level urgent.typ
-	let urgent_typ = blockers_dir.join("urgent.typ");
-	if urgent_typ.exists() {
-		return Some("urgent.typ".to_string());
-	}
 
 	// Check for workspace-specific urgent files
 	// Look for */urgent.md and */urgent.typ in blockers_dir
@@ -1318,9 +1324,24 @@ fn check_for_urgent_file() -> Option<String> {
 }
 
 /// Check if a relative path refers to an urgent file (urgent.md or urgent.typ)
-/// Handles both root-level and workspace-specific urgent files (e.g., workspace/urgent.md)
+/// Only workspace-specific urgent files are valid (e.g., workspace/urgent.md)
 fn is_urgent_file(relative_path: &str) -> bool {
-	relative_path == "urgent.md" || relative_path == "urgent.typ" || relative_path.ends_with("/urgent.md") || relative_path.ends_with("/urgent.typ")
+	relative_path.ends_with("/urgent.md") || relative_path.ends_with("/urgent.typ")
+}
+
+/// Check if creating a new urgent file is allowed
+/// Returns Err if another urgent file already exists (unless it's the same path)
+fn check_urgent_creation_allowed(target_urgent_path: &str) -> Result<()> {
+	if let Some(existing_urgent) = check_for_urgent_file() {
+		if existing_urgent != target_urgent_path {
+			return Err(eyre!(
+				"Cannot create urgent file '{}': another urgent file '{}' already exists. Complete it first.",
+				target_urgent_path,
+				existing_urgent
+			));
+		}
+	}
+	Ok(())
 }
 
 /// Delete urgent file if it's semantically empty, and switch away from it if it was the current project
@@ -1721,14 +1742,14 @@ mod tests {
 
 	#[test]
 	fn test_is_urgent_file() {
-		// Root-level urgent files
-		assert!(is_urgent_file("urgent.md"));
-		assert!(is_urgent_file("urgent.typ"));
-
-		// Workspace-specific urgent files
+		// Workspace-specific urgent files (only valid form)
 		assert!(is_urgent_file("workspace/urgent.md"));
 		assert!(is_urgent_file("workspace/urgent.typ"));
 		assert!(is_urgent_file("workspace1/urgent.md"));
+
+		// Root-level urgent files are NOT valid (must be in workspace)
+		assert!(!is_urgent_file("urgent.md"));
+		assert!(!is_urgent_file("urgent.typ"));
 
 		// Non-urgent files
 		assert!(!is_urgent_file("blockers.md"));

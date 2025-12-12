@@ -3,7 +3,7 @@ use std::process::Command;
 use ask_llm::{ImageContent, Message, Model, Role};
 use chrono::Local;
 use clap::Args;
-use color_eyre::eyre::{Context, Result};
+use color_eyre::eyre::{Context, Result, bail};
 
 use crate::config::{AppConfig, CACHE_DIR};
 
@@ -94,7 +94,7 @@ pub async fn main(_config: AppConfig, args: PerfEvalArgs) -> Result<()> {
 	}
 
 	if entries_with_time.is_empty() {
-		return Err(color_eyre::eyre::eyre!("No screenshots found in {}", date_dir.display()));
+		bail!("No screenshots found in {}", date_dir.display());
 	}
 
 	// Sort by modification time (newest first)
