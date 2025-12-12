@@ -66,13 +66,6 @@ impl TestSetup {
 			.output()
 			.unwrap()
 	}
-
-	/// Directly set the current project cache file, bypassing set-project command
-	/// (which spawns background processes that auto-switch to urgent)
-	fn set_current_project_cache(&self, project: &str) {
-		let cache_file = self.xdg_cache_home.join("todo").join("current_project.txt");
-		fs::write(&cache_file, project).unwrap();
-	}
 }
 
 #[test]
