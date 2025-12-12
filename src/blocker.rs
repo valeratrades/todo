@@ -796,6 +796,14 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Check if the project actually changed
 	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
 
+	// If currently on urgent, don't allow switching away (unless switching to another urgent file)
+	if let Some(old_path) = &old_project {
+		if is_urgent_file(old_path) && !is_urgent_file(resolved_path) {
+			eprintln!("Cannot switch away from urgent project '{}'. Complete urgent tasks first.", old_path);
+			return Ok(());
+		}
+	}
+
 	// If switching to urgent, save the previous project
 	if is_urgent_file(resolved_path) {
 		if let Some(old_path) = &old_project {

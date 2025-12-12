@@ -123,3 +123,53 @@ fn test_exact_match_in_workspace() {
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(stderr.contains("Found exact match: work/uni.md"), "Should find exact match in workspace, got: {}", stderr);
 }
+
+#[test]
+fn test_set_project_cannot_switch_away_from_urgent() {
+	let setup = TestSetup::new();
+
+	// Create urgent and regular project files
+	setup.create_blocker_file("urgent.md", "- urgent task");
+	setup.create_blocker_file("normal.md", "- normal task");
+
+	// First set project to urgent
+	let output = setup.run_set_project("urgent.md");
+	assert!(output.status.success(), "Should set urgent project");
+	let stdout = String::from_utf8_lossy(&output.stdout);
+	assert!(stdout.contains("Set current project to: urgent.md"), "Should set to urgent.md, got: {}", stdout);
+
+	// Now try to switch away from urgent - should be blocked
+	let output = setup.run_set_project("normal.md");
+	assert!(output.status.success(), "Command should succeed (but not switch)");
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		stderr.contains("Cannot switch away from urgent project"),
+		"Should block switch from urgent, got stderr: {}",
+		stderr
+	);
+
+	// Should NOT have switched - stdout should be empty (no "Set current project" message)
+	let stdout = String::from_utf8_lossy(&output.stdout);
+	assert!(!stdout.contains("Set current project to: normal.md"), "Should NOT switch to normal.md, got: {}", stdout);
+}
+
+#[test]
+fn test_set_project_can_switch_between_urgent_files() {
+	let setup = TestSetup::new();
+
+	// Create two urgent files (root and workspace)
+	setup.create_blocker_file("urgent.md", "- root urgent task");
+	setup.create_blocker_file("work/urgent.md", "- work urgent task");
+
+	// First set project to root urgent
+	let output = setup.run_set_project("urgent.md");
+	assert!(output.status.success(), "Should set root urgent project");
+	let stdout = String::from_utf8_lossy(&output.stdout);
+	assert!(stdout.contains("Set current project to: urgent.md"), "Should set to urgent.md, got: {}", stdout);
+
+	// Should be able to switch to workspace urgent
+	let output = setup.run_set_project("work/urgent.md");
+	assert!(output.status.success(), "Should switch between urgent files");
+	let stdout = String::from_utf8_lossy(&output.stdout);
+	assert!(stdout.contains("Set current project to: work/urgent.md"), "Should switch to work/urgent.md, got: {}", stdout);
+}
