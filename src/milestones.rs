@@ -266,17 +266,29 @@ async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
 		return Ok(());
 	}
 
-	// If outdated, calculate new due_on as today + timeframe
-	let new_due_on = if is_outdated {
+	// If outdated, archive old contents and update date
+	if is_outdated {
 		let new_date = Utc::now() + tf.duration();
 		println!("Milestone was outdated, updating due date to {}", new_date.format("%Y-%m-%d"));
-		Some(new_date)
-	} else {
-		None
-	};
 
-	// Push update to GitHub
-	update_milestone(config, milestone_number, &new_description, new_due_on).await?;
+		// Archive title: "2025/12/17_1d"
+		let archive_title = format!("{}_{}", Utc::now().format("%Y/%m/%d"), tf);
+
+		// Run both API calls in parallel: update current milestone and create archived one
+		let (update_result, archive_result) = tokio::join!(
+			update_milestone(config, milestone_number, &new_description, Some(new_date)),
+			create_closed_milestone(config, &archive_title, &original_description)
+		);
+
+		update_result?;
+		if let Err(e) = archive_result {
+			eprintln!("Warning: Failed to archive old milestone contents: {}", e);
+		}
+	} else {
+		// Not outdated, just update description
+		update_milestone(config, milestone_number, &new_description, None).await?;
+	}
+
 	println!("Updated milestone '{}'", tf);
 
 	// Run healthcheck after update
@@ -313,6 +325,38 @@ async fn update_milestone(config: &AppConfig, milestone_number: u64, description
 		let status = res.status();
 		let body = res.text().await.unwrap_or_default();
 		return Err(eyre!("Failed to update milestone: {} - {}", status, body));
+	}
+
+	Ok(())
+}
+
+/// Creates a new milestone with the given title, description, and immediately closes it
+async fn create_closed_milestone(config: &AppConfig, title: &str, description: &str) -> Result<()> {
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required"))?;
+
+	let (owner, repo) = parse_github_repo(&milestones_config.url)?;
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/milestones");
+
+	let body = serde_json::json!({
+		"title": title,
+		"description": description,
+		"state": "closed"
+	});
+
+	let client = Client::new();
+	let res = client
+		.post(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.header("Content-Type", "application/json")
+		.json(&body)
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to create closed milestone: {} - {}", status, body));
 	}
 
 	Ok(())

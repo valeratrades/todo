@@ -1379,7 +1379,6 @@ async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 
 			if !restore_project.is_empty() {
 				set_current_project(&restore_project).await?;
-				eprintln!("Restored previous project: {}", restore_project);
 			} else {
 				eprintln!("No previous project found to restore after urgent completion");
 			}
