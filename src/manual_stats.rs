@@ -13,22 +13,19 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use v_utils::{Percent, io::OpenMode, time::Timelike};
 use xattr::FileExt as _;
 
-use crate::{
-	config::{AppConfig, DATA_DIR},
-	utils,
-};
+use crate::utils;
 
 static PBS_FILENAME: &str = ".pbs.json";
 
 use crate::MANUAL_PATH_APPENDIX;
-pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
-	let date = utils::format_date(args.days_back, &config);
+pub fn update_or_open(settings: &crate::config::LiveSettings, args: ManualArgs) -> Result<()> {
+	let date = utils::format_date(args.days_back, settings);
 
-	let target_file_path = Day::path(&date, &config);
+	let target_file_path = Day::path(&date);
 
 	match &args.command {
 		ManualSubcommands::PrintEv(_) => {
-			let day = Day::load(&date, &config)?;
+			let day = Day::load(&date)?;
 			println!("{}", day.ev);
 			return Ok(());
 		}
@@ -54,7 +51,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 					bail!("Tried to open ev file of a day that was not initialized");
 				}
 				v_utils::io::open(&target_file_path)?;
-				return process_manual_updates(&target_file_path, &config);
+				return process_manual_updates(&target_file_path, settings);
 			}
 			true => {
 				let pbs_path = target_file_path.parent().unwrap().join(PBS_FILENAME);
@@ -69,7 +66,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 		_ => None,
 	};
 
-	let day = match Day::load(&date, &config) {
+	let day = match Day::load(&date) {
 		Ok(d) => {
 			let mut d: Day = d;
 
@@ -108,7 +105,7 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 			d
 		}
 	};
-	day.update_pbs(target_file_path.parent().unwrap(), &config);
+	day.update_pbs(target_file_path.parent().unwrap(), settings);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&target_file_path).unwrap();
@@ -120,18 +117,18 @@ pub fn update_or_open(config: AppConfig, args: ManualArgs) -> Result<()> {
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
 		v_utils::io::open(&target_file_path)?;
-		process_manual_updates(&target_file_path, &config)?;
+		process_manual_updates(&target_file_path, settings)?;
 	}
 
 	Ok(())
 }
 
-fn process_manual_updates<T: AsRef<Path>>(path: T, config: &AppConfig) -> Result<()> {
+fn process_manual_updates<T: AsRef<Path>>(path: T, settings: &crate::config::LiveSettings) -> Result<()> {
 	if !path.as_ref().exists() {
 		bail!("File does not exist, likely because you manually changed something.");
 	}
 	let day: Day = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-	day.update_pbs(path.as_ref().parent().unwrap(), config);
+	day.update_pbs(path.as_ref().parent().unwrap(), settings);
 	Ok(())
 }
 
@@ -283,14 +280,13 @@ struct Streak {
 }
 
 impl Day {
-	pub fn path(date: &str, _config: &AppConfig) -> PathBuf {
-		let data_storage_dir = DATA_DIR.get().unwrap().join(MANUAL_PATH_APPENDIX);
-		let _ = std::fs::create_dir_all(&data_storage_dir);
+	pub fn path(date: &str) -> PathBuf {
+		let data_storage_dir = v_utils::xdg_data_dir!(MANUAL_PATH_APPENDIX);
 		data_storage_dir.join(format!("{}.json", date))
 	}
 
-	pub fn load(date: &str, config: &AppConfig) -> Result<Self> {
-		let target_file_path = Day::path(date, config);
+	pub fn load(date: &str) -> Result<Self> {
+		let target_file_path = Day::path(date);
 		let file_contents: String = match std::fs::read_to_string(&target_file_path) {
 			Ok(s) => s,
 			Err(_) => "".to_owned(),
@@ -299,7 +295,7 @@ impl Day {
 		Ok(serde_json::from_str::<Day>(&file_contents)?)
 	}
 
-	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, config: &AppConfig) {
+	fn update_pbs<T: AsRef<Path>>(&self, data_storage_dir: T, settings: &crate::config::LiveSettings) {
 		//TODO!!: fix error with adding extra brackets to ~/.data/personal/manual_stats/.pbs.json
 		fn announce_new_pb<T: std::fmt::Display>(new_value: &T, old_value: Option<&T>, name: &str) {
 			let old_value = match old_value {
@@ -312,7 +308,7 @@ impl Day {
 		}
 
 		let pbs_path = data_storage_dir.as_ref().join(PBS_FILENAME);
-		let yd_date = utils::format_date(1, config); // no matter what file is being checked, we only ever care about physical yesterday
+		let yd_date = utils::format_date(1, settings); // no matter what file is being checked, we only ever care about physical yesterday
 		let mut pbs_as_value = match std::fs::read_to_string(&pbs_path) {
 			Ok(s) => serde_json::from_str::<serde_json::Value>(&s).unwrap(), // Value so we don't need to rewrite everything on `Day` struct changes. Both in terms of extra code, and recorded pb values. Previously had a Pbs struct, but that has proven to be unnecessary.
 			Err(_) => serde_json::Value::Null,

@@ -8,37 +8,37 @@ default = []
 is_integration_test = []
 
 [dependencies]
-ask_llm = { version = "^0.2.0", default-features = false }
+ask_llm = { version = "^2.1.3" }
 base64 = "0.22"
 chrono = { version = "^0.4.42", features = ["serde"] }
-clap = { version = "^4.5.52", features = ["derive"] }
-clap_complete = "4.5.60"
+clap = { version = "^4.5.53", features = ["derive"] }
+clap_complete = "4.5.62"
 color-eyre = "0.6.5"
 config = "^0.15.19"
 derive-new = "^0"
-derive_more = { version = "2.0.1", features = ["from_str", "display"] }
+derive_more = { version = "2.1.1", features = ["from_str", "display"] }
 google-calendar = "^0.7.0"
-image = "0.25"
-image24 = { package = "image", version = "0.24" }
-libwayshot = "0.3.0"
+image = "0.25.9"
+libwayshot = "0.6.0"
 pandoc = "^0.8.11"
 png = "0.18"
-reqwest = { version = "^0.12.24", features = ["blocking", "json"] }
+reqwest = { version = "^0.12.28", features = ["blocking", "json"] }
 serde = { version = "^1.0.228", features = ["derive"] }
-serde_json = { version = "^1.0.145", features = ["std"] }
-tempfile = "^3.23.0"
+serde_json = { version = "^1.0.148", features = ["std"] }
+smart-default = "^0.7"
+tempfile = "^3.24.0"
 thiserror = "2.0.17"
 tokio = { version = "^1.48.0", features = ["rt", "rt-multi-thread"] }
-tracing = "^0.1.41"
+tracing = "^0.1.44"
 tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
-typst = "0.14.0"
+typst = "0.14.2"
 urlencoding = "^2.1.3"
-v_utils = { version = "^2.9.2", features = ["io", "macros", "trades", "xdg"] }
+v_utils = { path = "../v_utils/v_utils", version = "^2.15.10", features = ["io", "macros", "trades", "xdg", "cli"] } #ga: rm path
 xattr = "1.6.1"
 xdg = "3.0.0"
 
 [dev-dependencies]
-insta = "1.43"
+insta = "1.45"
 
 [[test]]
 name = "integration"

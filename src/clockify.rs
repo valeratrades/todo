@@ -6,8 +6,6 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AppConfig, CACHE_DIR};
-
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
 
 // Helper function to convert underscores to spaces for name matching
@@ -175,7 +173,7 @@ pub async fn start_time_entry_with_defaults(workspace: Option<&str>, project: Op
 
 	// Determine the project to use (from cache or parameter)
 	let cached_project = if project.is_none() {
-		let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		let persisted_project_file = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
 		std::fs::read_to_string(&persisted_project_file).ok()
 	} else {
 		None
@@ -266,7 +264,7 @@ pub async fn stop_time_entry_with_defaults(workspace: Option<&str>) -> Result<()
 	Ok(())
 }
 
-pub fn main(_config: AppConfig, args: ClockifyArgs) -> Result<()> {
+pub fn main(_settings: &crate::config::LiveSettings, args: ClockifyArgs) -> Result<()> {
 	tokio::runtime::Runtime::new()?.block_on(async {
 		match args.command {
 			Command::ListWorkspaces => {

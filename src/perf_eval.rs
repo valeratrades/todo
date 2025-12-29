@@ -5,7 +5,7 @@ use chrono::Local;
 use clap::Args;
 use color_eyre::eyre::{Context, Result, bail};
 
-use crate::config::{AppConfig, CACHE_DIR};
+use crate::config::LiveSettings;
 
 #[derive(Args, Debug)]
 pub struct PerfEvalArgs {
@@ -14,7 +14,7 @@ pub struct PerfEvalArgs {
 	pub github_key: Option<String>,
 }
 
-pub async fn main(_config: AppConfig, args: PerfEvalArgs) -> Result<()> {
+pub async fn main(_settings: &LiveSettings, args: PerfEvalArgs) -> Result<()> {
 	// Set GITHUB_KEY env var if provided via flag
 	if let Some(ref github_key) = args.github_key {
 		// SAFETY: Only called during initialization, before spawning threads for the LLM call
@@ -23,7 +23,7 @@ pub async fn main(_config: AppConfig, args: PerfEvalArgs) -> Result<()> {
 		}
 	}
 
-	let cache_dir = CACHE_DIR.get().ok_or_else(|| color_eyre::eyre::eyre!("CACHE_DIR not initialized"))?;
+	let cache_dir = v_utils::xdg_cache_dir!("perf_eval");
 
 	let now = Local::now();
 	let date_dir = cache_dir.join(now.format("%Y-%m-%d").to_string());
@@ -241,7 +241,7 @@ Replace N with an integer from 0 to 10."#
 	let mut conv = ask_llm::Conversation::new();
 	conv.0.push(message);
 
-	match ask_llm::conversation(&conv, Model::Medium, Some(4096), None).await {
+	match ask_llm::conversation::<&str>(&conv, Model::Medium, Some(4096), None).await {
 		Ok(response) => {
 			tracing::debug!("LLM response text: {}", response.text);
 

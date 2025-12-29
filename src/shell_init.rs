@@ -2,7 +2,7 @@ use clap::{Args, CommandFactory};
 use clap_complete::Shell as ClapShell;
 use derive_more::derive::{Display, FromStr};
 
-use crate::config::{AppConfig, EXE_NAME};
+use crate::config::{EXE_NAME, LiveSettings};
 
 #[derive(Args, Clone, Debug)]
 pub struct ShellInitArgs {
@@ -71,7 +71,7 @@ alias tbc="{exe_name} blocker current"
 	}
 }
 
-pub fn output(_settings: AppConfig, args: ShellInitArgs) {
+pub fn output(_settings: &LiveSettings, args: ShellInitArgs) {
 	let shell = args.shell;
 	let s = format!(
 		r#"{}

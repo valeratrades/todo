@@ -5,15 +5,17 @@ use chrono::Duration;
 use chrono::Utc;
 use color_eyre::eyre::{Report, Result, bail};
 
-use crate::config::AppConfig;
+use crate::config::LiveSettings;
 #[cfg(test)]
 use crate::mocks::Utc;
 
-pub fn format_date(days_back: usize, config: &AppConfig) -> String {
+pub fn format_date(days_back: usize, settings: &LiveSettings) -> String {
 	let date = Utc::now() - Duration::days(days_back as i64);
 	let offset = same_day_buffer();
 
-	let format_str = config.manual_stats.as_ref().map(|ms| ms.date_format.as_str()).unwrap_or("%Y-%m-%d");
+	let config = settings.config().expect("failed to load config");
+	let format_str = config.manual_stats.as_ref().map(|m| m.date_format.as_str()).unwrap_or("%Y-%m-%d");
+	let format_str = if format_str.is_empty() { "%Y-%m-%d" } else { format_str };
 	(date - offset).format(format_str).to_string()
 }
 
@@ -59,12 +61,13 @@ pub fn same_day_buffer() -> chrono::TimeDelta {
 
 #[cfg(test)]
 mod tests {
+	use std::time::Duration;
+
 	use chrono::TimeZone;
 
 	use super::*;
-	use crate::config::AppConfig;
 
-	fn init_test(t: Option<(i32, u32, u32, u32, u32, u32)>) -> AppConfig {
+	fn init_test(t: Option<(i32, u32, u32, u32, u32, u32)>) -> LiveSettings {
 		// SAFETY: This is only used in tests and doesn't cause race conditions in single-threaded test execution
 		unsafe {
 			std::env::set_var("WAKETIME", "05:00");
@@ -76,12 +79,8 @@ mod tests {
 			crate::mocks::set_timestamp(mock_now.timestamp());
 		}
 
-		AppConfig {
-			manual_stats: Some(crate::config::ManualStats {
-				date_format: "%Y-%m-%d".to_string(),
-			}),
-			..Default::default()
-		}
+		let flags = crate::config::SettingsFlags::default();
+		LiveSettings::new(flags, Duration::from_secs(1)).unwrap()
 	}
 
 	#[test]
@@ -94,20 +93,20 @@ mod tests {
 
 	#[test]
 	fn test_format_date() {
-		let config = init_test(Some((2024, 5, 29, 12, 0, 0)));
+		let settings = init_test(Some((2024, 5, 29, 12, 0, 0)));
 
-		let formatted_date = format_date(1, &config);
+		let formatted_date = format_date(1, &settings);
 		assert_eq!(formatted_date, "2024-05-28");
 	}
 
 	#[test]
 	fn test_correct_day() {
-		let config = init_test(Some((2024, 5, 29, 2, 59, 0)));
-		let formatted_date = format_date(0, &config);
+		let settings = init_test(Some((2024, 5, 29, 2, 59, 0)));
+		let formatted_date = format_date(0, &settings);
 		assert_eq!(formatted_date, "2024-05-28");
 
-		let config = init_test(Some((2024, 5, 29, 3, 1, 0)));
-		let formatted_date = format_date(0, &config);
+		let settings = init_test(Some((2024, 5, 29, 3, 1, 0)));
+		let formatted_date = format_date(0, &settings);
 
 		assert_eq!(formatted_date, "2024-05-29");
 	}

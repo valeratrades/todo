@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use reqwest::Client;
 use v_utils::prelude::*;
 
-use crate::config::{AppConfig, DATA_DIR};
+use crate::config::LiveSettings;
 
 pub static HEALTHCHECK_REL_PATH: &str = "healthcheck.status";
 pub static SPRINT_HEADER_REL_PATH: &str = "sprint_header.md";
@@ -38,20 +38,21 @@ struct Milestone {
 	description: Option<String>,
 }
 
-pub async fn milestones_command(config: AppConfig, args: MilestonesArgs) -> Result<()> {
+pub async fn milestones_command(settings: &LiveSettings, args: MilestonesArgs) -> Result<()> {
 	match args.command {
 		MilestonesCommands::Get { tf } => {
-			let retrieved_milestones = request_milestones(&config).await?;
+			let retrieved_milestones = request_milestones(settings).await?;
 			let milestone = get_milestone(tf, &retrieved_milestones)?;
 			println!("{milestone}");
 			Ok(())
 		}
-		MilestonesCommands::Edit { tf } => edit_milestone(&config, tf).await,
-		MilestonesCommands::Healthcheck => healthcheck(&config).await,
+		MilestonesCommands::Edit { tf } => edit_milestone(settings, tf).await,
+		MilestonesCommands::Healthcheck => healthcheck(settings).await,
 	}
 }
 
-async fn request_milestones(config: &AppConfig) -> Result<Vec<Milestone>> {
+async fn request_milestones(settings: &LiveSettings) -> Result<Vec<Milestone>> {
+	let config = settings.config()?;
 	let milestones_config = config
 		.milestones
 		.as_ref()
@@ -182,12 +183,12 @@ static KEY_MILESTONES: [Timeframe; 6] = [
 	Timeframe::from_naive(7, TimeframeDesignator::Years),
 ];
 
-async fn healthcheck(config: &AppConfig) -> Result<()> {
+async fn healthcheck(settings: &LiveSettings) -> Result<()> {
 	use std::fs;
 
-	let healthcheck_path = DATA_DIR.get().unwrap().join(HEALTHCHECK_REL_PATH);
+	let healthcheck_path = v_utils::xdg_data_file!(HEALTHCHECK_REL_PATH);
 
-	let retrieved_milestones = request_milestones(config).await?;
+	let retrieved_milestones = request_milestones(settings).await?;
 	let results = KEY_MILESTONES
 		.iter()
 		.map(|tf| get_milestone(*tf, &retrieved_milestones))
@@ -224,16 +225,16 @@ async fn healthcheck(config: &AppConfig) -> Result<()> {
 		if !sprint_header.starts_with("# ") {
 			eprintln!("2w milestone description does not start with a header. It SHOULD start with '# '.");
 		}
-		fs::write(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
+		fs::write(v_utils::xdg_data_file!(SPRINT_HEADER_REL_PATH), sprint_header).unwrap();
 	}
 
 	Ok(())
 }
 
-async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
+async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 	use std::{fs, path::Path};
 
-	let retrieved_milestones = request_milestones(config).await?;
+	let retrieved_milestones = request_milestones(settings).await?;
 
 	// Find the milestone matching the timeframe
 	let milestone = retrieved_milestones.iter().find(|m| m.title == tf.to_string()).ok_or_else(|| {
@@ -276,8 +277,8 @@ async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
 
 		// Run both API calls in parallel: update current milestone and create archived one
 		let (update_result, archive_result) = tokio::join!(
-			update_milestone(config, milestone_number, &new_description, Some(new_date)),
-			create_closed_milestone(config, &archive_title, &original_description)
+			update_milestone(settings, milestone_number, &new_description, Some(new_date)),
+			create_closed_milestone(settings, &archive_title, &original_description)
 		);
 
 		update_result?;
@@ -286,18 +287,19 @@ async fn edit_milestone(config: &AppConfig, tf: Timeframe) -> Result<()> {
 		}
 	} else {
 		// Not outdated, just update description
-		update_milestone(config, milestone_number, &new_description, None).await?;
+		update_milestone(settings, milestone_number, &new_description, None).await?;
 	}
 
 	println!("Updated milestone '{}'", tf);
 
 	// Run healthcheck after update
-	healthcheck(config).await?;
+	healthcheck(settings).await?;
 
 	Ok(())
 }
 
-async fn update_milestone(config: &AppConfig, milestone_number: u64, description: &str, due_on: Option<DateTime<Utc>>) -> Result<()> {
+async fn update_milestone(settings: &LiveSettings, milestone_number: u64, description: &str, due_on: Option<DateTime<Utc>>) -> Result<()> {
+	let config = settings.config()?;
 	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required"))?;
 
 	let (owner, repo) = parse_github_repo(&milestones_config.url)?;
@@ -331,7 +333,8 @@ async fn update_milestone(config: &AppConfig, milestone_number: u64, description
 }
 
 /// Creates a new milestone with the given title, description, and immediately closes it
-async fn create_closed_milestone(config: &AppConfig, title: &str, description: &str) -> Result<()> {
+async fn create_closed_milestone(settings: &LiveSettings, title: &str, description: &str) -> Result<()> {
+	let config = settings.config()?;
 	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required"))?;
 
 	let (owner, repo) = parse_github_repo(&milestones_config.url)?;

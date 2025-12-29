@@ -5,21 +5,22 @@ use clap::Args;
 use color_eyre::eyre::{Context, Result};
 use libwayshot::WayshotConnection;
 
-use crate::config::{AppConfig, CACHE_DIR};
+use crate::config::LiveSettings;
 
 #[derive(Args, Debug)]
 pub struct WatchMonitorsArgs {}
 
-fn save_screenshot_png(image_buffer: &image24::RgbaImage, path: &std::path::Path) -> Result<()> {
+fn save_screenshot_png(image_buffer: &image::DynamicImage, path: &std::path::Path) -> Result<()> {
+	let rgba = image_buffer.to_rgba8();
 	let file = File::create(path).wrap_err(format!("Failed to create file: {}", path.display()))?;
 	let writer = BufWriter::new(file);
 
-	let mut encoder = png::Encoder::new(writer, image_buffer.width(), image_buffer.height());
+	let mut encoder = png::Encoder::new(writer, rgba.width(), rgba.height());
 	encoder.set_color(png::ColorType::Rgba);
 	encoder.set_depth(png::BitDepth::Eight);
 
 	let mut writer = encoder.write_header().wrap_err("Failed to write PNG header")?;
-	writer.write_image_data(image_buffer.as_raw()).wrap_err("Failed to write PNG data")?;
+	writer.write_image_data(rgba.as_raw()).wrap_err("Failed to write PNG data")?;
 
 	Ok(())
 }
@@ -51,8 +52,8 @@ fn cleanup_old_screenshots(cache_dir: &std::path::Path) -> Result<()> {
 	Ok(())
 }
 
-pub fn main(_config: AppConfig, _args: WatchMonitorsArgs) -> Result<()> {
-	let cache_dir = CACHE_DIR.get().ok_or_else(|| color_eyre::eyre::eyre!("CACHE_DIR not initialized"))?;
+pub fn main(_settings: &LiveSettings, _args: WatchMonitorsArgs) -> Result<()> {
+	let cache_dir = v_utils::xdg_cache_dir!("watch_monitors");
 
 	tracing::info!("Starting monitor watch daemon. Taking screenshots every 60 seconds.");
 
@@ -103,7 +104,7 @@ pub fn main(_config: AppConfig, _args: WatchMonitorsArgs) -> Result<()> {
 		}
 
 		// Cleanup old screenshots (run once per loop iteration)
-		if let Err(e) = cleanup_old_screenshots(cache_dir) {
+		if let Err(e) = cleanup_old_screenshots(&cache_dir) {
 			tracing::error!("Failed to cleanup old screenshots: {:?}", e);
 		}
 

@@ -5,12 +5,14 @@ pub mod config;
 mod manual_stats;
 mod milestones;
 pub mod mocks;
+mod open;
 mod perf_eval;
 mod shell_init;
 pub mod utils;
 mod watch_monitors;
+use std::time::Duration;
+
 use clap::{Parser, Subcommand};
-use config::AppConfig;
 #[cfg(not(feature = "is_integration_test"))]
 use v_utils::clientside;
 
@@ -21,8 +23,8 @@ const MANUAL_PATH_APPENDIX: &str = "manual_stats/";
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
-	#[arg(long)]
-	config: Option<v_utils::io::ExpandedPath>,
+	#[clap(flatten)]
+	settings_flags: config::SettingsFlags,
 }
 
 #[derive(Subcommand)]
@@ -45,6 +47,8 @@ enum Commands {
 	PerfEval(perf_eval::PerfEvalArgs),
 	/// Watch monitors daemon - takes screenshots every 60s
 	WatchMonitors(watch_monitors::WatchMonitorsArgs),
+	/// Open a GitHub issue in $EDITOR
+	Open(open::OpenArgs),
 }
 
 #[tokio::main]
@@ -57,8 +61,8 @@ async fn main() {
 
 	let cli = Cli::parse();
 
-	let config = match AppConfig::read(cli.config) {
-		Ok(cfg) => cfg,
+	let settings = match config::LiveSettings::new(cli.settings_flags, Duration::from_secs(3)) {
+		Ok(s) => s,
 		Err(e) => {
 			eprintln!("Error: {}", e);
 			std::process::exit(1);
@@ -67,16 +71,17 @@ async fn main() {
 
 	// All the functions here can rely on config being correct.
 	let success = match cli.command {
-		Commands::Manual(manual_args) => manual_stats::update_or_open(config, manual_args),
-		Commands::Milestones(milestones_command) => milestones::milestones_command(config, milestones_command).await,
+		Commands::Manual(manual_args) => manual_stats::update_or_open(&settings, manual_args),
+		Commands::Milestones(milestones_command) => milestones::milestones_command(&settings, milestones_command).await,
 		Commands::Init(args) => {
-			shell_init::output(config, args);
+			shell_init::output(&settings, args);
 			Ok(())
 		}
-		Commands::Blocker(args) => blocker::main(config, args).await,
-		Commands::Clockify(args) => clockify::main(config, args),
-		Commands::PerfEval(args) => perf_eval::main(config, args).await,
-		Commands::WatchMonitors(args) => watch_monitors::main(config, args),
+		Commands::Blocker(args) => blocker::main(&settings, args).await,
+		Commands::Clockify(args) => clockify::main(&settings, args),
+		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
+		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
+		Commands::Open(args) => open::open_command(&settings, args).await,
 	};
 
 	match success {

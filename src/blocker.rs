@@ -4,11 +4,7 @@ use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-	clockify,
-	config::{AppConfig, CACHE_DIR, DATA_DIR, STATE_DIR},
-	milestones::SPRINT_HEADER_REL_PATH,
-};
+use crate::{clockify, milestones::SPRINT_HEADER_REL_PATH};
 
 fn blockers_dir() -> std::path::PathBuf {
 	v_utils::xdg_data_dir!("blockers")
@@ -129,7 +125,7 @@ pub struct HaltArgs {
 }
 
 fn get_blocker_state_path() -> std::path::PathBuf {
-	STATE_DIR.get().unwrap().join(BLOCKER_STATE_FILENAME)
+	v_utils::xdg_state_file!(BLOCKER_STATE_FILENAME)
 }
 
 fn is_blocker_tracking_enabled() -> bool {
@@ -152,7 +148,7 @@ fn set_blocker_tracking_state(enabled: bool) -> Result<()> {
 
 fn get_current_blocker_cache_path(relative_path: &str) -> std::path::PathBuf {
 	let cache_key = relative_path.replace('/', "_");
-	CACHE_DIR.get().unwrap().join(format!("{}_{}", cache_key, BLOCKER_CURRENT_CACHE_FILENAME))
+	v_utils::xdg_cache_file!(format!("{}_{}", cache_key, BLOCKER_CURRENT_CACHE_FILENAME))
 }
 
 fn save_current_blocker_cache(relative_path: &str, current_blocker: Option<String>) -> Result<()> {
@@ -670,7 +666,7 @@ fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 }
 
 fn get_workspace_settings_path() -> std::path::PathBuf {
-	CACHE_DIR.get().unwrap().join(WORKSPACE_SETTINGS_FILENAME)
+	v_utils::xdg_cache_file!(WORKSPACE_SETTINGS_FILENAME)
 }
 
 fn load_workspace_cache() -> WorkspaceCache {
@@ -790,8 +786,8 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	parse_workspace_from_path(resolved_path)?;
 
 	// Get the old project path before updating
-	let state_dir = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
-	let old_project = std::fs::read_to_string(&state_dir).ok();
+	let current_project_file = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
+	let old_project = std::fs::read_to_string(&current_project_file).ok();
 
 	// Check if the project actually changed
 	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
@@ -812,14 +808,14 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 		if let Some(old_path) = &old_project {
 			if !is_urgent_file(old_path) {
 				// Save non-urgent project before switching to urgent
-				let pre_urgent_path = STATE_DIR.get().unwrap().join(PRE_URGENT_PROJECT_FILENAME);
+				let pre_urgent_path = v_utils::xdg_state_file!(PRE_URGENT_PROJECT_FILENAME);
 				std::fs::write(&pre_urgent_path, old_path)?;
 			}
 		}
 	}
 
 	// Save the new project path
-	std::fs::write(&state_dir, resolved_path)?;
+	std::fs::write(&current_project_file, resolved_path)?;
 
 	println!("Set current project to: {}", resolved_path);
 
@@ -872,7 +868,7 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 
 	// Get the default project for tracking (not the file that was just opened/formatted)
 	let default_project_path = {
-		let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		let persisted_project_file = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
 		std::fs::read_to_string(&persisted_project_file).unwrap_or_else(|_| "blockers.txt".to_string())
 	};
 
@@ -896,7 +892,7 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 
 	// After formatting, check for urgent files and auto-switch if found
 	if let Some(urgent_path) = check_for_urgent_file() {
-		let current_project_path = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		let current_project_path = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
 		let current_project = std::fs::read_to_string(&current_project_path).unwrap_or_else(|_| "blockers.txt".to_string());
 
 		// Only switch if we're not already on the urgent project
@@ -909,11 +905,11 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	Ok(())
 }
 
-pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
+pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) -> Result<()> {
 	let relative_path = match args.relative_path {
 		Some(f) => f,
 		None => {
-			let persisted_project_file = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+			let persisted_project_file = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
 			match std::fs::read_to_string(&persisted_project_file) {
 				Ok(s) => s,
 				Err(_) => "blockers.txt".to_string(),
@@ -1018,7 +1014,7 @@ pub async fn main(_settings: AppConfig, args: BlockerArgs) -> Result<()> {
 			}
 		}
 		Command::List => {
-			let sprint_header = std::fs::read_to_string(DATA_DIR.get().unwrap().join(SPRINT_HEADER_REL_PATH)).ok();
+			let sprint_header = std::fs::read_to_string(v_utils::xdg_data_file!(SPRINT_HEADER_REL_PATH)).ok();
 			if let Some(s) = sprint_header {
 				println!("{s}");
 			}
@@ -1361,12 +1357,12 @@ async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 		eprintln!("Removed empty urgent file: {}", relative_path);
 
 		// Check if this was the current project
-		let current_project_path = CACHE_DIR.get().unwrap().join(CURRENT_PROJECT_CACHE_FILENAME);
+		let current_project_path = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
 		if let Ok(current_project) = std::fs::read_to_string(&current_project_path)
 			&& current_project == relative_path
 		{
 			// Try to restore the previous project before urgent
-			let pre_urgent_path = STATE_DIR.get().unwrap().join(PRE_URGENT_PROJECT_FILENAME);
+			let pre_urgent_path = v_utils::xdg_state_file!(PRE_URGENT_PROJECT_FILENAME);
 			let restore_project = if let Ok(prev_project) = std::fs::read_to_string(&pre_urgent_path) {
 				// Clean up the pre-urgent cache file
 				let _ = std::fs::remove_file(&pre_urgent_path);
