@@ -13,13 +13,11 @@ mod watch_monitors;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-#[cfg(not(feature = "is_integration_test"))]
-use v_utils::clientside;
 
 const MANUAL_PATH_APPENDIX: &str = "manual_stats/";
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"), about, long_about = None)]
 struct Cli {
 	#[command(subcommand)]
 	command: Commands,
@@ -54,7 +52,7 @@ enum Commands {
 #[tokio::main]
 async fn main() {
 	#[cfg(not(feature = "is_integration_test"))]
-	clientside!();
+	v_utils::clientside!();
 
 	// Initialize tracing/logging (ignore if already initialized)
 	let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
