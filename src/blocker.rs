@@ -945,7 +945,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				urgent_path
 			} else if let Some(project_pattern) = project {
 				// --project flag provided
-				resolve_project_path(&project_pattern)?
+				resolve_project_path(&project_pattern, touch)?
 			} else {
 				// Use default project
 				relative_path.clone()
@@ -1057,7 +1057,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				urgent_path
 			} else {
 				match file_path {
-					Some(custom_path) => resolve_project_path(&custom_path)?,
+					Some(custom_path) => resolve_project_path(&custom_path, touch)?,
 					None => relative_path.clone(),
 				}
 			};
@@ -1087,7 +1087,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 		}
 		Command::SetProject { relative_path, touch } => {
 			// Resolve the project path using pattern matching
-			let resolved_path = resolve_project_path(&relative_path)?;
+			let resolved_path = resolve_project_path(&relative_path, touch)?;
 
 			// Create the file if it doesn't exist and touch flag is set
 			if touch {
@@ -1244,7 +1244,8 @@ fn choose_project_with_fzf(matches: &[String], initial_query: &str) -> Result<Op
 }
 
 /// Resolve project path using pattern matching - works for both project and open commands
-fn resolve_project_path(pattern: &str) -> Result<String> {
+/// If `touch` is true and no matches are found, returns a new path based on the pattern
+fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 	// If it contains a slash, treat as literal path (e.g., "workspace/project.md")
 	if pattern.contains('/') {
 		return Ok(pattern.to_string());
@@ -1268,7 +1269,20 @@ fn resolve_project_path(pattern: &str) -> Result<String> {
 	}
 
 	match matches.len() {
-		0 => Err(eyre!("No projects found matching pattern: {pattern}")),
+		0 => {
+			if touch {
+				// No matches but touch is enabled - create a new path from the pattern
+				let new_path = if pattern.ends_with(".md") || pattern.ends_with(".typ") {
+					pattern.to_string()
+				} else {
+					format!("{pattern}.md")
+				};
+				eprintln!("Creating new project file: {}", new_path);
+				Ok(new_path)
+			} else {
+				Err(eyre!("No projects found matching pattern: {pattern}"))
+			}
+		}
 		1 => {
 			eprintln!("Found unique match: {}", matches[0]);
 			Ok(matches[0].clone())

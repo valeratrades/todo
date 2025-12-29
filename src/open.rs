@@ -44,6 +44,12 @@ struct GitHubLabel {
 	name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GitHubComment {
+	id: u64,
+	body: Option<String>,
+}
+
 /// Parse a GitHub issue URL and extract owner, repo, and issue number
 /// Supports formats like:
 /// - https://github.com/owner/repo/issues/123
@@ -99,11 +105,40 @@ async fn fetch_github_issue(settings: &LiveSettings, owner: &str, repo: &str, is
 	Ok(issue)
 }
 
-fn format_issue_as_markdown(issue: &GitHubIssue) -> String {
+async fn fetch_github_comments(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubComment>> {
+	let config = settings.config()?;
+	let milestones_config = config
+		.milestones
+		.as_ref()
+		.ok_or_else(|| eyre!("milestones config section is required for GitHub token. Add [milestones] section with github_token to your config"))?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
+
+	let client = Client::new();
+	let res = client
+		.get(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to fetch comments: {} - {}", status, body));
+	}
+
+	let comments = res.json::<Vec<GitHubComment>>().await?;
+	Ok(comments)
+}
+
+fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str) -> String {
 	let mut content = String::new();
 
 	// Title as H1
-	content.push_str(&format!("# {}\n\n", issue.title));
+	content.push_str(&format!("# {}\n", issue.title));
+	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
+	content.push_str(&format!("<!--issue: {}-->\n\n", issue_url));
 
 	// Labels if any
 	if !issue.labels.is_empty() {
@@ -121,14 +156,48 @@ fn format_issue_as_markdown(issue: &GitHubIssue) -> String {
 		}
 	}
 
+	// Comments
+	for comment in comments {
+		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
+		content.push_str(&format!("\n<!--comment: {}-->\n", comment_url));
+		if let Some(body) = &comment.body {
+			if !body.is_empty() {
+				content.push_str(body);
+				if !body.ends_with('\n') {
+					content.push('\n');
+				}
+			}
+		}
+	}
+
 	content
 }
 
-fn format_issue_as_typst(issue: &GitHubIssue) -> String {
+fn convert_markdown_to_typst(body: &str) -> String {
+	body.lines()
+		.map(|line| {
+			// Convert markdown headers to typst
+			if let Some(rest) = line.strip_prefix("### ") {
+				format!("=== {}", rest)
+			} else if let Some(rest) = line.strip_prefix("## ") {
+				format!("== {}", rest)
+			} else if let Some(rest) = line.strip_prefix("# ") {
+				format!("= {}", rest)
+			} else {
+				line.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
+fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str) -> String {
 	let mut content = String::new();
 
 	// Title as Typst heading
-	content.push_str(&format!("= {}\n\n", issue.title));
+	content.push_str(&format!("= {}\n", issue.title));
+	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
+	content.push_str(&format!("// issue: {}\n\n", issue_url));
 
 	// Labels if any
 	if !issue.labels.is_empty() {
@@ -139,27 +208,26 @@ fn format_issue_as_typst(issue: &GitHubIssue) -> String {
 	// Body - convert markdown to typst basics
 	if let Some(body) = &issue.body {
 		if !body.is_empty() {
-			// Basic conversions: ## -> ==, ### -> ===, **text** -> *text*, etc.
-			let converted = body
-				.lines()
-				.map(|line| {
-					// Convert markdown headers to typst
-					if let Some(rest) = line.strip_prefix("### ") {
-						format!("=== {}", rest)
-					} else if let Some(rest) = line.strip_prefix("## ") {
-						format!("== {}", rest)
-					} else if let Some(rest) = line.strip_prefix("# ") {
-						format!("= {}", rest)
-					} else {
-						line.to_string()
-					}
-				})
-				.collect::<Vec<_>>()
-				.join("\n");
-
+			let converted = convert_markdown_to_typst(body);
 			content.push_str(&converted);
 			if !converted.ends_with('\n') {
 				content.push('\n');
+			}
+		}
+	}
+
+	// Comments
+	for comment in comments {
+		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
+		// Typst doesn't have HTML comments, use a typst comment instead
+		content.push_str(&format!("\n// comment: {}\n", comment_url));
+		if let Some(body) = &comment.body {
+			if !body.is_empty() {
+				let converted = convert_markdown_to_typst(body);
+				content.push_str(&converted);
+				if !converted.ends_with('\n') {
+					content.push('\n');
+				}
 			}
 		}
 	}
@@ -175,11 +243,12 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 	println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
 
 	let issue = fetch_github_issue(settings, &owner, &repo, issue_number).await?;
+	let comments = fetch_github_comments(settings, &owner, &repo, issue_number).await?;
 
 	// Format content based on extension
 	let content = match args.extension {
-		Extension::Md => format_issue_as_markdown(&issue),
-		Extension::Typ => format_issue_as_typst(&issue),
+		Extension::Md => format_issue_as_markdown(&issue, &comments, &owner, &repo),
+		Extension::Typ => format_issue_as_typst(&issue, &comments, &owner, &repo),
 	};
 
 	// Create temp file
@@ -197,6 +266,8 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 
 #[cfg(test)]
 mod tests {
+	use insta::assert_snapshot;
+
 	use super::*;
 
 	#[test]
@@ -250,10 +321,49 @@ mod tests {
 			labels: vec![GitHubLabel { name: "bug".to_string() }, GitHubLabel { name: "help wanted".to_string() }],
 		};
 
-		let md = format_issue_as_markdown(&issue);
-		assert!(md.contains("# Test Issue"));
-		assert!(md.contains("**Labels:** bug, help wanted"));
-		assert!(md.contains("Issue body text"));
+		let md = format_issue_as_markdown(&issue, &[], "owner", "repo");
+		assert_snapshot!(md, @r#"
+  # Test Issue
+  <!--issue: https://github.com/owner/repo/issues/123-->
+
+  **Labels:** bug, help wanted
+
+  Issue body text
+  "#);
+	}
+
+	#[test]
+	fn test_format_issue_as_markdown_with_comments() {
+		let issue = GitHubIssue {
+			number: 123,
+			title: "Test Issue".to_string(),
+			body: Some("Issue body text".to_string()),
+			labels: vec![],
+		};
+		let comments = vec![
+			GitHubComment {
+				id: 1001,
+				body: Some("First comment".to_string()),
+			},
+			GitHubComment {
+				id: 1002,
+				body: Some("Second comment".to_string()),
+			},
+		];
+
+		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo");
+		assert_snapshot!(md, @r#"
+  # Test Issue
+  <!--issue: https://github.com/owner/repo/issues/123-->
+
+  Issue body text
+
+  <!--comment: https://github.com/owner/repo/issues/123#issuecomment-1001-->
+  First comment
+
+  <!--comment: https://github.com/owner/repo/issues/123#issuecomment-1002-->
+  Second comment
+  "#);
 	}
 
 	#[test]
@@ -265,10 +375,40 @@ mod tests {
 			labels: vec![GitHubLabel { name: "enhancement".to_string() }],
 		};
 
-		let typ = format_issue_as_typst(&issue);
-		assert!(typ.contains("= Test Issue"));
-		assert!(typ.contains("*Labels:* enhancement"));
-		assert!(typ.contains("== Subheading"));
-		assert!(typ.contains("Body text"));
+		let typ = format_issue_as_typst(&issue, &[], "owner", "repo");
+		assert_snapshot!(typ, @r#"
+  = Test Issue
+  // issue: https://github.com/owner/repo/issues/123
+
+  *Labels:* enhancement
+
+  == Subheading
+  Body text
+  "#);
+	}
+
+	#[test]
+	fn test_format_issue_as_typst_with_comments() {
+		let issue = GitHubIssue {
+			number: 456,
+			title: "Typst Issue".to_string(),
+			body: Some("Body".to_string()),
+			labels: vec![],
+		};
+		let comments = vec![GitHubComment {
+			id: 2001,
+			body: Some("A comment".to_string()),
+		}];
+
+		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo");
+		assert_snapshot!(typ, @r#"
+  = Typst Issue
+  // issue: https://github.com/testowner/testrepo/issues/456
+
+  Body
+
+  // comment: https://github.com/testowner/testrepo/issues/456#issuecomment-2001
+  A comment
+  "#);
 	}
 }
