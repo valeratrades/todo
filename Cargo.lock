@@ -183,9 +183,9 @@ dependencies = [
 
 [[package]]
 name = "ask_llm"
-version = "2.1.3"
+version = "2.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cb2baa5a370e5924bd5c7837d3e2c884f1c80b8201da72a83c09638fe925b61"
+checksum = "5583fe57f68d09be0839a83723f904757345863961fa9a8320a5feb4568b0a5a"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -200,7 +200,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "v_utils 2.15.9",
+ "v_utils",
 ]
 
 [[package]]
@@ -5102,7 +5102,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "todo"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ask_llm",
  "base64 0.22.1",
@@ -5130,7 +5130,7 @@ dependencies = [
  "tracing-subscriber",
  "typst",
  "urlencoding",
- "v_utils 2.15.11",
+ "v_utils",
  "xattr",
  "xdg",
 ]
@@ -6000,40 +6000,9 @@ dependencies = [
 
 [[package]]
 name = "v_utils"
-version = "2.15.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c72fde9b17ebe822878bf24618b8dffeb3b034cf45a73c60851cc2dad6722c2"
-dependencies = [
- "config",
- "const_format",
- "derive-new",
- "derive_more",
- "dirs",
- "eyre",
- "facet",
- "facet-json",
- "facet-toml",
- "function_name",
- "futures",
- "jiff",
- "macro-attr",
- "serde",
- "serde_json",
- "strum",
- "thiserror 2.0.17",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "tracing-error",
- "tracing-log",
- "tracing-subscriber",
- "v_utils_macros 2.11.9",
- "xdg",
-]
-
-[[package]]
-name = "v_utils"
 version = "2.15.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd90c757abc537c8c89a3e58089b3c648fdcf5337dd91ddd2c6e6d5aff77d717"
 dependencies = [
  "config",
  "const_format",
@@ -6058,27 +6027,15 @@ dependencies = [
  "tracing-error",
  "tracing-log",
  "tracing-subscriber",
- "v_utils_macros 2.11.11",
+ "v_utils_macros",
  "xdg",
-]
-
-[[package]]
-name = "v_utils_macros"
-version = "2.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f427eb52f1200d4d61f029b287eafbf24331a2c984502a7b7012772810d76d3"
-dependencies = [
- "eyre",
- "heck",
- "proc-macro2",
- "quote",
- "serde",
- "syn",
 ]
 
 [[package]]
 name = "v_utils_macros"
 version = "2.11.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b3b7a1db206b0e05ba19ffeadafb452d6a9f7e59dd0d1844d5ac5730a12a33d"
 dependencies = [
  "eyre",
  "heck",
