@@ -78,12 +78,18 @@ impl From<&GitHubComment> for OriginalComment {
 	}
 }
 
-/// Parsed section from edited file
-#[derive(Debug)]
-enum ParsedSection {
-	IssueBody { body: String },
-	Comment { id: u64, body: String },
-	NewComment { body: String },
+/// Target state after user edits - clean representation of what the issue should look like
+#[derive(Debug, PartialEq)]
+struct TargetState {
+	issue_body: String,
+	/// Comments in order. None id = new comment to create
+	comments: Vec<TargetComment>,
+}
+
+#[derive(Debug, PartialEq)]
+struct TargetComment {
+	id: Option<u64>,
+	body: String,
 }
 
 /// Parse a GitHub issue URL and extract owner, repo, and issue number
@@ -243,6 +249,29 @@ async fn create_github_comment(settings: &LiveSettings, owner: &str, repo: &str,
 	Ok(())
 }
 
+async fn delete_github_comment(settings: &LiveSettings, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
+	let config = settings.config()?;
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
+
+	let client = Client::new();
+	let res = client
+		.delete(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to delete comment: {} - {}", status, body));
+	}
+
+	Ok(())
+}
+
 fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str) -> String {
 	let mut content = String::new();
 
@@ -346,12 +375,15 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner:
 	content
 }
 
-/// Parse markdown content into sections (issue body + comments)
-/// Returns a list of sections with their identifiers
-fn parse_markdown_sections(content: &str) -> Vec<ParsedSection> {
-	let mut sections = Vec::new();
+/// Parse markdown content into target state.
+/// Content is split by comment markers. If a marker is deleted, that content merges into the previous section.
+/// New comments are marked with `<!--new comment-->`.
+fn parse_markdown_target(content: &str) -> TargetState {
+	let mut issue_body = String::new();
+	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
+	let mut is_new_comment = false;
 	let mut seen_issue_marker = false;
 	let mut in_labels_line = false;
 
@@ -362,31 +394,54 @@ fn parse_markdown_sections(content: &str) -> Vec<ParsedSection> {
 			continue;
 		}
 
-		// Check for comment marker
-		if line.starts_with("<!--comment:") && line.ends_with("-->") {
-			// Save previous section
-			if seen_issue_marker && current_comment_id.is_none() {
-				// This was the issue body
-				let body = current_body.trim().to_string();
-				sections.push(ParsedSection::IssueBody { body });
+		// Check for new comment marker
+		if line == "<!--new comment-->" {
+			// Flush previous section
+			let body = current_body.trim().to_string();
+			if !seen_issue_marker {
+				// Before issue marker - ignore
+			} else if comments.is_empty() && issue_body.is_empty() {
+				issue_body = body;
 			} else if let Some(id) = current_comment_id {
-				let body = current_body.trim().to_string();
-				sections.push(ParsedSection::Comment { id, body });
+				comments.push(TargetComment { id: Some(id), body });
+			} else if is_new_comment && !body.is_empty() {
+				comments.push(TargetComment { id: None, body });
 			}
 
-			// Extract comment ID from URL like: <!--comment: https://github.com/owner/repo/issues/123#issuecomment-456-->
-			let url_part = line.trim_start_matches("<!--comment:").trim_end_matches("-->").trim();
-			if let Some(id_str) = url_part.split("#issuecomment-").last() {
-				if let Ok(id) = id_str.parse::<u64>() {
-					current_comment_id = Some(id);
-				}
-			}
+			current_comment_id = None;
+			is_new_comment = true;
 			current_body.clear();
 			in_labels_line = false;
 			continue;
 		}
 
-		// Skip title line (# Title)
+		// Check for existing comment marker
+		if line.starts_with("<!--comment:") && line.ends_with("-->") {
+			// Flush previous section
+			let body = current_body.trim().to_string();
+			if !seen_issue_marker {
+				// Before issue marker - ignore (shouldn't happen in valid input)
+			} else if comments.is_empty() && issue_body.is_empty() {
+				// This is the issue body
+				issue_body = body;
+			} else if let Some(id) = current_comment_id {
+				// Previous was a tracked comment
+				comments.push(TargetComment { id: Some(id), body });
+			} else if is_new_comment && !body.is_empty() {
+				// Previous was a new comment
+				comments.push(TargetComment { id: None, body });
+			}
+
+			// Extract comment ID from URL
+			let url_part = line.trim_start_matches("<!--comment:").trim_end_matches("-->").trim();
+			current_comment_id = url_part.split("#issuecomment-").last().and_then(|s| s.parse::<u64>().ok());
+			is_new_comment = false;
+			current_body.clear();
+			in_labels_line = false;
+			continue;
+		}
+
+		// Skip title line (# Title) - only before issue marker
 		if line.starts_with("# ") && !seen_issue_marker {
 			continue;
 		}
@@ -407,27 +462,33 @@ fn parse_markdown_sections(content: &str) -> Vec<ParsedSection> {
 		current_body.push('\n');
 	}
 
-	// Save the last section
-	if seen_issue_marker && current_comment_id.is_none() && sections.is_empty() {
-		let body = current_body.trim().to_string();
-		sections.push(ParsedSection::IssueBody { body });
+	// Flush final section
+	let body = current_body.trim().to_string();
+	if !seen_issue_marker {
+		// No issue marker at all - treat everything as issue body
+		issue_body = body;
+	} else if comments.is_empty() && issue_body.is_empty() {
+		// Only issue body, no comments
+		issue_body = body;
 	} else if let Some(id) = current_comment_id {
-		let body = current_body.trim().to_string();
-		sections.push(ParsedSection::Comment { id, body });
-	} else if !current_body.trim().is_empty() && !sections.is_empty() {
-		// New content at the end (after all existing comments) - treat as new comment
-		let body = current_body.trim().to_string();
-		sections.push(ParsedSection::NewComment { body });
+		// Last section was a tracked comment
+		comments.push(TargetComment { id: Some(id), body });
+	} else if is_new_comment && !body.is_empty() {
+		// Last section was a new comment
+		comments.push(TargetComment { id: None, body });
 	}
 
-	sections
+	TargetState { issue_body, comments }
 }
 
-/// Parse typst content into sections (issue body + comments)
-fn parse_typst_sections(content: &str) -> Vec<ParsedSection> {
-	let mut sections = Vec::new();
+/// Parse typst content into target state.
+/// New comments are marked with `// new comment`.
+fn parse_typst_target(content: &str) -> TargetState {
+	let mut issue_body = String::new();
+	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
+	let mut is_new_comment = false;
 	let mut seen_issue_marker = false;
 	let mut in_labels_line = false;
 
@@ -438,30 +499,51 @@ fn parse_typst_sections(content: &str) -> Vec<ParsedSection> {
 			continue;
 		}
 
-		// Check for comment marker
-		if line.starts_with("// comment:") {
-			// Save previous section
-			if seen_issue_marker && current_comment_id.is_none() {
-				let body = current_body.trim().to_string();
-				sections.push(ParsedSection::IssueBody { body });
+		// Check for new comment marker
+		if line == "// new comment" {
+			// Flush previous section
+			let body = current_body.trim().to_string();
+			if !seen_issue_marker {
+				// Before issue marker - ignore
+			} else if comments.is_empty() && issue_body.is_empty() {
+				issue_body = body;
 			} else if let Some(id) = current_comment_id {
-				let body = current_body.trim().to_string();
-				sections.push(ParsedSection::Comment { id, body });
+				comments.push(TargetComment { id: Some(id), body });
+			} else if is_new_comment && !body.is_empty() {
+				comments.push(TargetComment { id: None, body });
 			}
 
-			// Extract comment ID from URL like: // comment: https://github.com/owner/repo/issues/123#issuecomment-456
-			let url_part = line.trim_start_matches("// comment:").trim();
-			if let Some(id_str) = url_part.split("#issuecomment-").last() {
-				if let Ok(id) = id_str.parse::<u64>() {
-					current_comment_id = Some(id);
-				}
-			}
+			current_comment_id = None;
+			is_new_comment = true;
 			current_body.clear();
 			in_labels_line = false;
 			continue;
 		}
 
-		// Skip title line (= Title)
+		// Check for existing comment marker
+		if line.starts_with("// comment:") {
+			// Flush previous section
+			let body = current_body.trim().to_string();
+			if !seen_issue_marker {
+				// Before issue marker - ignore
+			} else if comments.is_empty() && issue_body.is_empty() {
+				issue_body = body;
+			} else if let Some(id) = current_comment_id {
+				comments.push(TargetComment { id: Some(id), body });
+			} else if is_new_comment && !body.is_empty() {
+				comments.push(TargetComment { id: None, body });
+			}
+
+			// Extract comment ID from URL
+			let url_part = line.trim_start_matches("// comment:").trim();
+			current_comment_id = url_part.split("#issuecomment-").last().and_then(|s| s.parse::<u64>().ok());
+			is_new_comment = false;
+			current_body.clear();
+			in_labels_line = false;
+			continue;
+		}
+
+		// Skip title line (= Title) - only before issue marker
 		if line.starts_with("= ") && !seen_issue_marker {
 			continue;
 		}
@@ -482,63 +564,100 @@ fn parse_typst_sections(content: &str) -> Vec<ParsedSection> {
 		current_body.push('\n');
 	}
 
-	// Save the last section
-	if seen_issue_marker && current_comment_id.is_none() && sections.is_empty() {
-		let body = current_body.trim().to_string();
-		sections.push(ParsedSection::IssueBody { body });
+	// Flush final section
+	let body = current_body.trim().to_string();
+	if !seen_issue_marker {
+		issue_body = body;
+	} else if comments.is_empty() && issue_body.is_empty() {
+		issue_body = body;
 	} else if let Some(id) = current_comment_id {
-		let body = current_body.trim().to_string();
-		sections.push(ParsedSection::Comment { id, body });
-	} else if !current_body.trim().is_empty() && !sections.is_empty() {
-		let body = current_body.trim().to_string();
-		sections.push(ParsedSection::NewComment { body });
+		comments.push(TargetComment { id: Some(id), body });
+	} else if is_new_comment && !body.is_empty() {
+		comments.push(TargetComment { id: None, body });
 	}
 
-	sections
+	TargetState { issue_body, comments }
 }
 
-/// Sync changes from edited file back to GitHub
+/// Sync changes from edited file back to GitHub.
+/// Two-step process:
+/// 1. Parse edited content into target state
+/// 2. Diff against original and apply create/update/delete operations
 async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited_content: &str) -> Result<()> {
-	let sections = match lock.extension.as_str() {
-		"md" => parse_markdown_sections(edited_content),
-		"typ" => parse_typst_sections(edited_content),
+	// Step 1: Parse into target state
+	let target = match lock.extension.as_str() {
+		"md" => parse_markdown_target(edited_content),
+		"typ" => parse_typst_target(edited_content),
 		_ => return Err(eyre!("Unsupported extension: {}", lock.extension)),
 	};
 
-	let mut updates_made = 0;
+	let mut updates = 0;
+	let mut creates = 0;
+	let mut deletes = 0;
 
-	for section in sections {
-		match section {
-			ParsedSection::IssueBody { body } => {
-				let original = lock.original_issue_body.as_deref().unwrap_or("");
-				if body != original {
-					println!("Updating issue body...");
-					update_github_issue_body(settings, &lock.owner, &lock.repo, lock.issue_number, &body).await?;
-					updates_made += 1;
-				}
-			}
-			ParsedSection::Comment { id, body } => {
-				// Find original comment
-				let original = lock.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
-				if body != original {
-					println!("Updating comment {}...", id);
-					update_github_comment(settings, &lock.owner, &lock.repo, id, &body).await?;
-					updates_made += 1;
-				}
-			}
-			ParsedSection::NewComment { body } =>
-				if !body.is_empty() {
-					println!("Creating new comment...");
-					create_github_comment(settings, &lock.owner, &lock.repo, lock.issue_number, &body).await?;
-					updates_made += 1;
-				},
+	// Step 2a: Check issue body
+	let original_body = lock.original_issue_body.as_deref().unwrap_or("");
+	if target.issue_body != original_body {
+		println!("Updating issue body...");
+		update_github_issue_body(settings, &lock.owner, &lock.repo, lock.issue_number, &target.issue_body).await?;
+		updates += 1;
+	}
+
+	// Step 2b: Collect which original comment IDs are present in target
+	let target_ids: std::collections::HashSet<u64> = target.comments.iter().filter_map(|c| c.id).collect();
+	let original_ids: std::collections::HashSet<u64> = lock.original_comments.iter().map(|c| c.id).collect();
+
+	// Delete comments that were removed (marker line deleted)
+	for orig in &lock.original_comments {
+		if !target_ids.contains(&orig.id) {
+			println!("Deleting comment {}...", orig.id);
+			delete_github_comment(settings, &lock.owner, &lock.repo, orig.id).await?;
+			deletes += 1;
 		}
 	}
 
-	if updates_made == 0 {
+	// Update existing comments and create new ones
+	for tc in &target.comments {
+		match tc.id {
+			Some(id) if original_ids.contains(&id) => {
+				// Existing comment - check if changed
+				let original = lock.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
+				if tc.body != original {
+					println!("Updating comment {}...", id);
+					update_github_comment(settings, &lock.owner, &lock.repo, id, &tc.body).await?;
+					updates += 1;
+				}
+			}
+			Some(id) => {
+				// ID present but not in original - shouldn't happen, treat as update attempt
+				eprintln!("Warning: comment {} not found in original, skipping", id);
+			}
+			None => {
+				// New comment
+				if !tc.body.is_empty() {
+					println!("Creating new comment...");
+					create_github_comment(settings, &lock.owner, &lock.repo, lock.issue_number, &tc.body).await?;
+					creates += 1;
+				}
+			}
+		}
+	}
+
+	let total = updates + creates + deletes;
+	if total == 0 {
 		println!("No changes detected.");
 	} else {
-		println!("Synced {} update(s) to GitHub.", updates_made);
+		let mut parts = Vec::new();
+		if updates > 0 {
+			parts.push(format!("{} updated", updates));
+		}
+		if creates > 0 {
+			parts.push(format!("{} created", creates));
+		}
+		if deletes > 0 {
+			parts.push(format!("{} deleted", deletes));
+		}
+		println!("Synced to GitHub: {}", parts.join(", "));
 	}
 
 	Ok(())
@@ -747,7 +866,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_parse_markdown_sections_roundtrip() {
+	fn test_parse_markdown_roundtrip() {
 		let issue = GitHubIssue {
 			number: 123,
 			title: "Test Issue".to_string(),
@@ -766,26 +885,30 @@ mod tests {
 		];
 
 		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo");
-		let sections = parse_markdown_sections(&md);
-		assert_snapshot!(format!("{sections:#?}"), @r#"
-		[
-		    IssueBody {
-		        body: "Issue body text",
-		    },
-		    Comment {
-		        id: 1001,
-		        body: "First comment",
-		    },
-		    Comment {
-		        id: 1002,
-		        body: "Second comment",
-		    },
-		]
+		let target = parse_markdown_target(&md);
+		assert_snapshot!(format!("{target:#?}"), @r#"
+		TargetState {
+		    issue_body: "Issue body text",
+		    comments: [
+		        TargetComment {
+		            id: Some(
+		                1001,
+		            ),
+		            body: "First comment",
+		        },
+		        TargetComment {
+		            id: Some(
+		                1002,
+		            ),
+		            body: "Second comment",
+		        },
+		    ],
+		}
 		"#);
 	}
 
 	#[test]
-	fn test_parse_typst_sections_roundtrip() {
+	fn test_parse_typst_roundtrip() {
 		let issue = GitHubIssue {
 			number: 456,
 			title: "Typst Issue".to_string(),
@@ -798,17 +921,81 @@ mod tests {
 		}];
 
 		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo");
-		let sections = parse_typst_sections(&typ);
-		assert_snapshot!(format!("{sections:#?}"), @r#"
-		[
-		    IssueBody {
-		        body: "Body text",
-		    },
-		    Comment {
-		        id: 2001,
-		        body: "A comment",
-		    },
-		]
+		let target = parse_typst_target(&typ);
+		assert_snapshot!(format!("{target:#?}"), @r#"
+		TargetState {
+		    issue_body: "Body text",
+		    comments: [
+		        TargetComment {
+		            id: Some(
+		                2001,
+		            ),
+		            body: "A comment",
+		        },
+		    ],
+		}
+		"#);
+	}
+
+	#[test]
+	fn test_parse_markdown_deleted_comment() {
+		// When comment marker is deleted, content merges into previous section
+		let md = r#"# Test Issue
+<!--issue: https://github.com/owner/repo/issues/123-->
+
+Issue body text
+
+<!--comment: https://github.com/owner/repo/issues/123#issuecomment-1001-->
+First comment
+This used to be comment 1002 but marker was deleted
+"#;
+		let target = parse_markdown_target(md);
+		assert_snapshot!(format!("{target:#?}"), @r#"
+		TargetState {
+		    issue_body: "Issue body text",
+		    comments: [
+		        TargetComment {
+		            id: Some(
+		                1001,
+		            ),
+		            body: "First comment\nThis used to be comment 1002 but marker was deleted",
+		        },
+		    ],
+		}
+		"#);
+	}
+
+	#[test]
+	fn test_parse_markdown_new_comment() {
+		// New comments are marked with <!--new comment-->
+		let md = r#"# Test Issue
+<!--issue: https://github.com/owner/repo/issues/123-->
+
+Issue body text
+
+<!--comment: https://github.com/owner/repo/issues/123#issuecomment-1001-->
+First comment
+
+<!--new comment-->
+This is a new comment I'm adding
+"#;
+		let target = parse_markdown_target(md);
+		assert_snapshot!(format!("{target:#?}"), @r#"
+		TargetState {
+		    issue_body: "Issue body text",
+		    comments: [
+		        TargetComment {
+		            id: Some(
+		                1001,
+		            ),
+		            body: "First comment",
+		        },
+		        TargetComment {
+		            id: None,
+		            body: "This is a new comment I'm adding",
+		        },
+		    ],
+		}
 		"#);
 	}
 }
