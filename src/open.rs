@@ -39,6 +39,7 @@ struct GitHubIssue {
 	title: String,
 	body: Option<String>,
 	labels: Vec<GitHubLabel>,
+	user: GitHubUser,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,9 +48,15 @@ struct GitHubLabel {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+struct GitHubUser {
+	login: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 struct GitHubComment {
 	id: u64,
 	body: Option<String>,
+	user: GitHubUser,
 }
 
 /// Lock file data stored during edit session
@@ -118,6 +125,28 @@ fn parse_github_issue_url(url: &str) -> Result<(String, String, u64)> {
 	let issue_number: u64 = parts[3].parse().map_err(|_| eyre!("Invalid issue number: {}", parts[3]))?;
 
 	Ok((owner, repo, issue_number))
+}
+
+async fn fetch_authenticated_user(settings: &LiveSettings) -> Result<String> {
+	let config = settings.config()?;
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
+
+	let client = Client::new();
+	let res = client
+		.get("https://api.github.com/user")
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to fetch authenticated user: {} - {}", status, body));
+	}
+
+	let user = res.json::<GitHubUser>().await?;
+	Ok(user.login)
 }
 
 async fn fetch_github_issue(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<GitHubIssue> {
@@ -272,13 +301,24 @@ async fn delete_github_comment(settings: &LiveSettings, owner: &str, repo: &str,
 	Ok(())
 }
 
-fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str) -> String {
+/// Indent every line of text with a tab
+fn indent_body(body: &str) -> String {
+	body.lines().map(|line| format!("\t{line}")).collect::<Vec<_>>().join("\n")
+}
+
+fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str, current_user: &str) -> String {
 	let mut content = String::new();
 
 	// Title as H1
 	content.push_str(&format!("# {}\n", issue.title));
 	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
-	content.push_str(&format!("<!--issue: {}-->\n\n", issue_url));
+	let issue_owned = issue.user.login == current_user;
+
+	if issue_owned {
+		content.push_str(&format!("<!--{}-->\n\n", issue_url));
+	} else {
+		content.push_str(&format!("<!--immutable {}-->\n\n", issue_url));
+	}
 
 	// Labels if any
 	if !issue.labels.is_empty() {
@@ -289,7 +329,11 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], own
 	// Body
 	if let Some(body) = &issue.body {
 		if !body.is_empty() {
-			content.push_str(body);
+			if issue_owned {
+				content.push_str(body);
+			} else {
+				content.push_str(&indent_body(body));
+			}
 			if !body.ends_with('\n') {
 				content.push('\n');
 			}
@@ -299,10 +343,21 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], own
 	// Comments
 	for comment in comments {
 		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
-		content.push_str(&format!("\n<!--comment: {}-->\n", comment_url));
+		let comment_owned = comment.user.login == current_user;
+
+		if comment_owned {
+			content.push_str(&format!("\n<!--{}-->\n", comment_url));
+		} else {
+			content.push_str(&format!("\n<!--immutable {}-->\n", comment_url));
+		}
+
 		if let Some(body) = &comment.body {
 			if !body.is_empty() {
-				content.push_str(body);
+				if comment_owned {
+					content.push_str(body);
+				} else {
+					content.push_str(&indent_body(body));
+				}
 				if !body.ends_with('\n') {
 					content.push('\n');
 				}
@@ -331,13 +386,19 @@ fn convert_markdown_to_typst(body: &str) -> String {
 		.join("\n")
 }
 
-fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str) -> String {
+fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str, current_user: &str) -> String {
 	let mut content = String::new();
 
 	// Title as Typst heading
 	content.push_str(&format!("= {}\n", issue.title));
 	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
-	content.push_str(&format!("// issue: {}\n\n", issue_url));
+	let issue_owned = issue.user.login == current_user;
+
+	if issue_owned {
+		content.push_str(&format!("// {}\n\n", issue_url));
+	} else {
+		content.push_str(&format!("// immutable {}\n\n", issue_url));
+	}
 
 	// Labels if any
 	if !issue.labels.is_empty() {
@@ -349,7 +410,11 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner:
 	if let Some(body) = &issue.body {
 		if !body.is_empty() {
 			let converted = convert_markdown_to_typst(body);
-			content.push_str(&converted);
+			if issue_owned {
+				content.push_str(&converted);
+			} else {
+				content.push_str(&indent_body(&converted));
+			}
 			if !converted.ends_with('\n') {
 				content.push('\n');
 			}
@@ -359,12 +424,22 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner:
 	// Comments
 	for comment in comments {
 		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
-		// Typst doesn't have HTML comments, use a typst comment instead
-		content.push_str(&format!("\n// comment: {}\n", comment_url));
+		let comment_owned = comment.user.login == current_user;
+
+		if comment_owned {
+			content.push_str(&format!("\n// {}\n", comment_url));
+		} else {
+			content.push_str(&format!("\n// immutable {}\n", comment_url));
+		}
+
 		if let Some(body) = &comment.body {
 			if !body.is_empty() {
 				let converted = convert_markdown_to_typst(body);
-				content.push_str(&converted);
+				if comment_owned {
+					content.push_str(&converted);
+				} else {
+					content.push_str(&indent_body(&converted));
+				}
 				if !converted.ends_with('\n') {
 					content.push('\n');
 				}
@@ -375,67 +450,102 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner:
 	content
 }
 
+/// Helper to strip leading tab from each line (for immutable sections that user might have edited)
+fn unindent_body(body: &str) -> String {
+	body.lines().map(|line| line.strip_prefix('\t').unwrap_or(line)).collect::<Vec<_>>().join("\n")
+}
+
+/// Parse a markdown HTML comment marker line.
+/// Returns (is_immutable, url) if it's a valid marker, None otherwise.
+fn parse_md_marker(line: &str) -> Option<(bool, &str)> {
+	if !line.starts_with("<!--") || !line.ends_with("-->") {
+		return None;
+	}
+	let inner = line.trim_start_matches("<!--").trim_end_matches("-->").trim();
+	if inner == "new comment" {
+		return None; // Special marker handled separately
+	}
+	if let Some(url) = inner.strip_prefix("immutable ") {
+		Some((true, url.trim()))
+	} else if inner.starts_with("https://github.com/") {
+		Some((false, inner))
+	} else {
+		None
+	}
+}
+
 /// Parse markdown content into target state.
-/// Content is split by comment markers. If a marker is deleted, that content merges into the previous section.
+/// Content is split by markers. Immutable sections are ignored for sync.
 /// New comments are marked with `<!--new comment-->`.
 fn parse_markdown_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
+	let mut current_is_immutable = false;
 	let mut is_new_comment = false;
 	let mut seen_issue_marker = false;
 	let mut in_labels_line = false;
 
 	for line in content.lines() {
-		// Check for issue marker
-		if line.starts_with("<!--issue:") && line.ends_with("-->") {
-			seen_issue_marker = true;
-			continue;
-		}
-
 		// Check for new comment marker
 		if line == "<!--new comment-->" {
 			// Flush previous section
-			let body = current_body.trim().to_string();
-			if !seen_issue_marker {
-				// Before issue marker - ignore
-			} else if comments.is_empty() && issue_body.is_empty() {
-				issue_body = body;
-			} else if let Some(id) = current_comment_id {
-				comments.push(TargetComment { id: Some(id), body });
-			} else if is_new_comment && !body.is_empty() {
-				comments.push(TargetComment { id: None, body });
+			let body = if current_is_immutable { unindent_body(&current_body) } else { current_body.clone() };
+			let body = body.trim().to_string();
+			if seen_issue_marker {
+				if comments.is_empty() && issue_body.is_empty() {
+					issue_body = body;
+				} else if let Some(id) = current_comment_id {
+					if !current_is_immutable {
+						comments.push(TargetComment { id: Some(id), body });
+					}
+				} else if is_new_comment && !body.is_empty() {
+					comments.push(TargetComment { id: None, body });
+				}
 			}
 
 			current_comment_id = None;
+			current_is_immutable = false;
 			is_new_comment = true;
 			current_body.clear();
 			in_labels_line = false;
 			continue;
 		}
 
-		// Check for existing comment marker
-		if line.starts_with("<!--comment:") && line.ends_with("-->") {
+		// Check for marker (issue or comment URL)
+		if let Some((is_immutable, url)) = parse_md_marker(line) {
 			// Flush previous section
-			let body = current_body.trim().to_string();
-			if !seen_issue_marker {
-				// Before issue marker - ignore (shouldn't happen in valid input)
-			} else if comments.is_empty() && issue_body.is_empty() {
-				// This is the issue body
-				issue_body = body;
-			} else if let Some(id) = current_comment_id {
-				// Previous was a tracked comment
-				comments.push(TargetComment { id: Some(id), body });
-			} else if is_new_comment && !body.is_empty() {
-				// Previous was a new comment
-				comments.push(TargetComment { id: None, body });
+			let body = if current_is_immutable { unindent_body(&current_body) } else { current_body.clone() };
+			let body = body.trim().to_string();
+
+			if seen_issue_marker {
+				if comments.is_empty() && issue_body.is_empty() {
+					// Previous was issue body
+					if !current_is_immutable {
+						issue_body = body;
+					}
+				} else if let Some(id) = current_comment_id {
+					if !current_is_immutable {
+						comments.push(TargetComment { id: Some(id), body });
+					}
+				} else if is_new_comment && !body.is_empty() {
+					comments.push(TargetComment { id: None, body });
+				}
 			}
 
-			// Extract comment ID from URL
-			let url_part = line.trim_start_matches("<!--comment:").trim_end_matches("-->").trim();
-			current_comment_id = url_part.split("#issuecomment-").last().and_then(|s| s.parse::<u64>().ok());
-			is_new_comment = false;
+			// Determine if this is issue or comment by URL
+			if url.contains("#issuecomment-") {
+				// It's a comment
+				current_comment_id = url.split("#issuecomment-").last().and_then(|s| s.parse::<u64>().ok());
+				is_new_comment = false;
+			} else {
+				// It's the issue marker
+				seen_issue_marker = true;
+				current_comment_id = None;
+				is_new_comment = false;
+			}
+			current_is_immutable = is_immutable;
 			current_body.clear();
 			in_labels_line = false;
 			continue;
@@ -463,22 +573,46 @@ fn parse_markdown_target(content: &str) -> TargetState {
 	}
 
 	// Flush final section
-	let body = current_body.trim().to_string();
+	let body = if current_is_immutable { unindent_body(&current_body) } else { current_body.clone() };
+	let body = body.trim().to_string();
 	if !seen_issue_marker {
 		// No issue marker at all - treat everything as issue body
 		issue_body = body;
 	} else if comments.is_empty() && issue_body.is_empty() {
 		// Only issue body, no comments
-		issue_body = body;
+		if !current_is_immutable {
+			issue_body = body;
+		}
 	} else if let Some(id) = current_comment_id {
 		// Last section was a tracked comment
-		comments.push(TargetComment { id: Some(id), body });
+		if !current_is_immutable {
+			comments.push(TargetComment { id: Some(id), body });
+		}
 	} else if is_new_comment && !body.is_empty() {
 		// Last section was a new comment
 		comments.push(TargetComment { id: None, body });
 	}
 
 	TargetState { issue_body, comments }
+}
+
+/// Parse a typst comment marker line.
+/// Returns (is_immutable, url) if it's a valid marker, None otherwise.
+fn parse_typst_marker(line: &str) -> Option<(bool, &str)> {
+	if !line.starts_with("// ") {
+		return None;
+	}
+	let inner = line.trim_start_matches("// ").trim();
+	if inner == "new comment" {
+		return None; // Special marker handled separately
+	}
+	if let Some(url) = inner.strip_prefix("immutable ") {
+		Some((true, url.trim()))
+	} else if inner.starts_with("https://github.com/") {
+		Some((false, inner))
+	} else {
+		None
+	}
 }
 
 /// Parse typst content into target state.
@@ -488,56 +622,67 @@ fn parse_typst_target(content: &str) -> TargetState {
 	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
+	let mut current_is_immutable = false;
 	let mut is_new_comment = false;
 	let mut seen_issue_marker = false;
 	let mut in_labels_line = false;
 
 	for line in content.lines() {
-		// Check for issue marker
-		if line.starts_with("// issue:") {
-			seen_issue_marker = true;
-			continue;
-		}
-
 		// Check for new comment marker
 		if line == "// new comment" {
 			// Flush previous section
-			let body = current_body.trim().to_string();
-			if !seen_issue_marker {
-				// Before issue marker - ignore
-			} else if comments.is_empty() && issue_body.is_empty() {
-				issue_body = body;
-			} else if let Some(id) = current_comment_id {
-				comments.push(TargetComment { id: Some(id), body });
-			} else if is_new_comment && !body.is_empty() {
-				comments.push(TargetComment { id: None, body });
+			let body = if current_is_immutable { unindent_body(&current_body) } else { current_body.clone() };
+			let body = body.trim().to_string();
+			if seen_issue_marker {
+				if comments.is_empty() && issue_body.is_empty() {
+					issue_body = body;
+				} else if let Some(id) = current_comment_id {
+					if !current_is_immutable {
+						comments.push(TargetComment { id: Some(id), body });
+					}
+				} else if is_new_comment && !body.is_empty() {
+					comments.push(TargetComment { id: None, body });
+				}
 			}
 
 			current_comment_id = None;
+			current_is_immutable = false;
 			is_new_comment = true;
 			current_body.clear();
 			in_labels_line = false;
 			continue;
 		}
 
-		// Check for existing comment marker
-		if line.starts_with("// comment:") {
+		// Check for marker (issue or comment URL)
+		if let Some((is_immutable, url)) = parse_typst_marker(line) {
 			// Flush previous section
-			let body = current_body.trim().to_string();
-			if !seen_issue_marker {
-				// Before issue marker - ignore
-			} else if comments.is_empty() && issue_body.is_empty() {
-				issue_body = body;
-			} else if let Some(id) = current_comment_id {
-				comments.push(TargetComment { id: Some(id), body });
-			} else if is_new_comment && !body.is_empty() {
-				comments.push(TargetComment { id: None, body });
+			let body = if current_is_immutable { unindent_body(&current_body) } else { current_body.clone() };
+			let body = body.trim().to_string();
+
+			if seen_issue_marker {
+				if comments.is_empty() && issue_body.is_empty() {
+					if !current_is_immutable {
+						issue_body = body;
+					}
+				} else if let Some(id) = current_comment_id {
+					if !current_is_immutable {
+						comments.push(TargetComment { id: Some(id), body });
+					}
+				} else if is_new_comment && !body.is_empty() {
+					comments.push(TargetComment { id: None, body });
+				}
 			}
 
-			// Extract comment ID from URL
-			let url_part = line.trim_start_matches("// comment:").trim();
-			current_comment_id = url_part.split("#issuecomment-").last().and_then(|s| s.parse::<u64>().ok());
-			is_new_comment = false;
+			// Determine if this is issue or comment by URL
+			if url.contains("#issuecomment-") {
+				current_comment_id = url.split("#issuecomment-").last().and_then(|s| s.parse::<u64>().ok());
+				is_new_comment = false;
+			} else {
+				seen_issue_marker = true;
+				current_comment_id = None;
+				is_new_comment = false;
+			}
+			current_is_immutable = is_immutable;
 			current_body.clear();
 			in_labels_line = false;
 			continue;
@@ -565,13 +710,18 @@ fn parse_typst_target(content: &str) -> TargetState {
 	}
 
 	// Flush final section
-	let body = current_body.trim().to_string();
+	let body = if current_is_immutable { unindent_body(&current_body) } else { current_body.clone() };
+	let body = body.trim().to_string();
 	if !seen_issue_marker {
 		issue_body = body;
 	} else if comments.is_empty() && issue_body.is_empty() {
-		issue_body = body;
+		if !current_is_immutable {
+			issue_body = body;
+		}
 	} else if let Some(id) = current_comment_id {
-		comments.push(TargetComment { id: Some(id), body });
+		if !current_is_immutable {
+			comments.push(TargetComment { id: Some(id), body });
+		}
 	} else if is_new_comment && !body.is_empty() {
 		comments.push(TargetComment { id: None, body });
 	}
@@ -672,13 +822,17 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 
 	println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
 
-	let issue = fetch_github_issue(settings, &owner, &repo, issue_number).await?;
-	let comments = fetch_github_comments(settings, &owner, &repo, issue_number).await?;
+	// Fetch in parallel
+	let (current_user, issue, comments) = tokio::try_join!(
+		fetch_authenticated_user(settings),
+		fetch_github_issue(settings, &owner, &repo, issue_number),
+		fetch_github_comments(settings, &owner, &repo, issue_number),
+	)?;
 
 	// Format content based on extension
 	let content = match args.extension {
-		Extension::Md => format_issue_as_markdown(&issue, &comments, &owner, &repo),
-		Extension::Typ => format_issue_as_typst(&issue, &comments, &owner, &repo),
+		Extension::Md => format_issue_as_markdown(&issue, &comments, &owner, &repo, &current_user),
+		Extension::Typ => format_issue_as_typst(&issue, &comments, &owner, &repo, &current_user),
 	};
 
 	// Create temp file
@@ -765,104 +919,134 @@ mod tests {
 		assert!(parse_github_issue_url("https://github.com/owner").is_err());
 	}
 
+	fn make_user(login: &str) -> GitHubUser {
+		GitHubUser { login: login.to_string() }
+	}
+
 	#[test]
-	fn test_format_issue_as_markdown() {
+	fn test_format_issue_as_markdown_owned() {
 		let issue = GitHubIssue {
 			number: 123,
 			title: "Test Issue".to_string(),
 			body: Some("Issue body text".to_string()),
 			labels: vec![GitHubLabel { name: "bug".to_string() }, GitHubLabel { name: "help wanted".to_string() }],
+			user: make_user("me"),
 		};
 
-		let md = format_issue_as_markdown(&issue, &[], "owner", "repo");
-		assert_snapshot!(md, @r#"
-  # Test Issue
-  <!--issue: https://github.com/owner/repo/issues/123-->
+		let md = format_issue_as_markdown(&issue, &[], "owner", "repo", "me");
+		assert_snapshot!(md, @"
+		# Test Issue
+		<!--https://github.com/owner/repo/issues/123-->
 
-  **Labels:** bug, help wanted
+		**Labels:** bug, help wanted
 
-  Issue body text
-  "#);
+		Issue body text
+		");
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_with_comments() {
+	fn test_format_issue_as_markdown_not_owned() {
 		let issue = GitHubIssue {
 			number: 123,
 			title: "Test Issue".to_string(),
 			body: Some("Issue body text".to_string()),
 			labels: vec![],
+			user: make_user("other"),
+		};
+
+		let md = format_issue_as_markdown(&issue, &[], "owner", "repo", "me");
+		assert_snapshot!(md, @"
+		# Test Issue
+		<!--immutable https://github.com/owner/repo/issues/123-->
+
+			Issue body text
+		");
+	}
+
+	#[test]
+	fn test_format_issue_as_markdown_mixed_ownership() {
+		let issue = GitHubIssue {
+			number: 123,
+			title: "Test Issue".to_string(),
+			body: Some("Issue body text".to_string()),
+			labels: vec![],
+			user: make_user("other"),
 		};
 		let comments = vec![
 			GitHubComment {
 				id: 1001,
 				body: Some("First comment".to_string()),
+				user: make_user("me"),
 			},
 			GitHubComment {
 				id: 1002,
 				body: Some("Second comment".to_string()),
+				user: make_user("other"),
 			},
 		];
 
-		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo");
-		assert_snapshot!(md, @r#"
-  # Test Issue
-  <!--issue: https://github.com/owner/repo/issues/123-->
+		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo", "me");
+		assert_snapshot!(md, @"
+		# Test Issue
+		<!--immutable https://github.com/owner/repo/issues/123-->
 
-  Issue body text
+			Issue body text
 
-  <!--comment: https://github.com/owner/repo/issues/123#issuecomment-1001-->
-  First comment
+		<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+		First comment
 
-  <!--comment: https://github.com/owner/repo/issues/123#issuecomment-1002-->
-  Second comment
-  "#);
+		<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002-->
+			Second comment
+		");
 	}
 
 	#[test]
-	fn test_format_issue_as_typst() {
+	fn test_format_issue_as_typst_owned() {
 		let issue = GitHubIssue {
 			number: 123,
 			title: "Test Issue".to_string(),
 			body: Some("## Subheading\nBody text".to_string()),
 			labels: vec![GitHubLabel { name: "enhancement".to_string() }],
+			user: make_user("me"),
 		};
 
-		let typ = format_issue_as_typst(&issue, &[], "owner", "repo");
-		assert_snapshot!(typ, @r#"
-  = Test Issue
-  // issue: https://github.com/owner/repo/issues/123
+		let typ = format_issue_as_typst(&issue, &[], "owner", "repo", "me");
+		assert_snapshot!(typ, @"
+		= Test Issue
+		// https://github.com/owner/repo/issues/123
 
-  *Labels:* enhancement
+		*Labels:* enhancement
 
-  == Subheading
-  Body text
-  "#);
+		== Subheading
+		Body text
+		");
 	}
 
 	#[test]
-	fn test_format_issue_as_typst_with_comments() {
+	fn test_format_issue_as_typst_not_owned() {
 		let issue = GitHubIssue {
 			number: 456,
 			title: "Typst Issue".to_string(),
 			body: Some("Body".to_string()),
 			labels: vec![],
+			user: make_user("other"),
 		};
 		let comments = vec![GitHubComment {
 			id: 2001,
 			body: Some("A comment".to_string()),
+			user: make_user("other"),
 		}];
 
-		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo");
-		assert_snapshot!(typ, @r#"
-  = Typst Issue
-  // issue: https://github.com/testowner/testrepo/issues/456
+		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo", "me");
+		assert_snapshot!(typ, @"
+		= Typst Issue
+		// immutable https://github.com/testowner/testrepo/issues/456
 
-  Body
+			Body
 
-  // comment: https://github.com/testowner/testrepo/issues/456#issuecomment-2001
-  A comment
-  "#);
+		// immutable https://github.com/testowner/testrepo/issues/456#issuecomment-2001
+			A comment
+		");
 	}
 
 	#[test]
@@ -872,19 +1056,22 @@ mod tests {
 			title: "Test Issue".to_string(),
 			body: Some("Issue body text".to_string()),
 			labels: vec![],
+			user: make_user("me"),
 		};
 		let comments = vec![
 			GitHubComment {
 				id: 1001,
 				body: Some("First comment".to_string()),
+				user: make_user("me"),
 			},
 			GitHubComment {
 				id: 1002,
 				body: Some("Second comment".to_string()),
+				user: make_user("me"),
 			},
 		];
 
-		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo");
+		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo", "me");
 		let target = parse_markdown_target(&md);
 		assert_snapshot!(format!("{target:#?}"), @r#"
 		TargetState {
@@ -914,13 +1101,15 @@ mod tests {
 			title: "Typst Issue".to_string(),
 			body: Some("Body text".to_string()),
 			labels: vec![],
+			user: make_user("me"),
 		};
 		let comments = vec![GitHubComment {
 			id: 2001,
 			body: Some("A comment".to_string()),
+			user: make_user("me"),
 		}];
 
-		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo");
+		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo", "me");
 		let target = parse_typst_target(&typ);
 		assert_snapshot!(format!("{target:#?}"), @r#"
 		TargetState {
@@ -941,11 +1130,11 @@ mod tests {
 	fn test_parse_markdown_deleted_comment() {
 		// When comment marker is deleted, content merges into previous section
 		let md = r#"# Test Issue
-<!--issue: https://github.com/owner/repo/issues/123-->
+<!--https://github.com/owner/repo/issues/123-->
 
 Issue body text
 
-<!--comment: https://github.com/owner/repo/issues/123#issuecomment-1001-->
+<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
 First comment
 This used to be comment 1002 but marker was deleted
 "#;
@@ -969,11 +1158,11 @@ This used to be comment 1002 but marker was deleted
 	fn test_parse_markdown_new_comment() {
 		// New comments are marked with <!--new comment-->
 		let md = r#"# Test Issue
-<!--issue: https://github.com/owner/repo/issues/123-->
+<!--https://github.com/owner/repo/issues/123-->
 
 Issue body text
 
-<!--comment: https://github.com/owner/repo/issues/123#issuecomment-1001-->
+<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
 First comment
 
 <!--new comment-->
@@ -995,6 +1184,29 @@ This is a new comment I'm adding
 		            body: "This is a new comment I'm adding",
 		        },
 		    ],
+		}
+		"#);
+	}
+
+	#[test]
+	fn test_parse_markdown_immutable_ignored() {
+		// Immutable sections should not appear in parsed target
+		let md = r#"# Test Issue
+<!--immutable https://github.com/owner/repo/issues/123-->
+
+	Immutable issue body (indented)
+
+<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+My editable comment
+
+<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002-->
+	Someone else's comment (indented)
+"#;
+		let target = parse_markdown_target(md);
+		assert_snapshot!(format!("{target:#?}"), @r#"
+		TargetState {
+		    issue_body: "My editable comment",
+		    comments: [],
 		}
 		"#);
 	}
