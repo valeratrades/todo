@@ -1,9 +1,11 @@
 use clap::{Args, ValueEnum};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use v_utils::prelude::*;
 
 use crate::config::LiveSettings;
+
+static ISSUE_EDIT_LOCK_FILENAME: &str = "issue_edit.lock";
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum Extension {
@@ -44,10 +46,44 @@ struct GitHubLabel {
 	name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct GitHubComment {
 	id: u64,
 	body: Option<String>,
+}
+
+/// Lock file data stored during edit session
+#[derive(Debug, Deserialize, Serialize)]
+struct EditLock {
+	owner: String,
+	repo: String,
+	issue_number: u64,
+	extension: String,
+	tmp_path: String,
+	/// Original issue body (for diffing)
+	original_issue_body: Option<String>,
+	/// Original comments with their IDs
+	original_comments: Vec<OriginalComment>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct OriginalComment {
+	id: u64,
+	body: Option<String>,
+}
+
+impl From<&GitHubComment> for OriginalComment {
+	fn from(c: &GitHubComment) -> Self {
+		Self { id: c.id, body: c.body.clone() }
+	}
+}
+
+/// Parsed section from edited file
+#[derive(Debug)]
+enum ParsedSection {
+	IssueBody { body: String },
+	Comment { id: u64, body: String },
+	NewComment { body: String },
 }
 
 /// Parse a GitHub issue URL and extract owner, repo, and issue number
@@ -130,6 +166,81 @@ async fn fetch_github_comments(settings: &LiveSettings, owner: &str, repo: &str,
 
 	let comments = res.json::<Vec<GitHubComment>>().await?;
 	Ok(comments)
+}
+
+async fn update_github_issue_body(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
+	let config = settings.config()?;
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
+
+	let client = Client::new();
+	let res = client
+		.patch(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.header("Content-Type", "application/json")
+		.json(&serde_json::json!({ "body": body }))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to update issue body: {} - {}", status, body));
+	}
+
+	Ok(())
+}
+
+async fn update_github_comment(settings: &LiveSettings, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
+	let config = settings.config()?;
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
+
+	let client = Client::new();
+	let res = client
+		.patch(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.header("Content-Type", "application/json")
+		.json(&serde_json::json!({ "body": body }))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to update comment: {} - {}", status, body));
+	}
+
+	Ok(())
+}
+
+async fn create_github_comment(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
+	let config = settings.config()?;
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
+
+	let client = Client::new();
+	let res = client
+		.post(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.header("Content-Type", "application/json")
+		.json(&serde_json::json!({ "body": body }))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to create comment: {} - {}", status, body));
+	}
+
+	Ok(())
 }
 
 fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], owner: &str, repo: &str) -> String {
@@ -235,8 +346,208 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], owner:
 	content
 }
 
+/// Parse markdown content into sections (issue body + comments)
+/// Returns a list of sections with their identifiers
+fn parse_markdown_sections(content: &str) -> Vec<ParsedSection> {
+	let mut sections = Vec::new();
+	let mut current_body = String::new();
+	let mut current_comment_id: Option<u64> = None;
+	let mut seen_issue_marker = false;
+	let mut in_labels_line = false;
+
+	for line in content.lines() {
+		// Check for issue marker
+		if line.starts_with("<!--issue:") && line.ends_with("-->") {
+			seen_issue_marker = true;
+			continue;
+		}
+
+		// Check for comment marker
+		if line.starts_with("<!--comment:") && line.ends_with("-->") {
+			// Save previous section
+			if seen_issue_marker && current_comment_id.is_none() {
+				// This was the issue body
+				let body = current_body.trim().to_string();
+				sections.push(ParsedSection::IssueBody { body });
+			} else if let Some(id) = current_comment_id {
+				let body = current_body.trim().to_string();
+				sections.push(ParsedSection::Comment { id, body });
+			}
+
+			// Extract comment ID from URL like: <!--comment: https://github.com/owner/repo/issues/123#issuecomment-456-->
+			let url_part = line.trim_start_matches("<!--comment:").trim_end_matches("-->").trim();
+			if let Some(id_str) = url_part.split("#issuecomment-").last() {
+				if let Ok(id) = id_str.parse::<u64>() {
+					current_comment_id = Some(id);
+				}
+			}
+			current_body.clear();
+			in_labels_line = false;
+			continue;
+		}
+
+		// Skip title line (# Title)
+		if line.starts_with("# ") && !seen_issue_marker {
+			continue;
+		}
+
+		// Skip labels line
+		if line.starts_with("**Labels:**") {
+			in_labels_line = true;
+			continue;
+		}
+
+		// After labels line, skip one empty line
+		if in_labels_line && line.is_empty() {
+			in_labels_line = false;
+			continue;
+		}
+
+		current_body.push_str(line);
+		current_body.push('\n');
+	}
+
+	// Save the last section
+	if seen_issue_marker && current_comment_id.is_none() && sections.is_empty() {
+		let body = current_body.trim().to_string();
+		sections.push(ParsedSection::IssueBody { body });
+	} else if let Some(id) = current_comment_id {
+		let body = current_body.trim().to_string();
+		sections.push(ParsedSection::Comment { id, body });
+	} else if !current_body.trim().is_empty() && !sections.is_empty() {
+		// New content at the end (after all existing comments) - treat as new comment
+		let body = current_body.trim().to_string();
+		sections.push(ParsedSection::NewComment { body });
+	}
+
+	sections
+}
+
+/// Parse typst content into sections (issue body + comments)
+fn parse_typst_sections(content: &str) -> Vec<ParsedSection> {
+	let mut sections = Vec::new();
+	let mut current_body = String::new();
+	let mut current_comment_id: Option<u64> = None;
+	let mut seen_issue_marker = false;
+	let mut in_labels_line = false;
+
+	for line in content.lines() {
+		// Check for issue marker
+		if line.starts_with("// issue:") {
+			seen_issue_marker = true;
+			continue;
+		}
+
+		// Check for comment marker
+		if line.starts_with("// comment:") {
+			// Save previous section
+			if seen_issue_marker && current_comment_id.is_none() {
+				let body = current_body.trim().to_string();
+				sections.push(ParsedSection::IssueBody { body });
+			} else if let Some(id) = current_comment_id {
+				let body = current_body.trim().to_string();
+				sections.push(ParsedSection::Comment { id, body });
+			}
+
+			// Extract comment ID from URL like: // comment: https://github.com/owner/repo/issues/123#issuecomment-456
+			let url_part = line.trim_start_matches("// comment:").trim();
+			if let Some(id_str) = url_part.split("#issuecomment-").last() {
+				if let Ok(id) = id_str.parse::<u64>() {
+					current_comment_id = Some(id);
+				}
+			}
+			current_body.clear();
+			in_labels_line = false;
+			continue;
+		}
+
+		// Skip title line (= Title)
+		if line.starts_with("= ") && !seen_issue_marker {
+			continue;
+		}
+
+		// Skip labels line
+		if line.starts_with("*Labels:*") {
+			in_labels_line = true;
+			continue;
+		}
+
+		// After labels line, skip one empty line
+		if in_labels_line && line.is_empty() {
+			in_labels_line = false;
+			continue;
+		}
+
+		current_body.push_str(line);
+		current_body.push('\n');
+	}
+
+	// Save the last section
+	if seen_issue_marker && current_comment_id.is_none() && sections.is_empty() {
+		let body = current_body.trim().to_string();
+		sections.push(ParsedSection::IssueBody { body });
+	} else if let Some(id) = current_comment_id {
+		let body = current_body.trim().to_string();
+		sections.push(ParsedSection::Comment { id, body });
+	} else if !current_body.trim().is_empty() && !sections.is_empty() {
+		let body = current_body.trim().to_string();
+		sections.push(ParsedSection::NewComment { body });
+	}
+
+	sections
+}
+
+/// Sync changes from edited file back to GitHub
+async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited_content: &str) -> Result<()> {
+	let sections = match lock.extension.as_str() {
+		"md" => parse_markdown_sections(edited_content),
+		"typ" => parse_typst_sections(edited_content),
+		_ => return Err(eyre!("Unsupported extension: {}", lock.extension)),
+	};
+
+	let mut updates_made = 0;
+
+	for section in sections {
+		match section {
+			ParsedSection::IssueBody { body } => {
+				let original = lock.original_issue_body.as_deref().unwrap_or("");
+				if body != original {
+					println!("Updating issue body...");
+					update_github_issue_body(settings, &lock.owner, &lock.repo, lock.issue_number, &body).await?;
+					updates_made += 1;
+				}
+			}
+			ParsedSection::Comment { id, body } => {
+				// Find original comment
+				let original = lock.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
+				if body != original {
+					println!("Updating comment {}...", id);
+					update_github_comment(settings, &lock.owner, &lock.repo, id, &body).await?;
+					updates_made += 1;
+				}
+			}
+			ParsedSection::NewComment { body } =>
+				if !body.is_empty() {
+					println!("Creating new comment...");
+					create_github_comment(settings, &lock.owner, &lock.repo, lock.issue_number, &body).await?;
+					updates_made += 1;
+				},
+		}
+	}
+
+	if updates_made == 0 {
+		println!("No changes detected.");
+	} else {
+		println!("Synced {} update(s) to GitHub.", updates_made);
+	}
+
+	Ok(())
+}
+
 pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()> {
 	use std::path::Path;
+
+	let lock_path = v_utils::xdg_state_file!(ISSUE_EDIT_LOCK_FILENAME);
 
 	let (owner, repo, issue_number) = parse_github_issue_url(&args.url)?;
 
@@ -255,11 +566,34 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 	let tmp_path = format!("/tmp/issue_{}_{}_{}_{}.{}", owner, repo, issue_number, issue.number, args.extension.as_str());
 	std::fs::write(&tmp_path, &content)?;
 
-	// Open in editor
+	// Create lock file with original content for diffing
+	let lock = EditLock {
+		owner: owner.clone(),
+		repo: repo.clone(),
+		issue_number,
+		extension: args.extension.as_str().to_string(),
+		tmp_path: tmp_path.clone(),
+		original_issue_body: issue.body.clone(),
+		original_comments: comments.iter().map(OriginalComment::from).collect(),
+	};
+	std::fs::write(&lock_path, serde_json::to_string_pretty(&lock)?)?;
+
+	// Open in editor (blocks until editor closes)
 	v_utils::io::open(Path::new(&tmp_path))?;
 
-	// Clean up temp file after editor closes
+	// Read edited content
+	let edited_content = std::fs::read_to_string(&tmp_path)?;
+
+	// Check if content changed and sync back to GitHub
+	if edited_content != content {
+		sync_changes_to_github(settings, &lock, &edited_content).await?;
+	} else {
+		println!("No changes made.");
+	}
+
+	// Clean up
 	let _ = std::fs::remove_file(&tmp_path);
+	let _ = std::fs::remove_file(&lock_path);
 
 	Ok(())
 }
@@ -410,5 +744,71 @@ mod tests {
   // comment: https://github.com/testowner/testrepo/issues/456#issuecomment-2001
   A comment
   "#);
+	}
+
+	#[test]
+	fn test_parse_markdown_sections_roundtrip() {
+		let issue = GitHubIssue {
+			number: 123,
+			title: "Test Issue".to_string(),
+			body: Some("Issue body text".to_string()),
+			labels: vec![],
+		};
+		let comments = vec![
+			GitHubComment {
+				id: 1001,
+				body: Some("First comment".to_string()),
+			},
+			GitHubComment {
+				id: 1002,
+				body: Some("Second comment".to_string()),
+			},
+		];
+
+		let md = format_issue_as_markdown(&issue, &comments, "owner", "repo");
+		let sections = parse_markdown_sections(&md);
+		assert_snapshot!(format!("{sections:#?}"), @r#"
+		[
+		    IssueBody {
+		        body: "Issue body text",
+		    },
+		    Comment {
+		        id: 1001,
+		        body: "First comment",
+		    },
+		    Comment {
+		        id: 1002,
+		        body: "Second comment",
+		    },
+		]
+		"#);
+	}
+
+	#[test]
+	fn test_parse_typst_sections_roundtrip() {
+		let issue = GitHubIssue {
+			number: 456,
+			title: "Typst Issue".to_string(),
+			body: Some("Body text".to_string()),
+			labels: vec![],
+		};
+		let comments = vec![GitHubComment {
+			id: 2001,
+			body: Some("A comment".to_string()),
+		}];
+
+		let typ = format_issue_as_typst(&issue, &comments, "testowner", "testrepo");
+		let sections = parse_typst_sections(&typ);
+		assert_snapshot!(format!("{sections:#?}"), @r#"
+		[
+		    IssueBody {
+		        body: "Body text",
+		    },
+		    Comment {
+		        id: 2001,
+		        body: "A comment",
+		    },
+		]
+		"#);
 	}
 }
