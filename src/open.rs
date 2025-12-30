@@ -84,6 +84,8 @@ struct EditLock {
 	original_issue_body: Option<String>,
 	/// Original comments with their IDs
 	original_comments: Vec<OriginalComment>,
+	/// Original sub-issues with their state
+	original_sub_issues: Vec<OriginalSubIssue>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -98,12 +100,35 @@ impl From<&GitHubComment> for OriginalComment {
 	}
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct OriginalSubIssue {
+	number: u64,
+	state: String,
+}
+
+impl From<&GitHubSubIssue> for OriginalSubIssue {
+	fn from(s: &GitHubSubIssue) -> Self {
+		Self {
+			number: s.number,
+			state: s.state.clone(),
+		}
+	}
+}
+
 /// Target state after user edits - clean representation of what the issue should look like
 #[derive(Debug, PartialEq)]
 struct TargetState {
 	issue_body: String,
 	/// Comments in order. None id = new comment to create
 	comments: Vec<TargetComment>,
+	/// Sub-issues with their checked state (true = closed)
+	sub_issues: Vec<TargetSubIssue>,
+}
+
+#[derive(Debug, PartialEq)]
+struct TargetSubIssue {
+	number: u64,
+	closed: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -263,6 +288,31 @@ async fn update_github_issue_body(settings: &LiveSettings, owner: &str, repo: &s
 		let status = res.status();
 		let body = res.text().await.unwrap_or_default();
 		return Err(eyre!("Failed to update issue body: {} - {}", status, body));
+	}
+
+	Ok(())
+}
+
+async fn update_github_issue_state(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64, state: &str) -> Result<()> {
+	let config = settings.config()?;
+	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
+
+	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
+
+	let client = Client::new();
+	let res = client
+		.patch(&api_url)
+		.header("User-Agent", "Rust GitHub Client")
+		.header("Authorization", format!("token {}", milestones_config.github_token))
+		.header("Content-Type", "application/json")
+		.json(&serde_json::json!({ "state": state }))
+		.send()
+		.await?;
+
+	if !res.status().is_success() {
+		let status = res.status();
+		let body = res.text().await.unwrap_or_default();
+		return Err(eyre!("Failed to update issue state: {} - {}", status, body));
 	}
 
 	Ok(())
@@ -542,8 +592,8 @@ fn unindent_body(body: &str) -> String {
 enum MdMarkerType {
 	/// Issue URL (from first line `- [ ] Title <!--url-->`)
 	Issue { is_immutable: bool, url: String },
-	/// Sub-issue (read-only, `<!--sub url-->`)
-	SubIssue { url: String },
+	/// Sub-issue (`- [x] Title <!--sub url-->`)
+	SubIssue { number: u64, closed: bool },
 	/// Comment URL (`<!--url#issuecomment-id-->`)
 	Comment { is_immutable: bool, url: String, id: u64 },
 	/// New comment marker (`<!--new comment-->`)
@@ -566,9 +616,14 @@ fn parse_md_marker(line: &str) -> Option<MdMarkerType> {
 		return Some(MdMarkerType::NewComment);
 	}
 
-	// Check for sub-issue marker
+	// Check for sub-issue marker: `- [x] Title <!--sub url-->`
 	if let Some(url) = inner.strip_prefix("sub ") {
-		return Some(MdMarkerType::SubIssue { url: url.trim().to_string() });
+		// Extract issue number from URL (last path segment)
+		let number = url.trim().rsplit('/').next().and_then(|s| s.parse::<u64>().ok())?;
+		// Check if checkbox is checked by looking for `- [x]` before the marker
+		let prefix = &line[..start];
+		let closed = prefix.contains("[x]") || prefix.contains("[X]");
+		return Some(MdMarkerType::SubIssue { number, closed });
 	}
 
 	// Check for immutable marker
@@ -595,11 +650,12 @@ fn parse_md_marker(line: &str) -> Option<MdMarkerType> {
 
 /// Parse markdown content into target state.
 /// New format: `- [ ] Title <!--url-->` on first line, content indented with tabs.
-/// Sub-issues (<!--sub url-->) are ignored (read-only).
+/// Sub-issues are parsed for state changes.
 /// New comments are marked with `<!--new comment-->`.
 fn parse_markdown_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
+	let mut sub_issues: Vec<TargetSubIssue> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
 	let mut current_is_immutable = false;
@@ -623,8 +679,9 @@ fn parse_markdown_target(content: &str) -> TargetState {
 					current_body.clear();
 					continue;
 				}
-				MdMarkerType::SubIssue { .. } => {
-					// Sub-issues are read-only, skip them
+				MdMarkerType::SubIssue { number, closed } => {
+					// Track sub-issue state
+					sub_issues.push(TargetSubIssue { number, closed });
 					continue;
 				}
 				MdMarkerType::Comment { is_immutable, id, .. } => {
@@ -715,7 +772,7 @@ fn parse_markdown_target(content: &str) -> TargetState {
 		comments.push(TargetComment { id: None, body });
 	}
 
-	TargetState { issue_body, comments }
+	TargetState { issue_body, comments, sub_issues }
 }
 
 /// Marker type for parsed typst markers
@@ -723,8 +780,8 @@ fn parse_markdown_target(content: &str) -> TargetState {
 enum TypstMarkerType {
 	/// Issue URL (from first line `- [ ] Title // url`)
 	Issue { is_immutable: bool, url: String },
-	/// Sub-issue (read-only, `// sub url`)
-	SubIssue { url: String },
+	/// Sub-issue (`- [x] Title // sub url`)
+	SubIssue { number: u64, closed: bool },
 	/// Comment URL (`// url#issuecomment-id`)
 	Comment { is_immutable: bool, url: String, id: u64 },
 	/// New comment marker (`// new comment`)
@@ -735,12 +792,12 @@ enum TypstMarkerType {
 /// Returns the marker type if found, None otherwise.
 fn parse_typst_marker(line: &str) -> Option<TypstMarkerType> {
 	// Find the marker in the line (// at the end for inline, or at start for standalone)
-	let inner = if let Some(pos) = line.find(" // ") {
+	let (prefix, inner) = if let Some(pos) = line.find(" // ") {
 		// Inline marker: `- [ ] Title // url`
-		line[pos + 4..].trim()
+		(&line[..pos], line[pos + 4..].trim())
 	} else if line.trim().starts_with("// ") {
 		// Standalone marker: `// url`
-		line.trim().strip_prefix("// ")?.trim()
+		("", line.trim().strip_prefix("// ")?.trim())
 	} else {
 		return None;
 	};
@@ -749,9 +806,13 @@ fn parse_typst_marker(line: &str) -> Option<TypstMarkerType> {
 		return Some(TypstMarkerType::NewComment);
 	}
 
-	// Check for sub-issue marker
+	// Check for sub-issue marker: `- [x] Title // sub url`
 	if let Some(url) = inner.strip_prefix("sub ") {
-		return Some(TypstMarkerType::SubIssue { url: url.trim().to_string() });
+		// Extract issue number from URL (last path segment)
+		let number = url.trim().rsplit('/').next().and_then(|s| s.parse::<u64>().ok())?;
+		// Check if checkbox is checked by looking for `- [x]` before the marker
+		let closed = prefix.contains("[x]") || prefix.contains("[X]");
+		return Some(TypstMarkerType::SubIssue { number, closed });
 	}
 
 	// Check for immutable marker
@@ -778,11 +839,12 @@ fn parse_typst_marker(line: &str) -> Option<TypstMarkerType> {
 
 /// Parse typst content into target state.
 /// New format: `- [ ] Title // url` on first line, content indented with tabs.
-/// Sub-issues (// sub url) are ignored (read-only).
+/// Sub-issues are parsed for state changes.
 /// New comments are marked with `// new comment`.
 fn parse_typst_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
+	let mut sub_issues: Vec<TargetSubIssue> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
 	let mut current_is_immutable = false;
@@ -806,8 +868,9 @@ fn parse_typst_target(content: &str) -> TargetState {
 					current_body.clear();
 					continue;
 				}
-				TypstMarkerType::SubIssue { .. } => {
-					// Sub-issues are read-only, skip them
+				TypstMarkerType::SubIssue { number, closed } => {
+					// Track sub-issue state
+					sub_issues.push(TargetSubIssue { number, closed });
 					continue;
 				}
 				TypstMarkerType::Comment { is_immutable, id, .. } => {
@@ -898,7 +961,7 @@ fn parse_typst_target(content: &str) -> TargetState {
 		comments.push(TargetComment { id: None, body });
 	}
 
-	TargetState { issue_body, comments }
+	TargetState { issue_body, comments, sub_issues }
 }
 
 /// Sync changes from edited file back to GitHub.
@@ -965,7 +1028,22 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 		}
 	}
 
-	let total = updates + creates + deletes;
+	// Step 2c: Check sub-issue state changes
+	let mut sub_issue_updates = 0;
+	for ts in &target.sub_issues {
+		// Find original state
+		if let Some(orig) = lock.original_sub_issues.iter().find(|o| o.number == ts.number) {
+			let orig_closed = orig.state == "closed";
+			if ts.closed != orig_closed {
+				let new_state = if ts.closed { "closed" } else { "open" };
+				println!("Updating sub-issue #{} to {}...", ts.number, new_state);
+				update_github_issue_state(settings, &lock.owner, &lock.repo, ts.number, new_state).await?;
+				sub_issue_updates += 1;
+			}
+		}
+	}
+
+	let total = updates + creates + deletes + sub_issue_updates;
 	if total == 0 {
 		println!("No changes detected.");
 	} else {
@@ -978,6 +1056,9 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 		}
 		if deletes > 0 {
 			parts.push(format!("{} deleted", deletes));
+		}
+		if sub_issue_updates > 0 {
+			parts.push(format!("{} sub-issues updated", sub_issue_updates));
 		}
 		println!("Synced to GitHub: {}", parts.join(", "));
 	}
@@ -1021,6 +1102,7 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 		tmp_path: tmp_path.clone(),
 		original_issue_body: issue.body.clone(),
 		original_comments: comments.iter().map(OriginalComment::from).collect(),
+		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
 	};
 	std::fs::write(&lock_path, serde_json::to_string_pretty(&lock)?)?;
 
@@ -1294,6 +1376,7 @@ mod tests {
 		            body: "Second comment",
 		        },
 		    ],
+		    sub_issues: [],
 		}
 		"#);
 	}
@@ -1320,6 +1403,7 @@ mod tests {
 		            body: "A comment",
 		        },
 		    ],
+		    sub_issues: [],
 		}
 		"#);
 	}
@@ -1347,6 +1431,7 @@ mod tests {
 		            body: "First comment\nThis used to be comment 1002 but marker was deleted",
 		        },
 		    ],
+		    sub_issues: [],
 		}
 		"#);
 	}
@@ -1380,6 +1465,7 @@ mod tests {
 		            body: "This is a new comment I'm adding",
 		        },
 		    ],
+		    sub_issues: [],
 		}
 		"#);
 	}
@@ -1410,13 +1496,14 @@ mod tests {
 		            body: "My editable comment",
 		        },
 		    ],
+		    sub_issues: [],
 		}
 		"#);
 	}
 
 	#[test]
-	fn test_parse_markdown_with_sub_issues_ignored() {
-		// Sub-issues should be ignored in parsing (read-only)
+	fn test_parse_markdown_with_sub_issues_state_capture() {
+		// Sub-issue state is captured for syncing (checking/unchecking closes/reopens them)
 		let md = "- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
 
 \tIssue body text
@@ -1437,6 +1524,16 @@ mod tests {
 		                1001,
 		            ),
 		            body: "A comment",
+		        },
+		    ],
+		    sub_issues: [
+		        TargetSubIssue {
+		            number: 124,
+		            closed: false,
+		        },
+		        TargetSubIssue {
+		            number: 125,
+		            closed: true,
 		        },
 		    ],
 		}
