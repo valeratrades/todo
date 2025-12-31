@@ -1016,7 +1016,7 @@ fn parse_md_marker(line: &str) -> Option<MdMarkerType> {
 /// New format: `- [ ] Title <!--url-->` on first line, content indented with tabs.
 /// Sub-issues are parsed for state changes.
 /// New comments are marked with `<!--new comment-->`.
-/// New sub-issues are checkbox lines without URL markers.
+/// New sub-issues are checkbox lines without URL markers (only after body section ends).
 fn parse_markdown_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
@@ -1029,14 +1029,17 @@ fn parse_markdown_target(content: &str) -> TargetState {
 	let mut seen_issue_marker = false;
 	let mut in_labels_line = false;
 	let mut in_issue_body = false;
+	// Track when we've seen at least one sub-issue or comment marker (body section ended)
+	let mut seen_sub_issue_or_comment = false;
 
 	for line in content.lines() {
 		// Strip one level of indentation for content parsing
 		let stripped_line = line.strip_prefix('\t').unwrap_or(line);
 
-		// Check for new sub-issues first (checkbox lines without markers)
-		// Only check after we've seen the issue marker (so we're in the issue body area)
-		if seen_issue_marker {
+		// Check for new sub-issues (checkbox lines without markers)
+		// Only valid AFTER we've seen at least one existing sub-issue or comment marker
+		// This prevents checkbox items in the issue body from being treated as new sub-issues
+		if seen_sub_issue_or_comment {
 			if let Some((title, closed)) = parse_new_sub_issue_line(line) {
 				new_sub_issues.push(NewSubIssue { title, closed });
 				continue;
@@ -1057,9 +1060,11 @@ fn parse_markdown_target(content: &str) -> TargetState {
 				MdMarkerType::SubIssue { number, closed } => {
 					// Track sub-issue state
 					sub_issues.push(TargetSubIssue { number, closed });
+					seen_sub_issue_or_comment = true;
 					continue;
 				}
 				MdMarkerType::Comment { is_immutable, id, .. } => {
+					seen_sub_issue_or_comment = true;
 					// Flush previous section
 					let body = unindent_body(&current_body).trim().to_string();
 
@@ -1255,7 +1260,7 @@ fn parse_typst_marker(line: &str) -> Option<TypstMarkerType> {
 /// New format: `- [ ] Title // url` on first line, content indented with tabs.
 /// Sub-issues are parsed for state changes.
 /// New comments are marked with `// new comment`.
-/// New sub-issues are checkbox lines without URL markers.
+/// New sub-issues are checkbox lines without URL markers (only after body section ends).
 fn parse_typst_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
@@ -1268,14 +1273,17 @@ fn parse_typst_target(content: &str) -> TargetState {
 	let mut seen_issue_marker = false;
 	let mut in_labels_line = false;
 	let mut in_issue_body = false;
+	// Track when we've seen at least one sub-issue or comment marker (body section ended)
+	let mut seen_sub_issue_or_comment = false;
 
 	for line in content.lines() {
 		// Strip one level of indentation for content parsing
 		let stripped_line = line.strip_prefix('\t').unwrap_or(line);
 
-		// Check for new sub-issues first (checkbox lines without markers)
-		// Only check after we've seen the issue marker (so we're in the issue body area)
-		if seen_issue_marker {
+		// Check for new sub-issues (checkbox lines without markers)
+		// Only valid AFTER we've seen at least one existing sub-issue or comment marker
+		// This prevents checkbox items in the issue body from being treated as new sub-issues
+		if seen_sub_issue_or_comment {
 			if let Some((title, closed)) = parse_new_sub_issue_line_typst(line) {
 				new_sub_issues.push(NewSubIssue { title, closed });
 				continue;
@@ -1296,9 +1304,11 @@ fn parse_typst_target(content: &str) -> TargetState {
 				TypstMarkerType::SubIssue { number, closed } => {
 					// Track sub-issue state
 					sub_issues.push(TargetSubIssue { number, closed });
+					seen_sub_issue_or_comment = true;
 					continue;
 				}
 				TypstMarkerType::Comment { is_immutable, id, .. } => {
+					seen_sub_issue_or_comment = true;
 					// Flush previous section
 					let body = unindent_body(&current_body).trim().to_string();
 
@@ -2352,6 +2362,26 @@ mod tests {
 		    ],
 		}
 		"#);
+	}
+
+	#[test]
+	fn test_parse_markdown_checkbox_in_body_not_sub_issue() {
+		// Checkbox items in the issue body (before any sub-issue or comment) should be treated as body text
+		let md = "- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
+
+\tIssue body text
+
+\t- [ ] This is a todo item in the body, not a sub-issue
+\t- [x] Another todo in the body
+
+\t<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+\tA comment
+";
+		let target = parse_markdown_target(md);
+		// The checkbox lines should be part of the body, not new_sub_issues
+		assert!(target.issue_body.contains("This is a todo item in the body"));
+		assert!(target.issue_body.contains("Another todo in the body"));
+		assert!(target.new_sub_issues.is_empty());
 	}
 
 	#[test]
