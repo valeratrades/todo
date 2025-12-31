@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use clap::{Args, ValueEnum};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -5,7 +7,10 @@ use v_utils::prelude::*;
 
 use crate::config::LiveSettings;
 
-static ISSUE_EDIT_LOCK_FILENAME: &str = "issue_edit.lock";
+/// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
+fn issues_dir() -> PathBuf {
+	v_utils::xdg_data_dir!("issues")
+}
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum Extension {
@@ -25,8 +30,8 @@ impl Extension {
 
 #[derive(Args)]
 pub struct OpenArgs {
-	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)
-	pub url: String,
+	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
+	pub url_or_pattern: String,
 
 	/// File extension for the output file
 	#[arg(short = 'e', long, default_value = "md")]
@@ -70,22 +75,6 @@ struct GitHubComment {
 	id: u64,
 	body: Option<String>,
 	user: GitHubUser,
-}
-
-/// Lock file data stored during edit session
-#[derive(Debug, Deserialize, Serialize)]
-struct EditLock {
-	owner: String,
-	repo: String,
-	issue_number: u64,
-	extension: String,
-	tmp_path: String,
-	/// Original issue body (for diffing)
-	original_issue_body: Option<String>,
-	/// Original comments with their IDs
-	original_comments: Vec<OriginalComment>,
-	/// Original sub-issues with their state
-	original_sub_issues: Vec<OriginalSubIssue>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -163,6 +152,158 @@ fn parse_github_issue_url(url: &str) -> Result<(String, String, u64)> {
 	let issue_number: u64 = parts[3].parse().map_err(|_| eyre!("Invalid issue number: {}", parts[3]))?;
 
 	Ok((owner, repo, issue_number))
+}
+
+/// Check if a string looks like a GitHub issue URL
+fn is_github_url(s: &str) -> bool {
+	let s = s.trim();
+	s.contains("github.com/") && s.contains("/issues/")
+}
+
+/// Get the path for an issue file in XDG_DATA.
+/// Structure: issues/{owner}/{issue_number}.{ext}
+/// If the issue has sub-issues, a directory {owner}/{issue_number}/ will contain them.
+fn get_issue_file_path(owner: &str, issue_number: u64, extension: &Extension, parent_issue: Option<u64>) -> PathBuf {
+	let base = issues_dir().join(owner);
+	match parent_issue {
+		None => base.join(format!("{}.{}", issue_number, extension.as_str())),
+		Some(parent) => base.join(parent.to_string()).join(format!("{}.{}", issue_number, extension.as_str())),
+	}
+}
+
+/// Get the directory path for sub-issues of a given issue.
+/// Structure: issues/{owner}/{issue_number}/
+fn get_sub_issues_dir(owner: &str, issue_number: u64) -> PathBuf {
+	issues_dir().join(owner).join(issue_number.to_string())
+}
+
+/// Stored metadata about an issue file for syncing
+#[derive(Debug, Deserialize, Serialize)]
+struct IssueFileMeta {
+	owner: String,
+	repo: String,
+	issue_number: u64,
+	extension: String,
+	/// Original issue body (for diffing)
+	original_issue_body: Option<String>,
+	/// Original comments with their IDs
+	original_comments: Vec<OriginalComment>,
+	/// Original sub-issues with their state
+	original_sub_issues: Vec<OriginalSubIssue>,
+}
+
+/// Get the metadata file path for an issue (stored alongside the issue file)
+fn get_issue_meta_path(issue_file_path: &Path) -> PathBuf {
+	let file_name = issue_file_path.file_stem().unwrap_or_default().to_string_lossy();
+	issue_file_path.with_file_name(format!(".{}.meta.json", file_name))
+}
+
+/// Search for issue files matching a pattern in the issues directory
+/// Pattern can be:
+/// - Issue number: "123" -> searches for any file named 123.md or 123.typ
+/// - Owner pattern: "owner" -> searches in owner/ directory
+/// - Owner/number: "owner/123" -> specific issue
+fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
+	use std::process::Command;
+
+	let issues_dir = issues_dir();
+	if !issues_dir.exists() {
+		return Ok(Vec::new());
+	}
+
+	// Search for both .md and .typ files
+	let output = Command::new("find")
+		.args([issues_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f", "!", "-name", ".*"])
+		.output()?;
+
+	if !output.status.success() {
+		return Err(eyre!("Failed to search for issue files"));
+	}
+
+	let all_files = String::from_utf8(output.stdout)?;
+	let mut matches = Vec::new();
+
+	let pattern_lower = pattern.to_lowercase();
+
+	for line in all_files.lines() {
+		let file_path = line.trim();
+		if file_path.is_empty() {
+			continue;
+		}
+
+		let path = PathBuf::from(file_path);
+
+		// Get relative path from issues_dir
+		let relative = if let Ok(rel) = path.strip_prefix(&issues_dir) {
+			rel.to_string_lossy().to_string()
+		} else {
+			continue;
+		};
+
+		let relative_lower = relative.to_lowercase();
+
+		// Check if pattern matches:
+		// - The issue number (filename without extension)
+		// - The owner (first path component)
+		// - The full relative path
+		if let Some(file_stem) = path.file_stem() {
+			let file_stem_str = file_stem.to_string_lossy().to_lowercase();
+			if file_stem_str.contains(&pattern_lower) || relative_lower.contains(&pattern_lower) {
+				matches.push(path);
+			}
+		}
+	}
+
+	Ok(matches)
+}
+
+/// Use fzf to let user choose from multiple issue file matches
+fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result<Option<PathBuf>> {
+	use std::{
+		io::Write as IoWrite,
+		process::{Command, Stdio},
+	};
+
+	let issues_dir = issues_dir();
+
+	// Prepare input for fzf - show relative paths
+	let input: String = matches
+		.iter()
+		.filter_map(|p| p.strip_prefix(&issues_dir).ok().map(|r| r.to_string_lossy().to_string()))
+		.collect::<Vec<_>>()
+		.join("\n");
+
+	let mut fzf = Command::new("fzf").args(["--query", initial_query]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+
+	if let Some(stdin) = fzf.stdin.take() {
+		let mut stdin_handle = stdin;
+		stdin_handle.write_all(input.as_bytes())?;
+	}
+
+	let output = fzf.wait_with_output()?;
+
+	if output.status.success() {
+		let chosen = String::from_utf8(output.stdout)?.trim().to_string();
+		Ok(Some(issues_dir.join(chosen)))
+	} else {
+		Ok(None)
+	}
+}
+
+/// Parse issue metadata from a local issue file's meta file
+fn load_issue_meta(issue_file_path: &Path) -> Result<IssueFileMeta> {
+	let meta_path = get_issue_meta_path(issue_file_path);
+	let content = std::fs::read_to_string(&meta_path).map_err(|_| eyre!("No metadata found for issue file: {:?}", issue_file_path))?;
+	let meta: IssueFileMeta = serde_json::from_str(&content)?;
+	Ok(meta)
+}
+
+/// Save issue metadata alongside the issue file
+fn save_issue_meta(issue_file_path: &Path, meta: &IssueFileMeta) -> Result<()> {
+	let meta_path = get_issue_meta_path(issue_file_path);
+	let content = serde_json::to_string_pretty(meta)?;
+	std::fs::write(&meta_path, content)?;
+	Ok(())
 }
 
 async fn fetch_authenticated_user(settings: &LiveSettings) -> Result<String> {
@@ -964,16 +1105,13 @@ fn parse_typst_target(content: &str) -> TargetState {
 	TargetState { issue_body, comments, sub_issues }
 }
 
-/// Sync changes from edited file back to GitHub.
-/// Two-step process:
-/// 1. Parse edited content into target state
-/// 2. Diff against original and apply create/update/delete operations
-async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited_content: &str) -> Result<()> {
+/// Sync changes from a local issue file back to GitHub using stored metadata.
+async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMeta, edited_content: &str) -> Result<()> {
 	// Step 1: Parse into target state
-	let target = match lock.extension.as_str() {
+	let target = match meta.extension.as_str() {
 		"md" => parse_markdown_target(edited_content),
 		"typ" => parse_typst_target(edited_content),
-		_ => return Err(eyre!("Unsupported extension: {}", lock.extension)),
+		_ => return Err(eyre!("Unsupported extension: {}", meta.extension)),
 	};
 
 	let mut updates = 0;
@@ -981,22 +1119,22 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 	let mut deletes = 0;
 
 	// Step 2a: Check issue body
-	let original_body = lock.original_issue_body.as_deref().unwrap_or("");
+	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
 	if target.issue_body != original_body {
 		println!("Updating issue body...");
-		update_github_issue_body(settings, &lock.owner, &lock.repo, lock.issue_number, &target.issue_body).await?;
+		update_github_issue_body(settings, &meta.owner, &meta.repo, meta.issue_number, &target.issue_body).await?;
 		updates += 1;
 	}
 
 	// Step 2b: Collect which original comment IDs are present in target
 	let target_ids: std::collections::HashSet<u64> = target.comments.iter().filter_map(|c| c.id).collect();
-	let original_ids: std::collections::HashSet<u64> = lock.original_comments.iter().map(|c| c.id).collect();
+	let original_ids: std::collections::HashSet<u64> = meta.original_comments.iter().map(|c| c.id).collect();
 
 	// Delete comments that were removed (marker line deleted)
-	for orig in &lock.original_comments {
+	for orig in &meta.original_comments {
 		if !target_ids.contains(&orig.id) {
 			println!("Deleting comment {}...", orig.id);
-			delete_github_comment(settings, &lock.owner, &lock.repo, orig.id).await?;
+			delete_github_comment(settings, &meta.owner, &meta.repo, orig.id).await?;
 			deletes += 1;
 		}
 	}
@@ -1006,10 +1144,10 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 		match tc.id {
 			Some(id) if original_ids.contains(&id) => {
 				// Existing comment - check if changed
-				let original = lock.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
+				let original = meta.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
 				if tc.body != original {
 					println!("Updating comment {}...", id);
-					update_github_comment(settings, &lock.owner, &lock.repo, id, &tc.body).await?;
+					update_github_comment(settings, &meta.owner, &meta.repo, id, &tc.body).await?;
 					updates += 1;
 				}
 			}
@@ -1021,7 +1159,7 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 				// New comment
 				if !tc.body.is_empty() {
 					println!("Creating new comment...");
-					create_github_comment(settings, &lock.owner, &lock.repo, lock.issue_number, &tc.body).await?;
+					create_github_comment(settings, &meta.owner, &meta.repo, meta.issue_number, &tc.body).await?;
 					creates += 1;
 				}
 			}
@@ -1032,12 +1170,12 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 	let mut sub_issue_updates = 0;
 	for ts in &target.sub_issues {
 		// Find original state
-		if let Some(orig) = lock.original_sub_issues.iter().find(|o| o.number == ts.number) {
+		if let Some(orig) = meta.original_sub_issues.iter().find(|o| o.number == ts.number) {
 			let orig_closed = orig.state == "closed";
 			if ts.closed != orig_closed {
 				let new_state = if ts.closed { "closed" } else { "open" };
 				println!("Updating sub-issue #{} to {}...", ts.number, new_state);
-				update_github_issue_state(settings, &lock.owner, &lock.repo, ts.number, new_state).await?;
+				update_github_issue_state(settings, &meta.owner, &meta.repo, ts.number, new_state).await?;
 				sub_issue_updates += 1;
 			}
 		}
@@ -1066,62 +1204,145 @@ async fn sync_changes_to_github(settings: &LiveSettings, lock: &EditLock, edited
 	Ok(())
 }
 
-pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()> {
-	use std::path::Path;
-
-	let lock_path = v_utils::xdg_state_file!(ISSUE_EDIT_LOCK_FILENAME);
-
-	let (owner, repo, issue_number) = parse_github_issue_url(&args.url)?;
-
-	println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
-
-	// Fetch in parallel
+/// Fetch an issue and all its sub-issues recursively, writing them to XDG_DATA.
+/// Returns the path to the main issue file.
+async fn fetch_and_store_issue(
+	settings: &LiveSettings,
+	owner: &str,
+	repo: &str,
+	issue_number: u64,
+	extension: &Extension,
+	render_closed: bool,
+	parent_issue: Option<u64>,
+) -> Result<PathBuf> {
+	// Fetch issue data in parallel
 	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
 		fetch_authenticated_user(settings),
-		fetch_github_issue(settings, &owner, &repo, issue_number),
-		fetch_github_comments(settings, &owner, &repo, issue_number),
-		fetch_github_sub_issues(settings, &owner, &repo, issue_number),
+		fetch_github_issue(settings, owner, repo, issue_number),
+		fetch_github_comments(settings, owner, repo, issue_number),
+		fetch_github_sub_issues(settings, owner, repo, issue_number),
 	)?;
 
-	// Format content based on extension
-	let content = match args.extension {
-		Extension::Md => format_issue_as_markdown(&issue, &comments, &sub_issues, &owner, &repo, &current_user, args.render_closed),
-		Extension::Typ => format_issue_as_typst(&issue, &comments, &sub_issues, &owner, &repo, &current_user, args.render_closed),
+	// Determine file path
+	let issue_file_path = get_issue_file_path(owner, issue_number, extension, parent_issue);
+
+	// Create parent directories
+	if let Some(parent) = issue_file_path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+
+	// Format content
+	let content = match extension {
+		Extension::Md => format_issue_as_markdown(&issue, &comments, &sub_issues, owner, repo, &current_user, render_closed),
+		Extension::Typ => format_issue_as_typst(&issue, &comments, &sub_issues, owner, repo, &current_user, render_closed),
 	};
 
-	// Create temp file
-	let tmp_path = format!("/tmp/issue_{}_{}_{}_{}.{}", owner, repo, issue_number, issue.number, args.extension.as_str());
-	std::fs::write(&tmp_path, &content)?;
+	// Write issue file
+	std::fs::write(&issue_file_path, &content)?;
 
-	// Create lock file with original content for diffing
-	let lock = EditLock {
-		owner: owner.clone(),
-		repo: repo.clone(),
+	// Save metadata for syncing
+	let meta = IssueFileMeta {
+		owner: owner.to_string(),
+		repo: repo.to_string(),
 		issue_number,
-		extension: args.extension.as_str().to_string(),
-		tmp_path: tmp_path.clone(),
+		extension: extension.as_str().to_string(),
 		original_issue_body: issue.body.clone(),
 		original_comments: comments.iter().map(OriginalComment::from).collect(),
 		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
 	};
-	std::fs::write(&lock_path, serde_json::to_string_pretty(&lock)?)?;
+	save_issue_meta(&issue_file_path, &meta)?;
+
+	// If there are sub-issues, create a directory and recursively fetch them
+	if !sub_issues.is_empty() {
+		let sub_dir = get_sub_issues_dir(owner, issue_number);
+		std::fs::create_dir_all(&sub_dir)?;
+
+		for sub in &sub_issues {
+			// Recursively fetch sub-issue (use Box::pin for recursive async)
+			Box::pin(fetch_and_store_issue(settings, owner, repo, sub.number, extension, render_closed, Some(issue_number))).await?;
+		}
+	}
+
+	Ok(issue_file_path)
+}
+
+/// Open a local issue file, let user edit, then sync changes back to GitHub.
+async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Result<()> {
+	// Load metadata
+	let meta = load_issue_meta(issue_file_path)?;
+
+	// Read current content for comparison
+	let original_content = std::fs::read_to_string(issue_file_path)?;
 
 	// Open in editor (blocks until editor closes)
-	v_utils::io::open(Path::new(&tmp_path))?;
+	v_utils::io::open(issue_file_path)?;
 
 	// Read edited content
-	let edited_content = std::fs::read_to_string(&tmp_path)?;
+	let edited_content = std::fs::read_to_string(issue_file_path)?;
 
 	// Check if content changed and sync back to GitHub
-	if edited_content != content {
-		sync_changes_to_github(settings, &lock, &edited_content).await?;
+	if edited_content != original_content {
+		sync_local_issue_to_github(settings, &meta, &edited_content).await?;
+
+		// Re-fetch and update local file and metadata to reflect the synced state
+		println!("Refreshing local issue file from GitHub...");
+		let extension = match meta.extension.as_str() {
+			"typ" => Extension::Typ,
+			_ => Extension::Md,
+		};
+
+		// Determine if this is a sub-issue by checking the path structure
+		let parent_issue = issue_file_path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).and_then(|s| s.parse::<u64>().ok());
+
+		fetch_and_store_issue(settings, &meta.owner, &meta.repo, meta.issue_number, &extension, false, parent_issue).await?;
 	} else {
 		println!("No changes made.");
 	}
 
-	// Clean up
-	let _ = std::fs::remove_file(&tmp_path);
-	let _ = std::fs::remove_file(&lock_path);
+	Ok(())
+}
+
+pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()> {
+	let input = args.url_or_pattern.trim();
+
+	// Check if input is a GitHub URL or a local search pattern
+	if is_github_url(input) {
+		// GitHub URL mode: fetch issue and store in XDG_DATA
+		let (owner, repo, issue_number) = parse_github_issue_url(input)?;
+
+		println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
+
+		// Fetch and store issue (and sub-issues) in XDG_DATA
+		let issue_file_path = fetch_and_store_issue(settings, &owner, &repo, issue_number, &args.extension, args.render_closed, None).await?;
+
+		println!("Stored issue at: {:?}", issue_file_path);
+
+		// Open the local issue file for editing
+		open_local_issue(settings, &issue_file_path).await?;
+	} else {
+		// Local search mode: find and open existing issue file
+		let matches = search_issue_files(input)?;
+
+		let issue_file_path = match matches.len() {
+			0 => {
+				return Err(eyre!("No issue files found matching pattern: {}", input));
+			}
+			1 => {
+				println!("Found: {:?}", matches[0]);
+				matches[0].clone()
+			}
+			_ => {
+				println!("Found {} matches. Opening fzf to choose:", matches.len());
+				match choose_issue_with_fzf(&matches, input)? {
+					Some(path) => path,
+					None => return Err(eyre!("No issue selected")),
+				}
+			}
+		};
+
+		// Open the local issue file for editing
+		open_local_issue(settings, &issue_file_path).await?;
+	}
 
 	Ok(())
 }
