@@ -119,11 +119,19 @@ struct TargetState {
 	comments: Vec<TargetComment>,
 	/// Sub-issues with their checked state (true = closed)
 	sub_issues: Vec<TargetSubIssue>,
+	/// New sub-issues to create (title only, no number yet)
+	new_sub_issues: Vec<NewSubIssue>,
 }
 
 #[derive(Debug, PartialEq)]
 struct TargetSubIssue {
 	number: u64,
+	closed: bool,
+}
+
+#[derive(Debug, PartialEq)]
+struct NewSubIssue {
+	title: String,
 	closed: bool,
 }
 
@@ -922,6 +930,40 @@ enum MdMarkerType {
 	NewComment,
 }
 
+/// Check if a line is a new sub-issue (checkbox without any marker).
+/// Format: `\t- [ ] Title` or `\t- [x] Title` (must be indented with one tab)
+/// Returns Some((title, closed)) if it's a new sub-issue, None otherwise.
+fn parse_new_sub_issue_line(line: &str) -> Option<(String, bool)> {
+	// Must start with exactly one tab (indented under the main issue)
+	let stripped = line.strip_prefix('\t')?;
+
+	// Must not have further indentation (not a nested item)
+	if stripped.starts_with('\t') || stripped.starts_with(' ') {
+		return None;
+	}
+
+	// Must be a checkbox item
+	let (closed, rest) = if let Some(rest) = stripped.strip_prefix("- [ ] ") {
+		(false, rest)
+	} else if let Some(rest) = stripped.strip_prefix("- [x] ").or_else(|| stripped.strip_prefix("- [X] ")) {
+		(true, rest)
+	} else {
+		return None;
+	};
+
+	// Must NOT have any marker (<!--...-->)
+	if rest.contains("<!--") {
+		return None;
+	}
+
+	let title = rest.trim().to_string();
+	if title.is_empty() {
+		return None;
+	}
+
+	Some((title, closed))
+}
+
 /// Parse a markdown HTML comment marker from anywhere in a line.
 /// Returns the marker type if found, None otherwise.
 fn parse_md_marker(line: &str) -> Option<MdMarkerType> {
@@ -974,10 +1016,12 @@ fn parse_md_marker(line: &str) -> Option<MdMarkerType> {
 /// New format: `- [ ] Title <!--url-->` on first line, content indented with tabs.
 /// Sub-issues are parsed for state changes.
 /// New comments are marked with `<!--new comment-->`.
+/// New sub-issues are checkbox lines without URL markers.
 fn parse_markdown_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut sub_issues: Vec<TargetSubIssue> = Vec::new();
+	let mut new_sub_issues: Vec<NewSubIssue> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
 	let mut current_is_immutable = false;
@@ -989,6 +1033,15 @@ fn parse_markdown_target(content: &str) -> TargetState {
 	for line in content.lines() {
 		// Strip one level of indentation for content parsing
 		let stripped_line = line.strip_prefix('\t').unwrap_or(line);
+
+		// Check for new sub-issues first (checkbox lines without markers)
+		// Only check after we've seen the issue marker (so we're in the issue body area)
+		if seen_issue_marker {
+			if let Some((title, closed)) = parse_new_sub_issue_line(line) {
+				new_sub_issues.push(NewSubIssue { title, closed });
+				continue;
+			}
+		}
 
 		// Check for markers in the line
 		if let Some(marker) = parse_md_marker(line) {
@@ -1094,7 +1147,12 @@ fn parse_markdown_target(content: &str) -> TargetState {
 		comments.push(TargetComment { id: None, body });
 	}
 
-	TargetState { issue_body, comments, sub_issues }
+	TargetState {
+		issue_body,
+		comments,
+		sub_issues,
+		new_sub_issues,
+	}
 }
 
 /// Marker type for parsed typst markers
@@ -1108,6 +1166,40 @@ enum TypstMarkerType {
 	Comment { is_immutable: bool, url: String, id: u64 },
 	/// New comment marker (`// new comment`)
 	NewComment,
+}
+
+/// Check if a line is a new sub-issue in typst format (checkbox without any marker).
+/// Format: `\t- [ ] Title` or `\t- [x] Title` (must be indented with one tab, no // marker)
+/// Returns Some((title, closed)) if it's a new sub-issue, None otherwise.
+fn parse_new_sub_issue_line_typst(line: &str) -> Option<(String, bool)> {
+	// Must start with exactly one tab (indented under the main issue)
+	let stripped = line.strip_prefix('\t')?;
+
+	// Must not have further indentation (not a nested item)
+	if stripped.starts_with('\t') || stripped.starts_with(' ') {
+		return None;
+	}
+
+	// Must be a checkbox item
+	let (closed, rest) = if let Some(rest) = stripped.strip_prefix("- [ ] ") {
+		(false, rest)
+	} else if let Some(rest) = stripped.strip_prefix("- [x] ").or_else(|| stripped.strip_prefix("- [X] ")) {
+		(true, rest)
+	} else {
+		return None;
+	};
+
+	// Must NOT have any marker (// followed by something)
+	if rest.contains(" // ") {
+		return None;
+	}
+
+	let title = rest.trim().to_string();
+	if title.is_empty() {
+		return None;
+	}
+
+	Some((title, closed))
 }
 
 /// Parse a typst comment marker from anywhere in a line.
@@ -1163,10 +1255,12 @@ fn parse_typst_marker(line: &str) -> Option<TypstMarkerType> {
 /// New format: `- [ ] Title // url` on first line, content indented with tabs.
 /// Sub-issues are parsed for state changes.
 /// New comments are marked with `// new comment`.
+/// New sub-issues are checkbox lines without URL markers.
 fn parse_typst_target(content: &str) -> TargetState {
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut sub_issues: Vec<TargetSubIssue> = Vec::new();
+	let mut new_sub_issues: Vec<NewSubIssue> = Vec::new();
 	let mut current_body = String::new();
 	let mut current_comment_id: Option<u64> = None;
 	let mut current_is_immutable = false;
@@ -1178,6 +1272,15 @@ fn parse_typst_target(content: &str) -> TargetState {
 	for line in content.lines() {
 		// Strip one level of indentation for content parsing
 		let stripped_line = line.strip_prefix('\t').unwrap_or(line);
+
+		// Check for new sub-issues first (checkbox lines without markers)
+		// Only check after we've seen the issue marker (so we're in the issue body area)
+		if seen_issue_marker {
+			if let Some((title, closed)) = parse_new_sub_issue_line_typst(line) {
+				new_sub_issues.push(NewSubIssue { title, closed });
+				continue;
+			}
+		}
 
 		// Check for markers in the line
 		if let Some(marker) = parse_typst_marker(line) {
@@ -1283,7 +1386,12 @@ fn parse_typst_target(content: &str) -> TargetState {
 		comments.push(TargetComment { id: None, body });
 	}
 
-	TargetState { issue_body, comments, sub_issues }
+	TargetState {
+		issue_body,
+		comments,
+		sub_issues,
+		new_sub_issues,
+	}
 }
 
 /// Sync changes from a local issue file back to GitHub using stored metadata.
@@ -1362,7 +1470,27 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 		}
 	}
 
-	let total = updates + creates + deletes + sub_issue_updates;
+	// Step 2d: Create new sub-issues
+	let mut new_sub_issues_created = 0;
+	for ns in &target.new_sub_issues {
+		println!("Creating sub-issue '{}'...", ns.title);
+
+		// Create the issue on GitHub
+		let created = create_github_issue(settings, &meta.owner, &meta.repo, &ns.title, "").await?;
+		println!("Created sub-issue #{}: {}", created.number, created.html_url);
+
+		// Add as sub-issue to the parent
+		add_sub_issue(settings, &meta.owner, &meta.repo, meta.issue_number, created.number).await?;
+
+		// If the new sub-issue should be closed, close it
+		if ns.closed {
+			update_github_issue_state(settings, &meta.owner, &meta.repo, created.number, "closed").await?;
+		}
+
+		new_sub_issues_created += 1;
+	}
+
+	let total = updates + creates + deletes + sub_issue_updates + new_sub_issues_created;
 	if total == 0 {
 		println!("No changes detected.");
 	} else {
@@ -1378,6 +1506,9 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 		}
 		if sub_issue_updates > 0 {
 			parts.push(format!("{} sub-issues updated", sub_issue_updates));
+		}
+		if new_sub_issues_created > 0 {
+			parts.push(format!("{} sub-issues created", new_sub_issues_created));
 		}
 		println!("Synced to GitHub: {}", parts.join(", "));
 	}
@@ -2008,6 +2139,7 @@ mod tests {
 		        },
 		    ],
 		    sub_issues: [],
+		    new_sub_issues: [],
 		}
 		"#);
 	}
@@ -2035,6 +2167,7 @@ mod tests {
 		        },
 		    ],
 		    sub_issues: [],
+		    new_sub_issues: [],
 		}
 		"#);
 	}
@@ -2063,6 +2196,7 @@ mod tests {
 		        },
 		    ],
 		    sub_issues: [],
+		    new_sub_issues: [],
 		}
 		"#);
 	}
@@ -2097,6 +2231,7 @@ mod tests {
 		        },
 		    ],
 		    sub_issues: [],
+		    new_sub_issues: [],
 		}
 		"#);
 	}
@@ -2128,6 +2263,7 @@ mod tests {
 		        },
 		    ],
 		    sub_issues: [],
+		    new_sub_issues: [],
 		}
 		"#);
 	}
@@ -2164,6 +2300,53 @@ mod tests {
 		        },
 		        TargetSubIssue {
 		            number: 125,
+		            closed: true,
+		        },
+		    ],
+		    new_sub_issues: [],
+		}
+		"#);
+	}
+
+	#[test]
+	fn test_parse_markdown_new_sub_issues() {
+		// New sub-issues are checkbox lines without URL markers
+		let md = "- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
+
+\tIssue body text
+
+\t- [ ] Existing sub-issue <!--sub https://github.com/owner/repo/issues/124-->
+\t- [ ] New sub-issue to create
+\t- [x] Another new sub-issue (already done)
+
+\t<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+\tA comment
+";
+		let target = parse_markdown_target(md);
+		assert_snapshot!(format!("{target:#?}"), @r#"
+		TargetState {
+		    issue_body: "Issue body text",
+		    comments: [
+		        TargetComment {
+		            id: Some(
+		                1001,
+		            ),
+		            body: "A comment",
+		        },
+		    ],
+		    sub_issues: [
+		        TargetSubIssue {
+		            number: 124,
+		            closed: false,
+		        },
+		    ],
+		    new_sub_issues: [
+		        NewSubIssue {
+		            title: "New sub-issue to create",
+		            closed: false,
+		        },
+		        NewSubIssue {
+		            title: "Another new sub-issue (already done)",
 		            closed: true,
 		        },
 		    ],
