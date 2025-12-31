@@ -7,6 +7,14 @@ pub struct AppConfig {
 	pub timer: Option<Timer>,
 	pub milestones: Option<Milestones>,
 	pub manual_stats: Option<ManualStats>,
+	pub open: Option<Open>,
+}
+
+#[derive(Clone, Debug, v_macros::MyConfigPrimitives, smart_default::SmartDefault)]
+pub struct Open {
+	/// Default file extension for issue files when not specified (md or typ)
+	#[default = "md"]
+	pub default_extension: String,
 }
 
 #[derive(Clone, Debug, v_macros::MyConfigPrimitives, v_macros::SettingsNested)]

@@ -31,21 +31,22 @@ impl Extension {
 #[derive(Args)]
 pub struct OpenArgs {
 	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
-	/// With --new-issue: path format is workspace/project/{issue.md, issue/sub-issue.md}
+	/// With --touch: path format is workspace/project/{issue.md, issue/sub-issue.md}
 	pub url_or_pattern: String,
 
-	/// File extension for the output file
-	#[arg(short = 'e', long, default_value = "md")]
-	pub extension: Extension,
+	/// File extension for the output file (overrides config default_extension)
+	#[arg(short = 'e', long)]
+	pub extension: Option<Extension>,
 
 	/// Render full contents even for closed issues (by default, closed issues show only title with <!-- omitted -->)
 	#[arg(long)]
 	pub render_closed: bool,
 
-	/// Create a new issue from a local file. Path format: workspace/project/issue.md
-	/// For sub-issues: workspace/project/parent/child.md (parent must exist on GitHub)
-	#[arg(long)]
-	pub new_issue: bool,
+	/// Create or open an issue from a path. Path format: workspace/project/issue[.md|.typ]
+	/// For sub-issues: workspace/project/parent/child (parent must exist on GitHub)
+	/// If issue already exists locally, opens it. Otherwise creates on GitHub first.
+	#[arg(short = 't', long)]
+	pub touch: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1482,68 +1483,75 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 	Ok(())
 }
 
-/// Parsed new issue path components
-/// Format: workspace/project/issue.md or workspace/project/parent/child.md (for sub-issues)
+/// Parsed touch path components
+/// Format: workspace/project/issue[.md|.typ] or workspace/project/parent/child[.md|.typ] (for sub-issues)
 #[derive(Debug)]
-struct NewIssuePath {
+struct TouchPath {
 	owner: String,
 	repo: String,
-	/// Chain of issue titles (parent issues first, the new issue last)
+	/// Chain of issue titles (parent issues first, the target issue last)
 	/// For a simple issue: ["issue_title"]
 	/// For a sub-issue: ["parent_title", "child_title"]
 	/// For nested: ["grandparent", "parent", "child"]
 	issue_chain: Vec<String>,
-	file_path: PathBuf,
+	/// The extension from the path (if provided), or None to use default
+	extension: Option<Extension>,
 }
 
-/// Parse a path for --new-issue mode
-/// Format: workspace/project/issue.md or workspace/project/parent_issue/child_issue.md
-fn parse_new_issue_path(path: &str) -> Result<NewIssuePath> {
-	let path = PathBuf::from(path);
+/// Parse a path for --touch mode
+/// Format: workspace/project/issue[.md|.typ] or workspace/project/parent_issue/child_issue[.md|.typ]
+/// Extension is optional - if not provided, will use config default
+fn parse_touch_path(path: &str) -> Result<TouchPath> {
+	let path_buf = PathBuf::from(path);
 
-	// Get the extension to validate it's a valid issue file
-	let extension = path.extension().and_then(|e| e.to_str()).ok_or_else(|| eyre!("Path must have .md or .typ extension"))?;
-	if extension != "md" && extension != "typ" {
-		return Err(eyre!("Path must have .md or .typ extension, got: {}", extension));
-	}
+	// Check if path has a valid extension
+	let extension = path_buf.extension().and_then(|e| e.to_str()).and_then(|ext| match ext {
+		"md" => Some(Extension::Md),
+		"typ" => Some(Extension::Typ),
+		_ => None,
+	});
 
 	// Collect all path components
-	let components: Vec<&str> = path.iter().filter_map(|c| c.to_str()).collect();
+	let components: Vec<&str> = path_buf.iter().filter_map(|c| c.to_str()).collect();
 
-	// Need at least: workspace/project/issue.ext
+	// Need at least: workspace/project/issue
 	if components.len() < 3 {
-		return Err(eyre!("Path must be in format: workspace/project/issue.md (got {} components)", components.len()));
+		return Err(eyre!("Path must be in format: workspace/project/issue (got {} components)", components.len()));
 	}
 
 	let owner = components[0].to_string();
 	let repo = components[1].to_string();
 
 	// Everything after workspace/project is the issue chain
-	// The last component is the file (e.g., "issue.md"), others are parent directories
 	let mut issue_chain = Vec::new();
 
-	// Components from index 2 to len-1 are parent issues (directories)
-	for component in &components[2..components.len() - 1] {
+	// All components from index 2 onwards
+	for component in &components[2..] {
 		issue_chain.push(component.to_string());
 	}
 
-	// Last component is the new issue file - strip extension to get title
-	let last = components[components.len() - 1];
-	let issue_title = last.strip_suffix(&format!(".{}", extension)).unwrap_or(last).to_string();
-	issue_chain.push(issue_title);
+	// If we have an extension, strip it from the last component
+	if extension.is_some() {
+		if let Some(last) = issue_chain.last_mut() {
+			// Strip the extension suffix (e.g., ".md" or ".typ")
+			if let Some(stem) = last.rsplit_once('.') {
+				*last = stem.0.to_string();
+			}
+		}
+	}
 
-	Ok(NewIssuePath {
+	Ok(TouchPath {
 		owner,
 		repo,
 		issue_chain,
-		file_path: path,
+		extension,
 	})
 }
 
-/// Handle creating a new issue from a local file
-async fn create_new_issue(settings: &LiveSettings, new_issue_path: &NewIssuePath, extension: &Extension) -> Result<PathBuf> {
-	let owner = &new_issue_path.owner;
-	let repo = &new_issue_path.repo;
+/// Handle creating a new issue on GitHub
+async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
+	let owner = &touch_path.owner;
+	let repo = &touch_path.repo;
 
 	// Step 1: Check collaborator access
 	println!("Checking collaborator access to {}/{}...", owner, repo);
@@ -1556,9 +1564,9 @@ async fn create_new_issue(settings: &LiveSettings, new_issue_path: &NewIssuePath
 	// Step 2: Validate parent issues exist (all except the last one in the chain)
 	let mut parent_issue_numbers: Vec<u64> = Vec::new();
 
-	if new_issue_path.issue_chain.len() > 1 {
+	if touch_path.issue_chain.len() > 1 {
 		println!("Validating parent issue chain...");
-		for (i, parent_title) in new_issue_path.issue_chain[..new_issue_path.issue_chain.len() - 1].iter().enumerate() {
+		for (i, parent_title) in touch_path.issue_chain[..touch_path.issue_chain.len() - 1].iter().enumerate() {
 			// Try to find by title first
 			let issue_number = find_issue_by_title(settings, owner, repo, parent_title).await?;
 
@@ -1592,19 +1600,12 @@ async fn create_new_issue(settings: &LiveSettings, new_issue_path: &NewIssuePath
 		}
 	}
 
-	// Step 3: Read the local file content (title from filename, body from file)
-	let new_issue_title = new_issue_path.issue_chain.last().unwrap();
+	// Step 3: Get the issue title (last in chain)
+	let new_issue_title = touch_path.issue_chain.last().unwrap();
 
-	// Check if the file exists and read its content
-	let body = if new_issue_path.file_path.exists() {
-		std::fs::read_to_string(&new_issue_path.file_path)?
-	} else {
-		String::new()
-	};
-
-	// Step 4: Create the issue on GitHub
+	// Step 4: Create the issue on GitHub (with empty body - user will edit after)
 	println!("Creating issue '{}'...", new_issue_title);
-	let created = create_github_issue(settings, owner, repo, new_issue_title, &body).await?;
+	let created = create_github_issue(settings, owner, repo, new_issue_title, "").await?;
 	println!("Created issue #{}: {}", created.number, created.html_url);
 
 	// Step 5: If there are parent issues, add as sub-issue to the immediate parent
@@ -1623,13 +1624,91 @@ async fn create_new_issue(settings: &LiveSettings, new_issue_path: &NewIssuePath
 	Ok(issue_file_path)
 }
 
+/// Try to find an existing local issue file matching the touch path
+/// Returns the path if found, None otherwise
+fn find_local_issue_for_touch(touch_path: &TouchPath, extension: &Extension) -> Option<PathBuf> {
+	let issues_dir = issues_dir();
+
+	// Build the expected path based on the issue chain
+	// For a simple issue: issues/{owner}/{issue_title}.{ext}
+	// For sub-issues, we need to find by searching since we don't know the issue numbers
+
+	// First, try to find by searching in the owner directory
+	let owner_dir = issues_dir.join(&touch_path.owner);
+	if !owner_dir.exists() {
+		return None;
+	}
+
+	// Search for files matching the issue title (last in chain)
+	let issue_title = touch_path.issue_chain.last()?;
+	let ext = extension.as_str();
+
+	// Use search_issue_files to find matches
+	// We search for the issue title and filter by extension
+	if let Ok(matches) = search_issue_files(issue_title) {
+		// Filter matches to only those in the correct owner directory and with correct extension
+		for path in matches {
+			// Check if it's in the right owner directory
+			if !path.starts_with(&owner_dir) {
+				continue;
+			}
+
+			// Check extension matches
+			if path.extension().and_then(|e| e.to_str()) != Some(ext) {
+				continue;
+			}
+
+			// Check the filename matches (without extension)
+			if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+				if stem == issue_title {
+					return Some(path);
+				}
+			}
+		}
+	}
+
+	None
+}
+
+/// Get the effective extension from args, config, or default
+fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSettings) -> Extension {
+	// Priority: CLI arg > config > default (md)
+	if let Some(ext) = args_extension {
+		return ext;
+	}
+
+	if let Ok(config) = settings.config() {
+		if let Some(open_config) = &config.open {
+			return match open_config.default_extension.as_str() {
+				"typ" => Extension::Typ,
+				_ => Extension::Md,
+			};
+		}
+	}
+
+	Extension::Md
+}
+
 pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()> {
 	let input = args.url_or_pattern.trim();
+	let extension = get_effective_extension(args.extension, settings);
 
-	// Handle --new-issue mode
-	if args.new_issue {
-		let new_issue_path = parse_new_issue_path(input)?;
-		let issue_file_path = create_new_issue(settings, &new_issue_path, &args.extension).await?;
+	// Handle --touch mode
+	if args.touch {
+		let touch_path = parse_touch_path(input)?;
+
+		// Determine the extension to use
+		let effective_ext = touch_path.extension.unwrap_or(extension);
+
+		// First, try to find an existing local issue file
+		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
+			println!("Found existing issue: {:?}", existing_path);
+			open_local_issue(settings, &existing_path).await?;
+			return Ok(());
+		}
+
+		// Not found locally - create on GitHub
+		let issue_file_path = create_issue_on_github(settings, &touch_path, &effective_ext).await?;
 
 		// Open the local issue file for editing
 		open_local_issue(settings, &issue_file_path).await?;
@@ -1644,7 +1723,7 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 		println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
 
 		// Fetch and store issue (and sub-issues) in XDG_DATA
-		let issue_file_path = fetch_and_store_issue(settings, &owner, &repo, issue_number, &args.extension, args.render_closed, None).await?;
+		let issue_file_path = fetch_and_store_issue(settings, &owner, &repo, issue_number, &extension, args.render_closed, None).await?;
 
 		println!("Stored issue at: {:?}", issue_file_path);
 
@@ -2123,51 +2202,69 @@ mod tests {
 	}
 
 	#[test]
-	fn test_parse_new_issue_path_simple() {
-		// Simple issue: workspace/project/issue.md
-		let result = parse_new_issue_path("owner/repo/my-issue.md").unwrap();
+	fn test_parse_touch_path_simple_with_extension() {
+		// Simple issue with extension: workspace/project/issue.md
+		let result = parse_touch_path("owner/repo/my-issue.md").unwrap();
 		assert_eq!(result.owner, "owner");
 		assert_eq!(result.repo, "repo");
 		assert_eq!(result.issue_chain, vec!["my-issue"]);
+		assert!(matches!(result.extension, Some(Extension::Md)));
 	}
 
 	#[test]
-	fn test_parse_new_issue_path_sub_issue() {
+	fn test_parse_touch_path_simple_without_extension() {
+		// Simple issue without extension: workspace/project/issue
+		let result = parse_touch_path("owner/repo/my-issue").unwrap();
+		assert_eq!(result.owner, "owner");
+		assert_eq!(result.repo, "repo");
+		assert_eq!(result.issue_chain, vec!["my-issue"]);
+		assert!(result.extension.is_none());
+	}
+
+	#[test]
+	fn test_parse_touch_path_sub_issue() {
 		// Sub-issue: workspace/project/parent/child.md
-		let result = parse_new_issue_path("owner/repo/parent-issue/child-issue.md").unwrap();
+		let result = parse_touch_path("owner/repo/parent-issue/child-issue.md").unwrap();
 		assert_eq!(result.owner, "owner");
 		assert_eq!(result.repo, "repo");
 		assert_eq!(result.issue_chain, vec!["parent-issue", "child-issue"]);
+		assert!(matches!(result.extension, Some(Extension::Md)));
 	}
 
 	#[test]
-	fn test_parse_new_issue_path_nested_sub_issue() {
+	fn test_parse_touch_path_nested_sub_issue() {
 		// Nested sub-issue: workspace/project/grandparent/parent/child.md
-		let result = parse_new_issue_path("owner/repo/grandparent/parent/child.md").unwrap();
+		let result = parse_touch_path("owner/repo/grandparent/parent/child.md").unwrap();
 		assert_eq!(result.owner, "owner");
 		assert_eq!(result.repo, "repo");
 		assert_eq!(result.issue_chain, vec!["grandparent", "parent", "child"]);
 	}
 
 	#[test]
-	fn test_parse_new_issue_path_typst() {
+	fn test_parse_touch_path_typst() {
 		// Typst file extension
-		let result = parse_new_issue_path("owner/repo/my-issue.typ").unwrap();
+		let result = parse_touch_path("owner/repo/my-issue.typ").unwrap();
 		assert_eq!(result.owner, "owner");
 		assert_eq!(result.repo, "repo");
 		assert_eq!(result.issue_chain, vec!["my-issue"]);
+		assert!(matches!(result.extension, Some(Extension::Typ)));
 	}
 
 	#[test]
-	fn test_parse_new_issue_path_errors() {
-		// Missing extension
-		assert!(parse_new_issue_path("owner/repo/issue").is_err());
+	fn test_parse_touch_path_unknown_extension_treated_as_no_extension() {
+		// Unknown extension is treated as part of the filename (no extension detected)
+		let result = parse_touch_path("owner/repo/issue.txt").unwrap();
+		assert_eq!(result.owner, "owner");
+		assert_eq!(result.repo, "repo");
+		// "issue.txt" is treated as the issue title since .txt is not a valid extension
+		assert_eq!(result.issue_chain, vec!["issue.txt"]);
+		assert!(result.extension.is_none());
+	}
 
-		// Wrong extension
-		assert!(parse_new_issue_path("owner/repo/issue.txt").is_err());
-
+	#[test]
+	fn test_parse_touch_path_errors() {
 		// Too few components
-		assert!(parse_new_issue_path("owner/issue.md").is_err());
-		assert!(parse_new_issue_path("issue.md").is_err());
+		assert!(parse_touch_path("owner/issue.md").is_err());
+		assert!(parse_touch_path("issue.md").is_err());
 	}
 }
