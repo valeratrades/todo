@@ -7,6 +7,73 @@
 [<img alt="ci errors" src="https://img.shields.io/github/actions/workflow/status/valeratrades/todo/errors.yml?branch=master&style=for-the-badge&style=flat-square&label=errors&labelColor=420d09" height="20">](https://github.com/valeratrades/todo/actions?query=branch%3Amaster) <!--NB: Won't find it if repo is private-->
 [<img alt="ci warnings" src="https://img.shields.io/github/actions/workflow/status/valeratrades/todo/warnings.yml?branch=master&style=for-the-badge&style=flat-square&label=warnings&labelColor=d16002" height="20">](https://github.com/valeratrades/todo/actions?query=branch%3Amaster) <!--NB: Won't find it if repo is private-->
 
+Personal productivity CLI for task tracking, time management, and GitHub issue integration.
+
+## Features
+
+- **Blocker Tree**: Stack-based task management with priority tracking. Integrates with Clockify for automatic time tracking.
+- **GitHub Issues**: Edit GitHub issues locally as markdown/typst files with full sync support (body, comments, sub-issues, state changes).
+- **Milestones**: Sprint planning with daily/weekly/monthly/quarterly/yearly milestone tracking via Google Calendar integration.
+- **Manual Stats**: Track daily performance metrics (EV, focus time, etc.) with historical data.
+- **Performance Evaluation**: Screenshot-based productivity tracking with AI analysis.
+- **Clockify Integration**: Automatic time tracking tied to your current blocker task.
+<!-- markdownlint-disable -->
+<details>
+<summary>
+<h3>Installation</h3>
+</summary>
+
+```sh
+nix build
+```
+
+## Configuration
+
+Create `~/.config/todo/settings.toml`:
+
+```toml
+# Required for GitHub integration
+github_token = "ghp_..."
+
+# Required for Clockify integration
+clockify_api_key = "..."
+clockify_workspace_id = "..."
+
+# Required for Google Calendar milestones
+google_calendar_client_id = "..."
+google_calendar_client_secret = "..."
+
+# Optional
+default_extension = "md"  # or "typ" for typst
+```
+
+</details>
+<!-- markdownlint-restore -->
+
+## Usage
+```sh
+# Blocker management (main workflow)
+todo blocker add "implement feature X"    # Add a new blocker
+todo blocker                              # Open current blocker file in $EDITOR
+todo blocker pop                          # Complete current blocker, move to next
+todo blocker set projectname              # Switch to different project
+
+# GitHub Issues
+todo open https://github.com/owner/repo/issues/123  # Fetch and open issue
+todo open -t owner/repo/my-issue                    # Create new issue (touch mode)
+todo open pattern                                   # Fuzzy find local issue
+
+# Milestones
+todo milestones                           # Show current milestones
+todo milestones push "goal description"   # Add goal to current milestone
+
+# Time tracking
+todo clockify start                       # Start tracking current blocker
+todo clockify stop                        # Stop tracking
+
+# Shell integration (add to your shell rc)
+eval "$(todo init zsh)"                   # Or: bash, fish
+```
 
 
 
