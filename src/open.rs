@@ -232,11 +232,38 @@ fn get_issue_meta_path(issue_file_path: &Path) -> PathBuf {
 	issue_file_path.with_file_name(format!(".{}.meta.json", file_name))
 }
 
+/// Extract the issue title from the first line of an issue file.
+/// Format: `- [ ] Title <!--url-->` or `- [x] Title <!--url-->`
+fn extract_issue_title_from_file(path: &Path) -> Option<String> {
+	let content = std::fs::read_to_string(path).ok()?;
+	let first_line = content.lines().next()?;
+
+	// Parse the title from formats like:
+	// - [ ] Title <!--url-->  (markdown)
+	// - [x] Title // url      (typst)
+	let line = first_line.trim();
+
+	// Strip checkbox prefix
+	let rest = line.strip_prefix("- [ ] ").or_else(|| line.strip_prefix("- [x] ")).or_else(|| line.strip_prefix("- [X] "))?;
+
+	// Strip trailing marker (markdown: <!--...-->, typst: // ...)
+	let title = if let Some(pos) = rest.find("<!--") {
+		rest[..pos].trim()
+	} else if let Some(pos) = rest.find(" // ") {
+		rest[..pos].trim()
+	} else {
+		rest.trim()
+	};
+
+	if title.is_empty() { None } else { Some(title.to_string()) }
+}
+
 /// Search for issue files matching a pattern in the issues directory
 /// Pattern can be:
 /// - Issue number: "123" -> searches for any file named 123.md or 123.typ
 /// - Owner pattern: "owner" -> searches in owner/ directory
 /// - Owner/number: "owner/123" -> specific issue
+/// - Issue title: "certainty" -> searches for issues with title containing "certainty"
 fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 	use std::process::Command;
 
@@ -280,9 +307,18 @@ fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 		// - The issue number (filename without extension)
 		// - The owner (first path component)
 		// - The full relative path
+		// - The issue title (from first line of the file)
 		if let Some(file_stem) = path.file_stem() {
 			let file_stem_str = file_stem.to_string_lossy().to_lowercase();
 			if file_stem_str.contains(&pattern_lower) || relative_lower.contains(&pattern_lower) {
+				matches.push(path);
+				continue;
+			}
+		}
+
+		// Check if pattern matches the issue title
+		if let Some(title) = extract_issue_title_from_file(&path) {
+			if title.to_lowercase().contains(&pattern_lower) {
 				matches.push(path);
 			}
 		}
@@ -2479,5 +2515,53 @@ mod tests {
 		// Too few components
 		assert!(parse_touch_path("owner/issue.md").is_err());
 		assert!(parse_touch_path("issue.md").is_err());
+	}
+
+	#[test]
+	fn test_extract_issue_title_from_file() {
+		use std::io::Write;
+
+		let temp_dir = std::env::temp_dir();
+
+		// Test markdown format: - [ ] Title <!--url-->
+		let md_file = temp_dir.join("test_issue_title.md");
+		let mut f = std::fs::File::create(&md_file).unwrap();
+		writeln!(f, "- [ ] Test Issue Title <!--https://github.com/owner/repo/issues/123-->").unwrap();
+		writeln!(f, "Some body content").unwrap();
+		drop(f);
+
+		let title = extract_issue_title_from_file(&md_file);
+		assert_eq!(title, Some("Test Issue Title".to_string()));
+		std::fs::remove_file(&md_file).unwrap();
+
+		// Test closed issue: - [x] Title <!--url-->
+		let md_file = temp_dir.join("test_issue_title_closed.md");
+		let mut f = std::fs::File::create(&md_file).unwrap();
+		writeln!(f, "- [x] Closed Issue <!--https://github.com/owner/repo/issues/456-->").unwrap();
+		drop(f);
+
+		let title = extract_issue_title_from_file(&md_file);
+		assert_eq!(title, Some("Closed Issue".to_string()));
+		std::fs::remove_file(&md_file).unwrap();
+
+		// Test typst format: - [ ] Title // url
+		let typ_file = temp_dir.join("test_issue_title.typ");
+		let mut f = std::fs::File::create(&typ_file).unwrap();
+		writeln!(f, "- [ ] Typst Issue Title // https://github.com/owner/repo/issues/789").unwrap();
+		drop(f);
+
+		let title = extract_issue_title_from_file(&typ_file);
+		assert_eq!(title, Some("Typst Issue Title".to_string()));
+		std::fs::remove_file(&typ_file).unwrap();
+
+		// Test file with no valid checkbox format
+		let invalid_file = temp_dir.join("test_issue_title_invalid.md");
+		let mut f = std::fs::File::create(&invalid_file).unwrap();
+		writeln!(f, "Just some regular content").unwrap();
+		drop(f);
+
+		let title = extract_issue_title_from_file(&invalid_file);
+		assert_eq!(title, None);
+		std::fs::remove_file(&invalid_file).unwrap();
 	}
 }
