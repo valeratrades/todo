@@ -111,8 +111,52 @@ impl From<&GitHubSubIssue> for OriginalSubIssue {
 	}
 }
 
-/// Target state after user edits - clean representation of what the issue should look like
+/// Complete semantic representation of an issue file.
+/// This is the source of truth - files are parsed into this and written from this.
 #[derive(Debug, PartialEq)]
+struct IssueFile {
+	/// Issue title
+	title: String,
+	/// GitHub issue URL
+	url: String,
+	/// Whether the issue is closed
+	closed: bool,
+	/// Whether this issue is owned by current user (false = immutable)
+	owned: bool,
+	/// Labels (empty if none)
+	labels: Vec<String>,
+	/// Issue body content
+	body: String,
+	/// Sub-issues in order
+	sub_issues: Vec<SubIssueEntry>,
+	/// Comments in order
+	comments: Vec<CommentEntry>,
+}
+
+/// A sub-issue entry in the file
+#[derive(Debug, PartialEq)]
+struct SubIssueEntry {
+	/// Title of the sub-issue
+	title: String,
+	/// Whether this sub-issue is closed
+	closed: bool,
+	/// GitHub URL if this is an existing sub-issue, None if new
+	url: Option<String>,
+}
+
+/// A comment entry in the file
+#[derive(Debug, PartialEq)]
+struct CommentEntry {
+	/// Comment body
+	body: String,
+	/// GitHub comment URL/ID if existing, None if new
+	url: Option<String>,
+	/// Whether this comment is owned by current user (false = immutable)
+	owned: bool,
+}
+
+// Legacy types used for GitHub sync - kept for compatibility
+#[derive(Debug)]
 struct TargetState {
 	issue_body: String,
 	/// Comments in order. None id = new comment to create
@@ -139,6 +183,249 @@ struct NewSubIssue {
 struct TargetComment {
 	id: Option<u64>,
 	body: String,
+}
+
+impl IssueFile {
+	/// Parse markdown content into an IssueFile.
+	/// Handles both tab and space indentation (normalizes to tabs internally).
+	fn parse_md(content: &str) -> Option<Self> {
+		let normalized = normalize_issue_indentation(content);
+		let mut lines = normalized.lines().peekable();
+
+		// Parse first line: `- [ ] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
+		let first_line = lines.next()?;
+		let (title, url, closed, owned) = Self::parse_issue_title_line_md(first_line)?;
+
+		let mut labels = Vec::new();
+		let mut body_lines = Vec::new();
+		let mut sub_issues = Vec::new();
+		let mut comments = Vec::new();
+		let mut current_comment: Option<(Option<String>, bool, Vec<String>)> = None; // (url, owned, body_lines)
+
+		// State tracking
+		let mut in_body = true;
+		let mut seen_sub_or_comment = false;
+
+		while let Some(line) = lines.next() {
+			// Check if this is an indented line (belongs to issue content)
+			let stripped = if let Some(s) = line.strip_prefix('\t') { s } else { line };
+
+			// Check for labels line
+			if in_body && stripped.starts_with("**Labels:**") {
+				let labels_text = stripped.strip_prefix("**Labels:**").unwrap_or("").trim();
+				labels = labels_text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+				continue;
+			}
+
+			// Check for comment marker
+			if stripped.starts_with("<!--") && stripped.contains("-->") {
+				// Flush previous comment if any
+				if let Some((url, owned, body_lines)) = current_comment.take() {
+					let body = body_lines.join("\n").trim().to_string();
+					if !body.is_empty() || url.is_some() {
+						comments.push(CommentEntry { body, url, owned });
+					}
+				}
+
+				let inner = stripped.strip_prefix("<!--").and_then(|s| s.split("-->").next()).unwrap_or("").trim();
+
+				if inner == "new comment" {
+					current_comment = Some((None, true, Vec::new()));
+					in_body = false;
+					seen_sub_or_comment = true;
+					continue;
+				} else if inner == "omitted" {
+					// Skip omitted marker
+					continue;
+				} else if inner.contains("#issuecomment-") {
+					let (is_immutable, url) = if let Some(rest) = inner.strip_prefix("immutable ") {
+						(true, rest.trim())
+					} else {
+						(false, inner)
+					};
+					current_comment = Some((Some(url.to_string()), !is_immutable, Vec::new()));
+					in_body = false;
+					seen_sub_or_comment = true;
+					continue;
+				}
+			}
+
+			// Check for sub-issue line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
+			if line.starts_with('\t') && stripped.starts_with("- [") {
+				// Flush previous comment if any
+				if let Some((url, owned, body_lines)) = current_comment.take() {
+					let body = body_lines.join("\n").trim().to_string();
+					if !body.is_empty() || url.is_some() {
+						comments.push(CommentEntry { body, url, owned });
+					}
+				}
+
+				if let Some((sub_title, sub_closed, sub_url)) = Self::parse_sub_issue_line_md(stripped) {
+					sub_issues.push(SubIssueEntry {
+						title: sub_title,
+						closed: sub_closed,
+						url: sub_url,
+					});
+					in_body = false;
+					seen_sub_or_comment = true;
+					continue;
+				}
+			}
+
+			// If we're collecting a comment body
+			if current_comment.is_some() {
+				let content_line = if line.starts_with('\t') { &line[1..] } else { line };
+				// For immutable comments (double-indented), strip another level
+				let content_line = content_line.strip_prefix('\t').unwrap_or(content_line);
+				current_comment.as_mut().unwrap().2.push(content_line.to_string());
+				continue;
+			}
+
+			// Otherwise, it's body content
+			if in_body && !seen_sub_or_comment {
+				let content_line = if line.starts_with('\t') { &line[1..] } else { line };
+				// For immutable body (double-indented), strip another level
+				let content_line = content_line.strip_prefix('\t').unwrap_or(content_line);
+				body_lines.push(content_line.to_string());
+			}
+		}
+
+		// Flush final comment if any
+		if let Some((url, owned, body_lines)) = current_comment.take() {
+			let body = body_lines.join("\n").trim().to_string();
+			if !body.is_empty() || url.is_some() {
+				comments.push(CommentEntry { body, url, owned });
+			}
+		}
+
+		let body = body_lines.join("\n").trim().to_string();
+
+		Some(IssueFile {
+			title,
+			url,
+			closed,
+			owned,
+			labels,
+			body,
+			sub_issues,
+			comments,
+		})
+	}
+
+	/// Parse the issue title line: `- [ ] Title <!--url-->`
+	fn parse_issue_title_line_md(line: &str) -> Option<(String, String, bool, bool)> {
+		// Check for checkbox
+		let (closed, rest) = if let Some(rest) = line.strip_prefix("- [ ] ") {
+			(false, rest)
+		} else if let Some(rest) = line.strip_prefix("- [x] ").or_else(|| line.strip_prefix("- [X] ")) {
+			(true, rest)
+		} else {
+			return None;
+		};
+
+		// Find the marker
+		let marker_start = rest.find("<!--")?;
+		let marker_end = rest.find("-->")?;
+		if marker_end <= marker_start {
+			return None;
+		}
+
+		let title = rest[..marker_start].trim().to_string();
+		let inner = rest[marker_start + 4..marker_end].trim();
+
+		let (owned, url) = if let Some(url) = inner.strip_prefix("immutable ") {
+			(false, url.trim().to_string())
+		} else {
+			(true, inner.to_string())
+		};
+
+		Some((title, url, closed, owned))
+	}
+
+	/// Parse a sub-issue line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
+	fn parse_sub_issue_line_md(line: &str) -> Option<(String, bool, Option<String>)> {
+		// Check for checkbox
+		let (closed, rest) = if let Some(rest) = line.strip_prefix("- [ ] ") {
+			(false, rest)
+		} else if let Some(rest) = line.strip_prefix("- [x] ").or_else(|| line.strip_prefix("- [X] ")) {
+			(true, rest)
+		} else {
+			return None;
+		};
+
+		// Check for sub marker
+		if let Some(marker_start) = rest.find("<!--sub ") {
+			let marker_end = rest.find("-->")?;
+			let title = rest[..marker_start].trim().to_string();
+			let url = rest[marker_start + 8..marker_end].trim().to_string();
+			Some((title, closed, Some(url)))
+		} else if !rest.contains("<!--") {
+			// New sub-issue (no marker)
+			let title = rest.trim().to_string();
+			if !title.is_empty() { Some((title, closed, None)) } else { None }
+		} else {
+			None
+		}
+	}
+
+	/// Format the IssueFile as markdown content
+	fn format_md(&self) -> String {
+		let mut content = String::new();
+
+		// Issue title line
+		let checked = if self.closed { "x" } else { " " };
+		if self.owned {
+			content.push_str(&format!("- [{}] {} <!--{}-->\n", checked, self.title, self.url));
+		} else {
+			content.push_str(&format!("- [{}] {} <!--immutable {}-->\n", checked, self.title, self.url));
+		}
+
+		// Labels
+		if !self.labels.is_empty() {
+			content.push_str(&format!("\t**Labels:** {}\n", self.labels.join(", ")));
+		}
+
+		// Body
+		if !self.body.is_empty() {
+			let indent = if self.owned { "\t" } else { "\t\t" };
+			for line in self.body.lines() {
+				content.push_str(&format!("{}{}\n", indent, line));
+			}
+		}
+
+		// Sub-issues
+		for sub in &self.sub_issues {
+			let sub_checked = if sub.closed { "x" } else { " " };
+			if let Some(url) = &sub.url {
+				content.push_str(&format!("\t- [{}] {} <!--sub {}-->\n", sub_checked, sub.title, url));
+			} else {
+				content.push_str(&format!("\t- [{}] {}\n", sub_checked, sub.title));
+			}
+		}
+
+		// Comments
+		for comment in &self.comments {
+			content.push('\n');
+			if let Some(url) = &comment.url {
+				if comment.owned {
+					content.push_str(&format!("\t<!--{}-->\n", url));
+				} else {
+					content.push_str(&format!("\t<!--immutable {}-->\n", url));
+				}
+			} else {
+				content.push_str("\t<!--new comment-->\n");
+			}
+
+			if !comment.body.is_empty() {
+				let indent = if comment.owned { "\t" } else { "\t\t" };
+				for line in comment.body.lines() {
+					content.push_str(&format!("{}{}\n", indent, line));
+				}
+			}
+		}
+
+		content
+	}
 }
 
 /// Parse a GitHub issue URL and extract owner, repo, and issue number.
@@ -1059,6 +1346,74 @@ fn unindent_body(body: &str) -> String {
 	body.lines().map(|line| line.strip_prefix('\t').unwrap_or(line)).collect::<Vec<_>>().join("\n")
 }
 
+/// Normalize issue content by converting space-based indentation to tab-based.
+/// This ensures content edited in editors that convert tabs to spaces can be properly parsed.
+///
+/// The function detects the first non-marker indented line to determine the space-per-indent ratio,
+/// then normalizes all indentation to tabs.
+fn normalize_issue_indentation(content: &str) -> String {
+	// Detect spaces-per-indent by finding the first indented line that starts with spaces
+	let spaces_per_indent = content
+		.lines()
+		.find_map(|line| {
+			if line.starts_with(' ') && !line.trim().is_empty() {
+				// Count leading spaces
+				let spaces = line.len() - line.trim_start_matches(' ').len();
+				// Common indent sizes: 2, 3, 4, 8
+				if spaces >= 2 {
+					Some(spaces.min(8)) // Cap at 8 to avoid issues with very deep indents
+				} else {
+					None
+				}
+			} else {
+				None
+			}
+		})
+		.unwrap_or(4); // Default to 4 spaces per indent if we can't detect
+
+	content
+		.lines()
+		.map(|line| {
+			if line.is_empty() {
+				return String::new();
+			}
+
+			// Count leading whitespace and convert to appropriate number of tabs
+			let mut chars = line.chars().peekable();
+			let mut space_count = 0;
+			let mut tab_count = 0;
+
+			while let Some(&ch) = chars.peek() {
+				match ch {
+					'\t' => {
+						tab_count += 1;
+						chars.next();
+					}
+					' ' => {
+						space_count += 1;
+						chars.next();
+					}
+					_ => break,
+				}
+			}
+
+			// Convert spaces to tabs
+			let extra_tabs = space_count / spaces_per_indent;
+			let total_tabs = tab_count + extra_tabs;
+			let remaining_spaces = space_count % spaces_per_indent;
+
+			// Reconstruct the line with normalized indentation
+			let rest: String = chars.collect();
+			let mut result = "\t".repeat(total_tabs);
+			// Keep any remaining spaces (less than one indent level)
+			result.push_str(&" ".repeat(remaining_spaces));
+			result.push_str(&rest);
+			result
+		})
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
 /// Marker type for parsed markdown markers
 #[derive(Debug, PartialEq)]
 enum MdMarkerType {
@@ -1160,6 +1515,9 @@ fn parse_md_marker(line: &str) -> Option<MdMarkerType> {
 /// New comments are marked with `<!--new comment-->`.
 /// New sub-issues are checkbox lines without URL markers (only after body section ends).
 fn parse_markdown_target(content: &str) -> TargetState {
+	// Normalize indentation first: convert spaces to tabs
+	let normalized_content = normalize_issue_indentation(content);
+
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut sub_issues: Vec<TargetSubIssue> = Vec::new();
@@ -1174,7 +1532,7 @@ fn parse_markdown_target(content: &str) -> TargetState {
 	// Track when we've seen at least one sub-issue or comment marker (body section ended)
 	let mut seen_sub_issue_or_comment = false;
 
-	for line in content.lines() {
+	for line in normalized_content.lines() {
 		// Strip one level of indentation for content parsing
 		let stripped_line = line.strip_prefix('\t').unwrap_or(line);
 
@@ -1404,6 +1762,9 @@ fn parse_typst_marker(line: &str) -> Option<TypstMarkerType> {
 /// New comments are marked with `// new comment`.
 /// New sub-issues are checkbox lines without URL markers (only after body section ends).
 fn parse_typst_target(content: &str) -> TargetState {
+	// Normalize indentation first: convert spaces to tabs
+	let normalized_content = normalize_issue_indentation(content);
+
 	let mut issue_body = String::new();
 	let mut comments: Vec<TargetComment> = Vec::new();
 	let mut sub_issues: Vec<TargetSubIssue> = Vec::new();
@@ -1418,7 +1779,7 @@ fn parse_typst_target(content: &str) -> TargetState {
 	// Track when we've seen at least one sub-issue or comment marker (body section ended)
 	let mut seen_sub_issue_or_comment = false;
 
-	for line in content.lines() {
+	for line in normalized_content.lines() {
 		// Strip one level of indentation for content parsing
 		let stripped_line = line.strip_prefix('\t').unwrap_or(line);
 
@@ -1762,17 +2123,28 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 	// Load metadata
 	let meta = load_issue_meta_from_path(issue_file_path)?;
 
-	// Read current content for comparison
+	// Parse original content into semantic structure for comparison
 	let original_content = std::fs::read_to_string(issue_file_path)?;
+	let original_issue = IssueFile::parse_md(&original_content);
 
 	// Open in editor (blocks until editor closes)
 	v_utils::io::open(issue_file_path)?;
 
-	// Read edited content
+	// Read edited content and parse into semantic structure
 	let edited_content = std::fs::read_to_string(issue_file_path)?;
+	let edited_issue = IssueFile::parse_md(&edited_content);
 
-	// Check if content changed and sync back to GitHub
-	if edited_content != original_content {
+	// Always write back the normalized content (parse → format round-trip)
+	// This ensures consistent formatting regardless of what the editor did
+	if let Some(ref issue) = edited_issue {
+		let normalized_content = issue.format_md();
+		if normalized_content != edited_content {
+			std::fs::write(issue_file_path, &normalized_content)?;
+		}
+	}
+
+	// Check if semantic content changed and sync back to GitHub
+	if edited_issue != original_issue {
 		sync_local_issue_to_github(settings, &owner, &repo, &meta, &edited_content).await?;
 
 		// Re-fetch and update local file and metadata to reflect the synced state
@@ -2761,5 +3133,105 @@ mod tests {
 
 		// Empty title - falls back to just number
 		assert_eq!(format_issue_filename(789, "", &Extension::Md), "789.md");
+	}
+
+	#[test]
+	fn test_issue_file_parse_format_roundtrip() {
+		let md = "- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
+\t**Labels:** bug, help wanted
+\tIssue body text
+\t- [ ] Sub-issue 1 <!--sub https://github.com/owner/repo/issues/124-->
+\t- [x] Sub-issue 2 <!--sub https://github.com/owner/repo/issues/125-->
+
+\t<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+\tA comment
+";
+		let parsed = IssueFile::parse_md(md).unwrap();
+		assert_eq!(parsed.title, "Test Issue");
+		assert_eq!(parsed.url, "https://github.com/owner/repo/issues/123");
+		assert!(!parsed.closed);
+		assert!(parsed.owned);
+		assert_eq!(parsed.labels, vec!["bug", "help wanted"]);
+		assert_eq!(parsed.body, "Issue body text");
+		assert_eq!(parsed.sub_issues.len(), 2);
+		assert_eq!(parsed.comments.len(), 1);
+
+		// Round-trip should produce equivalent structure
+		let formatted = parsed.format_md();
+		let reparsed = IssueFile::parse_md(&formatted).unwrap();
+		assert_eq!(parsed, reparsed);
+	}
+
+	#[test]
+	fn test_issue_file_parse_space_indentation() {
+		// Content with 4-space indentation (common editor behavior)
+		let md = "- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
+    **Labels:** bug
+    Issue body text
+    - [ ] Existing sub <!--sub https://github.com/owner/repo/issues/124-->
+    - [ ] New sub-issue
+
+    <!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+    A comment
+";
+		let parsed = IssueFile::parse_md(md).unwrap();
+		assert_eq!(parsed.title, "Test Issue");
+		assert_eq!(parsed.labels, vec!["bug"]);
+		assert_eq!(parsed.body, "Issue body text");
+		assert_eq!(parsed.sub_issues.len(), 2);
+		// First is existing (has URL), second is new (no URL)
+		assert!(parsed.sub_issues[0].url.is_some());
+		assert!(parsed.sub_issues[1].url.is_none());
+		assert_eq!(parsed.sub_issues[1].title, "New sub-issue");
+		assert_eq!(parsed.comments.len(), 1);
+
+		// Format should normalize to tabs
+		let formatted = parsed.format_md();
+		assert!(formatted.contains("\t**Labels:**"));
+		assert!(formatted.contains("\tIssue body text"));
+		assert!(formatted.contains("\t- [ ] New sub-issue"));
+	}
+
+	#[test]
+	fn test_issue_file_parse_new_sub_issue_with_spaces() {
+		// This is the original bug case: space-indented new sub-issue
+		let md = "- [ ] v2_interface <!--https://github.com/valeratrades/discretionary_engine/issues/77-->
+    - for _strategy
+        `new`:
+            defines the _target size_.
+    - [ ] percent specification for protocols
+        1. extend [CompactFormat](v_utils::macros::CompactFormat)
+";
+		let parsed = IssueFile::parse_md(md).unwrap();
+		assert_eq!(parsed.title, "v2_interface");
+
+		// Should have detected the new sub-issue
+		assert_eq!(parsed.sub_issues.len(), 1);
+		assert_eq!(parsed.sub_issues[0].title, "percent specification for protocols");
+		assert!(parsed.sub_issues[0].url.is_none()); // It's a new sub-issue
+	}
+
+	#[test]
+	fn test_issue_file_format_immutable() {
+		let issue = IssueFile {
+			title: "Test".to_string(),
+			url: "https://github.com/owner/repo/issues/1".to_string(),
+			closed: false,
+			owned: false, // Not owned = immutable
+			labels: vec![],
+			body: "Some body".to_string(),
+			sub_issues: vec![],
+			comments: vec![CommentEntry {
+				body: "A comment".to_string(),
+				url: Some("https://github.com/owner/repo/issues/1#issuecomment-100".to_string()),
+				owned: false, // Not owned
+			}],
+		};
+
+		let md = issue.format_md();
+		assert!(md.contains("<!--immutable https://github.com/owner/repo/issues/1-->"));
+		assert!(md.contains("\t\tSome body")); // Double-indented for immutable
+		assert!(md.contains("<!--immutable https://github.com/owner/repo/issues/1#issuecomment-100-->"));
+		assert!(md.contains("\t\tA comment")); // Double-indented for immutable comment
 	}
 }
