@@ -358,6 +358,7 @@ fn extract_issue_title_from_file(path: &Path) -> Option<String> {
 /// - Owner pattern: "owner" -> searches in owner/ directory
 /// - Owner/number: "owner/123" -> specific issue
 /// - Issue title: "certainty" -> searches for issues with title containing "certainty"
+/// - Sanitized title: "compact format ext" -> matches "compact_format_ext" in filename
 fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 	use std::process::Command;
 
@@ -379,6 +380,8 @@ fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 	let mut matches = Vec::new();
 
 	let pattern_lower = pattern.to_lowercase();
+	// Also try sanitized version for matching filenames
+	let pattern_sanitized = sanitize_title_for_filename(pattern).to_lowercase();
 
 	for line in all_files.lines() {
 		let file_path = line.trim();
@@ -401,10 +404,12 @@ fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 		// - The issue number (filename without extension)
 		// - The owner (first path component)
 		// - The full relative path
+		// - The sanitized pattern in filename
 		// - The issue title (from first line of the file)
 		if let Some(file_stem) = path.file_stem() {
 			let file_stem_str = file_stem.to_string_lossy().to_lowercase();
-			if file_stem_str.contains(&pattern_lower) || relative_lower.contains(&pattern_lower) {
+			// Try both original pattern and sanitized pattern
+			if file_stem_str.contains(&pattern_lower) || relative_lower.contains(&pattern_lower) || (!pattern_sanitized.is_empty() && file_stem_str.contains(&pattern_sanitized)) {
 				matches.push(path);
 				continue;
 			}
@@ -1969,11 +1974,11 @@ fn find_local_issue_for_touch(touch_path: &TouchPath, extension: &Extension) -> 
 	// Search for files matching the issue title (last in chain)
 	let issue_title = touch_path.issue_chain.last()?;
 	let ext = extension.as_str();
-	let sanitized_title = sanitize_title_for_filename(issue_title);
+	// Sanitize and lowercase for comparison
+	let sanitized_title_lower = sanitize_title_for_filename(issue_title).to_lowercase();
 
-	// Use search_issue_files to find matches
-	// We search for the issue title and filter by extension and project
-	if let Ok(matches) = search_issue_files(issue_title) {
+	// Search using the sanitized title
+	if let Ok(matches) = search_issue_files(&sanitized_title_lower) {
 		// Filter matches to only those in the correct project directory and with correct extension
 		for path in matches {
 			// Check if it's in the right project directory
@@ -1987,9 +1992,12 @@ fn find_local_issue_for_touch(touch_path: &TouchPath, extension: &Extension) -> 
 			}
 
 			// Check the filename contains the sanitized title
+			// Filename format: {number}_-_{sanitized_title}.{ext}
 			if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-				// Filename format: {number}_-_{sanitized_title}
-				if stem.contains(&sanitized_title) || stem == issue_title {
+				let stem_lower = stem.to_lowercase();
+				// Extract the title part after "_-_" if present
+				let title_part = stem_lower.split("_-_").nth(1).unwrap_or(&stem_lower);
+				if title_part == sanitized_title_lower {
 					return Some(path);
 				}
 			}
@@ -2084,10 +2092,7 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 				None => return Err(eyre!("No issue selected")),
 			}
 		}
-		1 => {
-			eprintln!("Found: {:?}", matches[0]);
-			matches[0].clone()
-		}
+		1 => matches[0].clone(),
 		_ => {
 			// Multiple matches - open fzf to choose
 			match choose_issue_with_fzf(&matches, input)? {
