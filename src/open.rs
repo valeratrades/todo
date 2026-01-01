@@ -194,29 +194,71 @@ fn is_github_issue_url(s: &str) -> bool {
 	s.contains("github.com/") && s.contains("/issues/")
 }
 
+/// Sanitize a title for use in filenames.
+/// Converts spaces to underscores and removes special characters.
+fn sanitize_title_for_filename(title: &str) -> String {
+	title
+		.chars()
+		.map(|c| {
+			if c.is_alphanumeric() || c == '-' || c == '_' {
+				c
+			} else if c == ' ' {
+				'_'
+			} else {
+				// Skip special characters
+				'\0'
+			}
+		})
+		.filter(|&c| c != '\0')
+		.collect::<String>()
+		.trim_matches('_')
+		.to_string()
+}
+
+/// Format an issue filename from number and title.
+/// Format: {number}_-_{sanitized_title}.{ext}
+fn format_issue_filename(issue_number: u64, title: &str, extension: &Extension) -> String {
+	let sanitized = sanitize_title_for_filename(title);
+	if sanitized.is_empty() {
+		format!("{}.{}", issue_number, extension.as_str())
+	} else {
+		format!("{}_-_{}.{}", issue_number, sanitized, extension.as_str())
+	}
+}
+
 /// Get the path for an issue file in XDG_DATA.
-/// Structure: issues/{owner}/{issue_number}.{ext}
-/// If the issue has sub-issues, a directory {owner}/{issue_number}/ will contain them.
-fn get_issue_file_path(owner: &str, issue_number: u64, extension: &Extension, parent_issue: Option<u64>) -> PathBuf {
-	let base = issues_dir().join(owner);
+/// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}
+/// For sub-issues: issues/{owner}/{repo}/{parent_number}_-_{parent_title}/{number}_-_{title}.{ext}
+fn get_issue_file_path(owner: &str, repo: &str, issue_number: u64, title: &str, extension: &Extension, parent_issue: Option<(u64, &str)>) -> PathBuf {
+	let base = issues_dir().join(owner).join(repo);
+	let filename = format_issue_filename(issue_number, title, extension);
 	match parent_issue {
-		None => base.join(format!("{}.{}", issue_number, extension.as_str())),
-		Some(parent) => base.join(parent.to_string()).join(format!("{}.{}", issue_number, extension.as_str())),
+		None => base.join(filename),
+		Some((parent_num, parent_title)) => {
+			let parent_dir = format!("{}_-_{}", parent_num, sanitize_title_for_filename(parent_title));
+			base.join(parent_dir).join(filename)
+		}
 	}
 }
 
 /// Get the directory path for sub-issues of a given issue.
-/// Structure: issues/{owner}/{issue_number}/
-fn get_sub_issues_dir(owner: &str, issue_number: u64) -> PathBuf {
-	issues_dir().join(owner).join(issue_number.to_string())
+/// Structure: issues/{owner}/{repo}/{number}_-_{title}/
+fn get_sub_issues_dir(owner: &str, repo: &str, issue_number: u64, title: &str) -> PathBuf {
+	let dir_name = format!("{}_-_{}", issue_number, sanitize_title_for_filename(title));
+	issues_dir().join(owner).join(repo).join(dir_name)
 }
 
-/// Stored metadata about an issue file for syncing
-#[derive(Debug, Deserialize, Serialize)]
-struct IssueFileMeta {
-	owner: String,
-	repo: String,
+/// Get the project directory path (where meta.json lives).
+/// Structure: issues/{owner}/{repo}/
+fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
+	issues_dir().join(owner).join(repo)
+}
+
+/// Stored metadata for a single issue
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct IssueMetaEntry {
 	issue_number: u64,
+	title: String,
 	extension: String,
 	/// Original issue body (for diffing)
 	original_issue_body: Option<String>,
@@ -224,12 +266,64 @@ struct IssueFileMeta {
 	original_comments: Vec<OriginalComment>,
 	/// Original sub-issues with their state
 	original_sub_issues: Vec<OriginalSubIssue>,
+	/// Parent issue number if this is a sub-issue
+	parent_issue: Option<u64>,
 }
 
-/// Get the metadata file path for an issue (stored alongside the issue file)
-fn get_issue_meta_path(issue_file_path: &Path) -> PathBuf {
-	let file_name = issue_file_path.file_stem().unwrap_or_default().to_string_lossy();
-	issue_file_path.with_file_name(format!(".{}.meta.json", file_name))
+/// Project-level metadata file containing all issues
+/// Stored at: issues/{owner}/{repo}/.meta.json
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct ProjectMeta {
+	owner: String,
+	repo: String,
+	/// Map from issue number to its metadata
+	issues: std::collections::HashMap<u64, IssueMetaEntry>,
+}
+
+/// Get the metadata file path for a project
+fn get_project_meta_path(owner: &str, repo: &str) -> PathBuf {
+	get_project_dir(owner, repo).join(".meta.json")
+}
+
+/// Load project metadata, creating empty if not exists
+fn load_project_meta(owner: &str, repo: &str) -> ProjectMeta {
+	let meta_path = get_project_meta_path(owner, repo);
+	match std::fs::read_to_string(&meta_path) {
+		Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| ProjectMeta {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+			issues: std::collections::HashMap::new(),
+		}),
+		Err(_) => ProjectMeta {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+			issues: std::collections::HashMap::new(),
+		},
+	}
+}
+
+/// Save project metadata
+fn save_project_meta(meta: &ProjectMeta) -> Result<()> {
+	let meta_path = get_project_meta_path(&meta.owner, &meta.repo);
+	if let Some(parent) = meta_path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+	let content = serde_json::to_string_pretty(meta)?;
+	std::fs::write(&meta_path, content)?;
+	Ok(())
+}
+
+/// Get metadata for a specific issue from the project meta
+fn get_issue_meta(owner: &str, repo: &str, issue_number: u64) -> Option<IssueMetaEntry> {
+	let project_meta = load_project_meta(owner, repo);
+	project_meta.issues.get(&issue_number).cloned()
+}
+
+/// Save metadata for a specific issue to the project meta
+fn save_issue_meta(owner: &str, repo: &str, entry: IssueMetaEntry) -> Result<()> {
+	let mut project_meta = load_project_meta(owner, repo);
+	project_meta.issues.insert(entry.issue_number, entry);
+	save_project_meta(&project_meta)
 }
 
 /// Extract the issue title from the first line of an issue file.
@@ -360,20 +454,31 @@ fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result<Opt
 	}
 }
 
-/// Parse issue metadata from a local issue file's meta file
-fn load_issue_meta(issue_file_path: &Path) -> Result<IssueFileMeta> {
-	let meta_path = get_issue_meta_path(issue_file_path);
-	let content = std::fs::read_to_string(&meta_path).map_err(|_| eyre!("No metadata found for issue file: {:?}", issue_file_path))?;
-	let meta: IssueFileMeta = serde_json::from_str(&content)?;
-	Ok(meta)
-}
+/// Load issue metadata from file path by extracting owner/repo/issue from the path
+fn load_issue_meta_from_path(issue_file_path: &Path) -> Result<IssueMetaEntry> {
+	// Extract owner, repo, and issue number from path
+	// Path format: issues/{owner}/{repo}/{number}_-_{title}.{ext}
+	let issues_dir = issues_dir();
+	let relative = issue_file_path.strip_prefix(&issues_dir).map_err(|_| eyre!("Issue file not in issues directory"))?;
+	let components: Vec<&str> = relative.iter().filter_map(|c| c.to_str()).collect();
 
-/// Save issue metadata alongside the issue file
-fn save_issue_meta(issue_file_path: &Path, meta: &IssueFileMeta) -> Result<()> {
-	let meta_path = get_issue_meta_path(issue_file_path);
-	let content = serde_json::to_string_pretty(meta)?;
-	std::fs::write(&meta_path, content)?;
-	Ok(())
+	if components.len() < 3 {
+		return Err(eyre!("Invalid issue file path structure: {:?}", issue_file_path));
+	}
+
+	let owner = components[0];
+	let repo = components[1];
+
+	// Extract issue number from filename (format: {number}_-_{title}.{ext} or {number}.{ext})
+	let filename = issue_file_path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| eyre!("Invalid filename"))?;
+	let issue_number: u64 = filename
+		.split("_-_")
+		.next()
+		.unwrap_or(filename)
+		.parse()
+		.map_err(|_| eyre!("Cannot parse issue number from filename: {}", filename))?;
+
+	get_issue_meta(owner, repo, issue_number).ok_or_else(|| eyre!("No metadata found for issue #{} in {}/{}", issue_number, owner, repo))
 }
 
 async fn fetch_authenticated_user(settings: &LiveSettings) -> Result<String> {
@@ -1441,7 +1546,7 @@ fn parse_typst_target(content: &str) -> TargetState {
 }
 
 /// Sync changes from a local issue file back to GitHub using stored metadata.
-async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMeta, edited_content: &str) -> Result<()> {
+async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: &str, meta: &IssueMetaEntry, edited_content: &str) -> Result<()> {
 	// Step 1: Parse into target state
 	let target = match meta.extension.as_str() {
 		"md" => parse_markdown_target(edited_content),
@@ -1457,7 +1562,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
 	if target.issue_body != original_body {
 		println!("Updating issue body...");
-		update_github_issue_body(settings, &meta.owner, &meta.repo, meta.issue_number, &target.issue_body).await?;
+		update_github_issue_body(settings, owner, repo, meta.issue_number, &target.issue_body).await?;
 		updates += 1;
 	}
 
@@ -1469,7 +1574,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 	for orig in &meta.original_comments {
 		if !target_ids.contains(&orig.id) {
 			println!("Deleting comment {}...", orig.id);
-			delete_github_comment(settings, &meta.owner, &meta.repo, orig.id).await?;
+			delete_github_comment(settings, owner, repo, orig.id).await?;
 			deletes += 1;
 		}
 	}
@@ -1482,7 +1587,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 				let original = meta.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
 				if tc.body != original {
 					println!("Updating comment {}...", id);
-					update_github_comment(settings, &meta.owner, &meta.repo, id, &tc.body).await?;
+					update_github_comment(settings, owner, repo, id, &tc.body).await?;
 					updates += 1;
 				}
 			}
@@ -1494,7 +1599,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 				// New comment
 				if !tc.body.is_empty() {
 					println!("Creating new comment...");
-					create_github_comment(settings, &meta.owner, &meta.repo, meta.issue_number, &tc.body).await?;
+					create_github_comment(settings, owner, repo, meta.issue_number, &tc.body).await?;
 					creates += 1;
 				}
 			}
@@ -1510,7 +1615,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 			if ts.closed != orig_closed {
 				let new_state = if ts.closed { "closed" } else { "open" };
 				println!("Updating sub-issue #{} to {}...", ts.number, new_state);
-				update_github_issue_state(settings, &meta.owner, &meta.repo, ts.number, new_state).await?;
+				update_github_issue_state(settings, owner, repo, ts.number, new_state).await?;
 				sub_issue_updates += 1;
 			}
 		}
@@ -1522,15 +1627,15 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, meta: &IssueFileMet
 		println!("Creating sub-issue '{}'...", ns.title);
 
 		// Create the issue on GitHub
-		let created = create_github_issue(settings, &meta.owner, &meta.repo, &ns.title, "").await?;
+		let created = create_github_issue(settings, owner, repo, &ns.title, "").await?;
 		println!("Created sub-issue #{}: {}", created.number, created.html_url);
 
 		// Add as sub-issue to the parent
-		add_sub_issue(settings, &meta.owner, &meta.repo, meta.issue_number, created.number).await?;
+		add_sub_issue(settings, owner, repo, meta.issue_number, created.number).await?;
 
 		// If the new sub-issue should be closed, close it
 		if ns.closed {
-			update_github_issue_state(settings, &meta.owner, &meta.repo, created.number, "closed").await?;
+			update_github_issue_state(settings, owner, repo, created.number, "closed").await?;
 		}
 
 		new_sub_issues_created += 1;
@@ -1571,7 +1676,7 @@ async fn fetch_and_store_issue(
 	issue_number: u64,
 	extension: &Extension,
 	render_closed: bool,
-	parent_issue: Option<u64>,
+	parent_issue: Option<(u64, String)>,
 ) -> Result<PathBuf> {
 	// Fetch issue data in parallel
 	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
@@ -1582,7 +1687,8 @@ async fn fetch_and_store_issue(
 	)?;
 
 	// Determine file path
-	let issue_file_path = get_issue_file_path(owner, issue_number, extension, parent_issue);
+	let parent_info = parent_issue.as_ref().map(|(num, title)| (*num, title.as_str()));
+	let issue_file_path = get_issue_file_path(owner, repo, issue_number, &issue.title, extension, parent_info);
 
 	// Create parent directories
 	if let Some(parent) = issue_file_path.parent() {
@@ -1599,35 +1705,61 @@ async fn fetch_and_store_issue(
 	std::fs::write(&issue_file_path, &content)?;
 
 	// Save metadata for syncing
-	let meta = IssueFileMeta {
-		owner: owner.to_string(),
-		repo: repo.to_string(),
+	let meta_entry = IssueMetaEntry {
 		issue_number,
+		title: issue.title.clone(),
 		extension: extension.as_str().to_string(),
 		original_issue_body: issue.body.clone(),
 		original_comments: comments.iter().map(OriginalComment::from).collect(),
 		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
+		parent_issue: parent_issue.as_ref().map(|(num, _)| *num),
 	};
-	save_issue_meta(&issue_file_path, &meta)?;
+	save_issue_meta(owner, repo, meta_entry)?;
 
 	// If there are sub-issues, create a directory and recursively fetch them
 	if !sub_issues.is_empty() {
-		let sub_dir = get_sub_issues_dir(owner, issue_number);
+		let sub_dir = get_sub_issues_dir(owner, repo, issue_number, &issue.title);
 		std::fs::create_dir_all(&sub_dir)?;
 
 		for sub in &sub_issues {
 			// Recursively fetch sub-issue (use Box::pin for recursive async)
-			Box::pin(fetch_and_store_issue(settings, owner, repo, sub.number, extension, render_closed, Some(issue_number))).await?;
+			Box::pin(fetch_and_store_issue(
+				settings,
+				owner,
+				repo,
+				sub.number,
+				extension,
+				render_closed,
+				Some((issue_number, issue.title.clone())),
+			))
+			.await?;
 		}
 	}
 
 	Ok(issue_file_path)
 }
 
+/// Extract owner and repo from issue file path
+/// Path format: issues/{owner}/{repo}/...
+fn extract_owner_repo_from_path(issue_file_path: &Path) -> Result<(String, String)> {
+	let issues_dir = issues_dir();
+	let relative = issue_file_path.strip_prefix(&issues_dir).map_err(|_| eyre!("Issue file not in issues directory"))?;
+	let components: Vec<&str> = relative.iter().filter_map(|c| c.to_str()).collect();
+
+	if components.len() < 2 {
+		return Err(eyre!("Invalid issue file path structure: {:?}", issue_file_path));
+	}
+
+	Ok((components[0].to_string(), components[1].to_string()))
+}
+
 /// Open a local issue file, let user edit, then sync changes back to GitHub.
 async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Result<()> {
+	// Extract owner and repo from path
+	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
+
 	// Load metadata
-	let meta = load_issue_meta(issue_file_path)?;
+	let meta = load_issue_meta_from_path(issue_file_path)?;
 
 	// Read current content for comparison
 	let original_content = std::fs::read_to_string(issue_file_path)?;
@@ -1640,7 +1772,7 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 
 	// Check if content changed and sync back to GitHub
 	if edited_content != original_content {
-		sync_local_issue_to_github(settings, &meta, &edited_content).await?;
+		sync_local_issue_to_github(settings, &owner, &repo, &meta, &edited_content).await?;
 
 		// Re-fetch and update local file and metadata to reflect the synced state
 		println!("Refreshing local issue file from GitHub...");
@@ -1649,10 +1781,13 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 			_ => Extension::Md,
 		};
 
-		// Determine if this is a sub-issue by checking the path structure
-		let parent_issue = issue_file_path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).and_then(|s| s.parse::<u64>().ok());
+		// Determine parent issue info if this is a sub-issue
+		let parent_issue = meta.parent_issue.and_then(|parent_num| {
+			// Get parent's title from meta
+			get_issue_meta(&owner, &repo, parent_num).map(|parent_meta| (parent_num, parent_meta.title))
+		});
 
-		fetch_and_store_issue(settings, &meta.owner, &meta.repo, meta.issue_number, &extension, false, parent_issue).await?;
+		fetch_and_store_issue(settings, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
 	} else {
 		println!("No changes made.");
 	}
@@ -1739,7 +1874,8 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 	println!("Access confirmed.");
 
 	// Step 2: Validate parent issues exist (all except the last one in the chain)
-	let mut parent_issue_numbers: Vec<u64> = Vec::new();
+	// Store both number and title for each parent
+	let mut parent_issues: Vec<(u64, String)> = Vec::new();
 
 	if touch_path.issue_chain.len() > 1 {
 		println!("Validating parent issue chain...");
@@ -1750,14 +1886,16 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 			match issue_number {
 				Some(num) => {
 					println!("  Found parent issue #{}: {}", num, parent_title);
-					parent_issue_numbers.push(num);
+					parent_issues.push((num, parent_title.clone()));
 				}
 				None => {
 					// If not found by title, try parsing as issue number
 					if let Ok(num) = parent_title.parse::<u64>() {
 						if issue_exists(settings, owner, repo, num).await? {
 							println!("  Found parent issue #{}", num);
-							parent_issue_numbers.push(num);
+							// Fetch the actual title from GitHub
+							let issue = fetch_github_issue(settings, owner, repo, num).await?;
+							parent_issues.push((num, issue.title));
 						} else {
 							return Err(eyre!(
 								"Parent issue '{}' (position {} in chain) does not exist on GitHub. Please create parent issues first.",
@@ -1786,14 +1924,14 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 	println!("Created issue #{}: {}", created.number, created.html_url);
 
 	// Step 5: If there are parent issues, add as sub-issue to the immediate parent
-	if let Some(&parent_number) = parent_issue_numbers.last() {
+	if let Some((parent_number, _)) = parent_issues.last() {
 		println!("Adding as sub-issue to #{}...", parent_number);
-		add_sub_issue(settings, owner, repo, parent_number, created.number).await?;
+		add_sub_issue(settings, owner, repo, *parent_number, created.number).await?;
 		println!("Sub-issue relationship created.");
 	}
 
 	// Step 6: Fetch and store the newly created issue locally (like normal flow)
-	let parent_issue = parent_issue_numbers.last().copied();
+	let parent_issue = parent_issues.last().cloned();
 	let issue_file_path = fetch_and_store_issue(settings, owner, repo, created.number, extension, false, parent_issue).await?;
 
 	println!("Stored issue at: {:?}", issue_file_path);
@@ -1806,27 +1944,24 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 fn find_local_issue_for_touch(touch_path: &TouchPath, extension: &Extension) -> Option<PathBuf> {
 	let issues_dir = issues_dir();
 
-	// Build the expected path based on the issue chain
-	// For a simple issue: issues/{owner}/{issue_title}.{ext}
-	// For sub-issues, we need to find by searching since we don't know the issue numbers
-
-	// First, try to find by searching in the owner directory
-	let owner_dir = issues_dir.join(&touch_path.owner);
-	if !owner_dir.exists() {
+	// Path structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}
+	let project_dir = issues_dir.join(&touch_path.owner).join(&touch_path.repo);
+	if !project_dir.exists() {
 		return None;
 	}
 
 	// Search for files matching the issue title (last in chain)
 	let issue_title = touch_path.issue_chain.last()?;
 	let ext = extension.as_str();
+	let sanitized_title = sanitize_title_for_filename(issue_title);
 
 	// Use search_issue_files to find matches
-	// We search for the issue title and filter by extension
+	// We search for the issue title and filter by extension and project
 	if let Ok(matches) = search_issue_files(issue_title) {
-		// Filter matches to only those in the correct owner directory and with correct extension
+		// Filter matches to only those in the correct project directory and with correct extension
 		for path in matches {
-			// Check if it's in the right owner directory
-			if !path.starts_with(&owner_dir) {
+			// Check if it's in the right project directory
+			if !path.starts_with(&project_dir) {
 				continue;
 			}
 
@@ -1835,9 +1970,10 @@ fn find_local_issue_for_touch(touch_path: &TouchPath, extension: &Extension) -> 
 				continue;
 			}
 
-			// Check the filename matches (without extension)
+			// Check the filename contains the sanitized title
 			if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-				if stem == issue_title {
+				// Filename format: {number}_-_{sanitized_title}
+				if stem.contains(&sanitized_title) || stem == issue_title {
 					return Some(path);
 				}
 			}
@@ -1912,14 +2048,22 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 
 		let issue_file_path = match matches.len() {
 			0 => {
-				return Err(eyre!("No issue files found matching pattern: {}", input));
+				// No matches - open fzf with all files and use input as initial query
+				let all_files = search_issue_files("")?;
+				if all_files.is_empty() {
+					return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
+				}
+				match choose_issue_with_fzf(&all_files, input)? {
+					Some(path) => path,
+					None => return Err(eyre!("No issue selected")),
+				}
 			}
 			1 => {
-				println!("Found: {:?}", matches[0]);
+				eprintln!("Found: {:?}", matches[0]);
 				matches[0].clone()
 			}
 			_ => {
-				println!("Found {} matches. Opening fzf to choose:", matches.len());
+				// Multiple matches - open fzf to choose
 				match choose_issue_with_fzf(&matches, input)? {
 					Some(path) => path,
 					None => return Err(eyre!("No issue selected")),
@@ -2563,5 +2707,37 @@ mod tests {
 		let title = extract_issue_title_from_file(&invalid_file);
 		assert_eq!(title, None);
 		std::fs::remove_file(&invalid_file).unwrap();
+	}
+
+	#[test]
+	fn test_sanitize_title_for_filename() {
+		// Basic case - spaces to underscores
+		assert_eq!(sanitize_title_for_filename("hello world"), "hello_world");
+
+		// Special characters removed
+		assert_eq!(sanitize_title_for_filename("test: this & that!"), "test_this__that");
+
+		// Dashes and underscores preserved
+		assert_eq!(sanitize_title_for_filename("my-issue_name"), "my-issue_name");
+
+		// Numbers preserved
+		assert_eq!(sanitize_title_for_filename("issue 123"), "issue_123");
+
+		// Leading/trailing underscores trimmed
+		assert_eq!(sanitize_title_for_filename(" leading space"), "leading_space");
+		assert_eq!(sanitize_title_for_filename("trailing space "), "trailing_space");
+
+		// Complex case
+		assert_eq!(sanitize_title_for_filename("Add [feature]: user auth!"), "Add_feature_user_auth");
+	}
+
+	#[test]
+	fn test_format_issue_filename() {
+		// With title
+		assert_eq!(format_issue_filename(123, "my issue", &Extension::Md), "123_-_my_issue.md");
+		assert_eq!(format_issue_filename(456, "another-issue", &Extension::Typ), "456_-_another-issue.typ");
+
+		// Empty title - falls back to just number
+		assert_eq!(format_issue_filename(789, "", &Extension::Md), "789.md");
 	}
 }
