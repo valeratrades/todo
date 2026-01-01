@@ -892,7 +892,6 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 	// Body (indented under the issue)
 	if let Some(body) = &issue.body {
 		if !body.is_empty() {
-			content.push('\n');
 			if issue_owned {
 				for line in body.lines() {
 					content.push_str(&format!("\t{}\n", line));
@@ -908,7 +907,6 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 
 	// Sub-issues (indented under the issue, after body)
 	if !sub_issues.is_empty() {
-		content.push('\n');
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
@@ -996,7 +994,6 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 	// Body - convert markdown to typst basics (indented under the issue)
 	if let Some(body) = &issue.body {
 		if !body.is_empty() {
-			content.push('\n');
 			let converted = convert_markdown_to_typst(body);
 			if issue_owned {
 				for line in converted.lines() {
@@ -1013,7 +1010,6 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 
 	// Sub-issues (indented under the issue, after body)
 	if !sub_issues.is_empty() {
-		content.push('\n');
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
@@ -1787,7 +1783,27 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 			get_issue_meta(&owner, &repo, parent_num).map(|parent_meta| (parent_num, parent_meta.title))
 		});
 
-		fetch_and_store_issue(settings, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
+		// Store the old path before re-fetching
+		let old_path = issue_file_path.to_path_buf();
+
+		// Re-fetch creates file with potentially new title
+		let new_path = fetch_and_store_issue(settings, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
+
+		// If the path changed (title was renamed), delete the old file
+		if old_path != new_path && old_path.exists() {
+			println!("Issue renamed, removing old file: {:?}", old_path);
+			std::fs::remove_file(&old_path)?;
+
+			// Also clean up old sub-issues directory if it exists and is now empty/orphaned
+			let old_sub_dir = old_path.with_extension("");
+			if old_sub_dir.is_dir() {
+				// The sub-issues would have been re-fetched under the new parent directory
+				// so we can safely remove the old one
+				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
+					eprintln!("Warning: could not remove old sub-issues directory: {}", e);
+				}
+			}
+		}
 	} else {
 		println!("No changes made.");
 	}
@@ -2042,38 +2058,47 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 
 		// Open the local issue file for editing
 		open_local_issue(settings, &issue_file_path).await?;
-	} else {
-		// Local search mode: find and open existing issue file
-		let matches = search_issue_files(input)?;
-
-		let issue_file_path = match matches.len() {
-			0 => {
-				// No matches - open fzf with all files and use input as initial query
-				let all_files = search_issue_files("")?;
-				if all_files.is_empty() {
-					return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
-				}
-				match choose_issue_with_fzf(&all_files, input)? {
-					Some(path) => path,
-					None => return Err(eyre!("No issue selected")),
-				}
-			}
-			1 => {
-				eprintln!("Found: {:?}", matches[0]);
-				matches[0].clone()
-			}
-			_ => {
-				// Multiple matches - open fzf to choose
-				match choose_issue_with_fzf(&matches, input)? {
-					Some(path) => path,
-					None => return Err(eyre!("No issue selected")),
-				}
-			}
-		};
-
-		// Open the local issue file for editing
-		open_local_issue(settings, &issue_file_path).await?;
+		return Ok(());
 	}
+
+	// Check if input is an existing file path (absolute or relative)
+	let input_path = Path::new(input);
+	if input_path.exists() && input_path.is_file() {
+		// Direct file path - open it
+		open_local_issue(settings, input_path).await?;
+		return Ok(());
+	}
+
+	// Local search mode: find and open existing issue file
+	let matches = search_issue_files(input)?;
+
+	let issue_file_path = match matches.len() {
+		0 => {
+			// No matches - open fzf with all files and use input as initial query
+			let all_files = search_issue_files("")?;
+			if all_files.is_empty() {
+				return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
+			}
+			match choose_issue_with_fzf(&all_files, input)? {
+				Some(path) => path,
+				None => return Err(eyre!("No issue selected")),
+			}
+		}
+		1 => {
+			eprintln!("Found: {:?}", matches[0]);
+			matches[0].clone()
+		}
+		_ => {
+			// Multiple matches - open fzf to choose
+			match choose_issue_with_fzf(&matches, input)? {
+				Some(path) => path,
+				None => return Err(eyre!("No issue selected")),
+			}
+		}
+	};
+
+	// Open the local issue file for editing
+	open_local_issue(settings, &issue_file_path).await?;
 
 	Ok(())
 }
@@ -2146,10 +2171,9 @@ mod tests {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec!["bug", "help wanted"], "me", "open");
 
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
-		assert_snapshot!(md, @r"
+		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
 			**Labels:** bug, help wanted
-
 			Issue body text
 		");
 	}
@@ -2159,9 +2183,8 @@ mod tests {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
-		assert_snapshot!(md, @r"
+		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123-->
-
 				Issue body text
 		");
 	}
@@ -2184,9 +2207,8 @@ mod tests {
 
 		// With render_closed: full contents shown
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", true);
-		assert_snapshot!(md, @r"
+		assert_snapshot!(md, @"
 		- [x] Closed Issue <!--https://github.com/owner/repo/issues/123-->
-
 			Issue body text
 		");
 	}
@@ -2208,11 +2230,9 @@ mod tests {
 		];
 
 		let md = format_issue_as_markdown(&issue, &[], &sub_issues, "owner", "repo", "me", false);
-		assert_snapshot!(md, @r"
+		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
-
 			Issue body text
-
 			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124-->
 			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125-->
 		");
@@ -2235,9 +2255,8 @@ mod tests {
 		];
 
 		let md = format_issue_as_markdown(&issue, &comments, &[], "owner", "repo", "me", false);
-		assert_snapshot!(md, @r"
+		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123-->
-
 				Issue body text
 
 			<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
@@ -2253,10 +2272,9 @@ mod tests {
 		let issue = make_issue(123, "Test Issue", Some("## Subheading\nBody text"), vec!["enhancement"], "me", "open");
 
 		let typ = format_issue_as_typst(&issue, &[], &[], "owner", "repo", "me", false);
-		assert_snapshot!(typ, @r"
+		assert_snapshot!(typ, @"
 		- [ ] Test Issue // https://github.com/owner/repo/issues/123
 			*Labels:* enhancement
-
 			== Subheading
 			Body text
 		");
@@ -2272,9 +2290,8 @@ mod tests {
 		}];
 
 		let typ = format_issue_as_typst(&issue, &comments, &[], "testowner", "testrepo", "me", false);
-		assert_snapshot!(typ, @r"
+		assert_snapshot!(typ, @"
 		- [ ] Typst Issue // immutable https://github.com/testowner/testrepo/issues/456
-
 				Body
 
 			// immutable https://github.com/testowner/testrepo/issues/456#issuecomment-2001
