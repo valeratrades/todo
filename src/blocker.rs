@@ -168,7 +168,7 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum HeaderLevel {
+pub enum HeaderLevel {
 	One,
 	Two,
 	Three,
@@ -203,7 +203,7 @@ impl HeaderLevel {
 
 /// Line classification for blocker files
 #[derive(Clone, Debug, PartialEq)]
-enum LineType {
+pub enum LineType {
 	/// Header with level and text (without # prefix)
 	Header { level: HeaderLevel, text: String },
 	/// List item or other content line (contributes to blocker list)
@@ -393,7 +393,7 @@ fn classify_line_markdown(line: &str) -> Option<LineType> {
 
 /// Classify a line based on its content (backwards compatibility wrapper)
 /// Uses markdown classification by default
-fn classify_line(line: &str) -> Option<LineType> {
+pub fn classify_line(line: &str) -> Option<LineType> {
 	classify_line_markdown(line)
 }
 
@@ -610,13 +610,13 @@ fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) 
 }
 
 /// Strip leading "# " or "- " prefix from a blocker line
-fn strip_blocker_prefix(line: &str) -> &str {
+pub fn strip_blocker_prefix(line: &str) -> &str {
 	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
 }
 
 /// Parse the tree of parent headers above a task
 /// Returns a vector of header texts in order from top-level to immediate parent
-fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
+pub fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
 	let lines: Vec<&str> = content.lines().collect();
 
 	// Find the index of the task line

@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
 
-use crate::config::LiveSettings;
+use crate::{
+	blocker::{self, LineType},
+	config::LiveSettings,
+};
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
 fn issues_dir() -> PathBuf {
@@ -181,183 +184,143 @@ fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result<Opt
 	}
 }
 
-/// A blocker entry parsed from the issue file
-#[derive(Clone, Debug, PartialEq)]
-pub struct BlockerEntry {
-	/// The blocker text
-	pub text: String,
-	/// Whether this blocker is completed (checked)
-	pub completed: bool,
-}
-
-/// Parse blockers from an issue file.
-/// Blockers are any semantic list (ordered or unordered) at the END of the issue body.
-/// Returns the list of blocker entries in order.
-pub fn parse_blockers_from_issue(content: &str) -> Vec<BlockerEntry> {
-	// Normalize indentation (same as open.rs)
+/// Extract blockers section from an issue file.
+/// Looks for `<!--blockers-->` marker (md) or `// blockers` (typst) in the body.
+/// Returns the content from that marker up to either:
+/// - End of body (before sub-issues or comments)
+/// - End of file
+///
+/// The returned content uses the same format as blocker.rs files.
+fn extract_blockers_section(content: &str) -> Option<String> {
 	let normalized = normalize_issue_indentation(content);
 	let lines: Vec<&str> = normalized.lines().collect();
 
-	// Find where the body content ends (before sub-issues and comments)
-	// Body content is indented with one tab, ends when we see a sub-issue or comment marker
+	// Find the blockers marker line
+	let mut blockers_start_idx = None;
 	let mut body_end_idx = lines.len();
-	let mut in_body = false;
 
 	for (idx, line) in lines.iter().enumerate() {
-		// First line is the issue title
+		// Skip the issue title (first line)
 		if idx == 0 {
 			continue;
 		}
 
-		// Skip labels line
 		let stripped = line.strip_prefix('\t').unwrap_or(line);
-		if stripped.starts_with("**Labels:**") || stripped.starts_with("*Labels:*") {
-			continue;
+
+		// Check for blockers marker (must be in body, so indented)
+		if line.starts_with('\t') && blockers_start_idx.is_none() {
+			let trimmed = stripped.trim();
+			// Markdown: <!--blockers--> (with flexible whitespace)
+			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->")) {
+				if inner.trim() == "blockers" {
+					blockers_start_idx = Some(idx + 1); // Start from line after marker
+					continue;
+				}
+			}
+			// Typst: // blockers
+			if trimmed == "// blockers" {
+				blockers_start_idx = Some(idx + 1);
+				continue;
+			}
 		}
 
-		// Check for sub-issue marker (md: <!--sub, typ: // sub)
-		if (stripped.contains("<!--sub ") && stripped.contains("-->")) || stripped.contains(" // sub ") {
-			body_end_idx = idx;
-			break;
+		// Check for sub-issue - any `- [ ]` or `- [x]` at same indent level (one tab) ends blockers
+		// This catches both marked sub-issues and newly added ones without markers
+		if line.starts_with('\t') && !line.starts_with("\t\t") && blockers_start_idx.is_some() {
+			let trimmed = stripped.trim();
+			if trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
+				body_end_idx = idx;
+				break;
+			}
 		}
 
-		// Check for comment marker (md: <!--url#issuecomment or <!--new comment-->)
-		// typ: // url#issuecomment or // new comment
+		// Check for comment marker - this also ends the body
 		if (stripped.contains("<!--") && stripped.contains("#issuecomment"))
-			|| stripped.contains("<!--new comment-->")
-			|| stripped.contains("// new comment")
-			|| (stripped.starts_with("// ") && stripped.contains("#issuecomment"))
+			|| stripped.trim() == "<!--new comment-->"
+			|| stripped.trim() == "// new comment"
+			|| (stripped.trim().starts_with("// ") && stripped.contains("#issuecomment"))
 		{
 			body_end_idx = idx;
 			break;
 		}
-
-		// Track when we're in the body (indented content after title)
-		if line.starts_with('\t') && !in_body {
-			in_body = true;
-		}
 	}
 
-	// Now parse from the end of the body backwards to find the semantic list
-	// A semantic list is consecutive lines that are list items (- item, * item, 1. item, etc.)
-	let body_lines: Vec<&str> = lines[1..body_end_idx]
-		.iter()
-		.filter(|l| l.starts_with('\t')) // Only body content (indented)
-		.map(|l| l.strip_prefix('\t').unwrap_or(l))
-		.collect();
+	// If no blockers marker found, return None
+	let start_idx = blockers_start_idx?;
 
-	// Find the last contiguous block of list items
-	let mut blockers: Vec<BlockerEntry> = Vec::new();
-	let mut in_list = false;
-	let mut list_start_idx = 0;
+	// Extract lines from blockers marker to body end
+	// Remove the leading tab (body indent) from each line
+	let blockers_lines: Vec<&str> = lines[start_idx..body_end_idx].iter().map(|l| l.strip_prefix('\t').unwrap_or(l)).collect();
 
-	for (idx, line) in body_lines.iter().enumerate() {
-		let trimmed = line.trim();
-
-		// Check if this is a list item
-		let is_list_item = is_list_item(trimmed);
-
-		if is_list_item {
-			if !in_list {
-				in_list = true;
-				list_start_idx = idx;
-			}
-		} else if !trimmed.is_empty() {
-			// Non-empty non-list line breaks the list
-			in_list = false;
-		}
-		// Empty lines within a list are allowed
+	if blockers_lines.is_empty() {
+		return None;
 	}
 
-	// If we ended in a list, parse those items as blockers
-	if in_list {
-		for line in &body_lines[list_start_idx..] {
-			let trimmed = line.trim();
-			if let Some(entry) = parse_list_item(trimmed) {
-				blockers.push(entry);
-			}
-		}
-	}
-
-	blockers
+	Some(blockers_lines.join("\n"))
 }
 
-/// Check if a line is a list item (ordered or unordered)
-fn is_list_item(line: &str) -> bool {
-	let trimmed = line.trim();
-
-	// Unordered: - item, * item, + item
-	if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
-		return true;
-	}
-
-	// Checkbox: - [ ] item, - [x] item
-	if trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
-		return true;
-	}
-
-	// Ordered: 1. item, 2. item, etc.
-	if let Some(dot_pos) = trimmed.find(". ") {
-		let num_part = &trimmed[..dot_pos];
-		if num_part.chars().all(|c| c.is_ascii_digit()) {
-			return true;
-		}
-	}
-
-	false
+/// Get the current blocker from the blockers section.
+/// Uses the same logic as blocker.rs: last non-comment content line.
+fn get_current_blocker_from_content(blockers_content: &str) -> Option<String> {
+	blockers_content
+		.lines()
+		.filter(|s| !s.is_empty())
+		// Skip comment lines (tab-indented) - only consider content lines
+		.filter(|s| !s.starts_with('\t'))
+		.last()
+		.map(|s| s.to_owned())
 }
 
-/// Parse a list item into a BlockerEntry
-fn parse_list_item(line: &str) -> Option<BlockerEntry> {
-	let trimmed = line.trim();
+/// Get the current blocker with parent headers prepended.
+/// Uses blocker.rs logic for parsing headers.
+fn get_current_blocker_with_headers(blockers_content: &str) -> Option<String> {
+	let current = get_current_blocker_from_content(blockers_content)?;
+	let stripped = blocker::strip_blocker_prefix(&current);
 
-	// Checkbox items
-	if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
-		return Some(BlockerEntry {
-			text: rest.trim().to_string(),
-			completed: false,
-		});
-	}
-	if let Some(rest) = trimmed.strip_prefix("- [x] ").or_else(|| trimmed.strip_prefix("- [X] ")) {
-		return Some(BlockerEntry {
-			text: rest.trim().to_string(),
-			completed: true,
-		});
-	}
+	let parent_headers = blocker::parse_parent_headers(blockers_content, &current);
 
-	// Unordered items
-	if let Some(rest) = trimmed.strip_prefix("- ") {
-		return Some(BlockerEntry {
-			text: rest.trim().to_string(),
-			completed: false,
-		});
+	if parent_headers.is_empty() {
+		Some(stripped.to_string())
+	} else {
+		Some(format!("{}: {}", parent_headers.join(": "), stripped))
 	}
-	if let Some(rest) = trimmed.strip_prefix("* ") {
-		return Some(BlockerEntry {
-			text: rest.trim().to_string(),
-			completed: false,
-		});
-	}
-	if let Some(rest) = trimmed.strip_prefix("+ ") {
-		return Some(BlockerEntry {
-			text: rest.trim().to_string(),
-			completed: false,
-		});
-	}
+}
 
-	// Ordered items
-	if let Some(dot_pos) = trimmed.find(". ") {
-		let num_part = &trimmed[..dot_pos];
-		if num_part.chars().all(|c| c.is_ascii_digit()) {
-			let rest = &trimmed[dot_pos + 2..];
-			return Some(BlockerEntry {
-				text: rest.trim().to_string(),
-				completed: false,
-			});
+/// List all blockers from the content.
+/// Returns tuples of (text, is_header, is_completed).
+fn list_blockers_from_content(blockers_content: &str) -> Vec<(String, bool, bool)> {
+	let mut result = Vec::new();
+
+	for line in blockers_content.lines() {
+		// Skip empty lines and comments (tab-indented)
+		if line.is_empty() || line.starts_with('\t') {
+			continue;
+		}
+
+		let line_type = blocker::classify_line(line);
+		match line_type {
+			Some(LineType::Header { text, .. }) => {
+				result.push((text, true, false));
+			}
+			Some(LineType::Item) => {
+				// Check if it's a checkbox item
+				let trimmed = line.trim();
+				let (completed, text) = if let Some(rest) = trimmed.strip_prefix("- [x] ").or_else(|| trimmed.strip_prefix("- [X] ")) {
+					(true, rest.to_string())
+				} else if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
+					(false, rest.to_string())
+				} else {
+					// Regular item (- prefix)
+					let text = blocker::strip_blocker_prefix(trimmed);
+					(false, text.to_string())
+				};
+				result.push((text, false, completed));
+			}
+			_ => {}
 		}
 	}
 
-	None
+	result
 }
 
 /// Normalize issue content by converting space-based indentation to tab-based.
@@ -456,13 +419,14 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 
 			// Show current blocker if any
 			let content = std::fs::read_to_string(&issue_path)?;
-			let blockers = parse_blockers_from_issue(&content);
-			if let Some(current) = blockers.iter().filter(|b| !b.completed).last() {
-				println!("Current blocker: {}", current.text);
-			} else if blockers.is_empty() {
-				println!("No blockers found in issue body.");
+			if let Some(blockers_section) = extract_blockers_section(&content) {
+				if let Some(current) = get_current_blocker_with_headers(&blockers_section) {
+					println!("Current blocker: {}", current);
+				} else {
+					println!("Blockers section is empty.");
+				}
 			} else {
-				println!("All blockers completed!");
+				println!("No <!--blockers--> marker found in issue body.");
 			}
 		}
 
@@ -470,15 +434,24 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-rewrite set <pattern>` first."))?;
 
 			let content = std::fs::read_to_string(&issue_path)?;
-			let blockers = parse_blockers_from_issue(&content);
 
-			if blockers.is_empty() {
-				println!("No blockers found in issue body.");
-			} else {
-				for blocker in &blockers {
-					let marker = if blocker.completed { "[x]" } else { "[ ]" };
-					println!("{} {}", marker, blocker.text);
+			if let Some(blockers_section) = extract_blockers_section(&content) {
+				let blockers = list_blockers_from_content(&blockers_section);
+
+				if blockers.is_empty() {
+					println!("Blockers section is empty.");
+				} else {
+					for (text, is_header, completed) in &blockers {
+						if *is_header {
+							println!("# {}", text);
+						} else {
+							let marker = if *completed { "[x]" } else { "[ ]" };
+							println!("{} {}", marker, text);
+						}
+					}
 				}
+			} else {
+				println!("No <!--blockers--> marker found in issue body.");
 			}
 		}
 
@@ -486,20 +459,18 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-rewrite set <pattern>` first."))?;
 
 			let content = std::fs::read_to_string(&issue_path)?;
-			let blockers = parse_blockers_from_issue(&content);
 
-			// Current blocker is the last non-completed one
-			if let Some(current) = blockers.iter().filter(|b| !b.completed).last() {
-				const MAX_LEN: usize = 70;
-				match current.text.len() {
-					0..=MAX_LEN => println!("{}", current.text),
-					_ => println!("{}...", &current.text[..(MAX_LEN - 3)]),
+			if let Some(blockers_section) = extract_blockers_section(&content) {
+				if let Some(current) = get_current_blocker_with_headers(&blockers_section) {
+					const MAX_LEN: usize = 70;
+					match current.len() {
+						0..=MAX_LEN => println!("{}", current),
+						_ => println!("{}...", &current[..(MAX_LEN - 3)]),
+					}
 				}
-			} else if blockers.is_empty() {
-				// No blockers - silently exit (for status line integration)
-			} else {
-				// All completed - silently exit
+				// No current blocker - silently exit (for status line integration)
 			}
+			// No blockers section - silently exit
 		}
 	}
 
@@ -508,119 +479,156 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 
 #[cfg(test)]
 mod tests {
+	use insta::assert_snapshot;
+
 	use super::*;
 
 	#[test]
-	fn test_parse_blockers_simple_list() {
+	fn test_extract_blockers_section_md() {
 		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
 	**Labels:** bug
-	This is the issue body with some description.
+	This is the issue body.
 
-	- First blocker
-	- Second blocker
-	- Third blocker
+	<!--blockers-->
+	# Phase 1
+	- First task
+		comment on first task
+	- Second task
+
+	# Phase 2
+	- Third task
 "#;
-		let blockers = parse_blockers_from_issue(content);
-		assert_eq!(blockers.len(), 3);
-		assert_eq!(blockers[0].text, "First blocker");
-		assert_eq!(blockers[1].text, "Second blocker");
-		assert_eq!(blockers[2].text, "Third blocker");
-		assert!(!blockers[0].completed);
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r#"
+  # Phase 1
+  - First task
+  	comment on first task
+  - Second task
+
+  # Phase 2
+  - Third task
+  "#);
 	}
 
 	#[test]
-	fn test_parse_blockers_checkbox_list() {
-		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
-	Body text here.
+	fn test_extract_blockers_section_typst() {
+		let content = r#"- [ ] Issue Title // https://github.com/owner/repo/issues/1
+	*Labels:* bug
+	Body text.
 
-	- [x] Completed task
-	- [ ] Pending task
-	- [x] Another completed
+	// blockers
+	# Main
+	- Do something
 "#;
-		let blockers = parse_blockers_from_issue(content);
-		assert_eq!(blockers.len(), 3);
-		assert!(blockers[0].completed);
-		assert!(!blockers[1].completed);
-		assert!(blockers[2].completed);
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r#"
+  # Main
+  - Do something
+  "#);
 	}
 
 	#[test]
-	fn test_parse_blockers_ordered_list() {
-		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
-	Some body content.
-
-	1. First step
-	2. Second step
-	3. Third step
-"#;
-		let blockers = parse_blockers_from_issue(content);
-		assert_eq!(blockers.len(), 3);
-		assert_eq!(blockers[0].text, "First step");
-		assert_eq!(blockers[1].text, "Second step");
-		assert_eq!(blockers[2].text, "Third step");
-	}
-
-	#[test]
-	fn test_parse_blockers_stops_at_subissue() {
+	fn test_extract_blockers_stops_at_subissue_with_marker() {
 		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
 	Body.
 
+	<!--blockers-->
 	- Blocker one
 	- Blocker two
 	- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2-->
 "#;
-		let blockers = parse_blockers_from_issue(content);
-		assert_eq!(blockers.len(), 2);
-		assert_eq!(blockers[0].text, "Blocker one");
-		assert_eq!(blockers[1].text, "Blocker two");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
+  - Blocker one
+  - Blocker two
+  ");
 	}
 
 	#[test]
-	fn test_parse_blockers_stops_at_comment() {
+	fn test_extract_blockers_stops_at_subissue_without_marker() {
 		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
 	Body.
 
+	<!--blockers-->
+	- last
+	- middle
+	- first
+	- [ ] new sub-issue I just added
+		without any markers around it
+"#;
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
+  - last
+  - middle
+  - first
+  ");
+	}
+
+	#[test]
+	fn test_extract_blockers_stops_at_comment() {
+		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+	Body.
+
+	<!--blockers-->
 	- Blocker one
 	- Blocker two
 
 	<!--https://github.com/owner/repo/issues/1#issuecomment-123-->
 	Comment body here.
 "#;
-		let blockers = parse_blockers_from_issue(content);
-		assert_eq!(blockers.len(), 2);
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
+  - Blocker one
+  - Blocker two
+
+  ");
 	}
 
 	#[test]
-	fn test_parse_blockers_no_list() {
+	fn test_no_blockers_marker() {
 		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
-	Just some regular body text without any list.
-	More text here.
+	Just some regular body text without blockers marker.
+	- This is NOT a blocker, just body content.
 "#;
-		let blockers = parse_blockers_from_issue(content);
-		assert!(blockers.is_empty());
+		assert!(extract_blockers_section(content).is_none());
 	}
 
 	#[test]
-	fn test_parse_blockers_list_in_middle_not_end() {
-		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
-	Some intro text.
+	fn test_get_current_blocker() {
+		let blockers_content = "# Phase 1\n- First task\n\tcomment\n- Second task\n# Phase 2\n- Third task";
+		assert_snapshot!(get_current_blocker_from_content(blockers_content).unwrap(), @"- Third task");
+	}
 
-	- List item one
-	- List item two
+	#[test]
+	fn test_get_current_blocker_with_headers() {
+		let blockers_content = "# Phase 1\n- First task\n# Phase 2\n- Third task";
+		assert_snapshot!(get_current_blocker_with_headers(blockers_content).unwrap(), @"Phase 2: Third task");
+	}
 
-	And then more regular text after the list.
-	This should mean the list is NOT blockers.
-"#;
-		let blockers = parse_blockers_from_issue(content);
-		// The list is not at the end, so no blockers
-		assert!(blockers.is_empty());
+	#[test]
+	fn test_list_blockers() {
+		let blockers_content = "# Phase 1\n- [x] Completed task\n- [ ] Pending task\n- Regular item";
+		let items = list_blockers_from_content(blockers_content);
+		assert_snapshot!(format!("{:?}", items), @r#"[("Phase 1", true, false), ("Completed task", false, true), ("Pending task", false, false), ("Regular item", false, false)]"#);
 	}
 
 	#[test]
 	fn test_normalize_indentation() {
 		let content = "- [ ] Title <!--url-->\n    Body with 4 spaces\n    - List item";
-		let normalized = normalize_issue_indentation(content);
-		assert!(normalized.contains("\tBody with 4 spaces"));
-		assert!(normalized.contains("\t- List item"));
+		assert_snapshot!(normalize_issue_indentation(content), @r"
+  - [ ] Title <!--url-->
+  	Body with 4 spaces
+  	- List item
+  ");
+	}
+
+	#[test]
+	fn test_blockers_marker_flexible_whitespace() {
+		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+	Body text.
+
+	<!-- blockers -->
+	- Task one
+	- Task two
+"#;
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
+  - Task one
+  - Task two
+  ");
 	}
 }
