@@ -142,10 +142,10 @@ fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 			}
 		}
 
-		if let Some(title) = extract_issue_title_from_file(&path) {
-			if title.to_lowercase().contains(&pattern_lower) {
-				matches.push(path);
-			}
+		if let Some(title) = extract_issue_title_from_file(&path)
+			&& title.to_lowercase().contains(&pattern_lower)
+		{
+			matches.push(path);
 		}
 	}
 
@@ -211,11 +211,11 @@ fn extract_blockers_section(content: &str) -> Option<String> {
 		if line.starts_with('\t') && blockers_start_idx.is_none() {
 			let trimmed = stripped.trim();
 			// Markdown: <!--blockers--> (with flexible whitespace)
-			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->")) {
-				if inner.trim() == "blockers" {
-					blockers_start_idx = Some(idx + 1); // Start from line after marker
-					continue;
-				}
+			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->"))
+				&& inner.trim() == "blockers"
+			{
+				blockers_start_idx = Some(idx + 1); // Start from line after marker
+				continue;
 			}
 			// Typst: // blockers
 			if trimmed == "// blockers" {
@@ -264,10 +264,8 @@ fn extract_blockers_section(content: &str) -> Option<String> {
 fn get_current_blocker_from_content(blockers_content: &str) -> Option<String> {
 	blockers_content
 		.lines()
-		.filter(|s| !s.is_empty())
 		// Skip comment lines (tab-indented) - only consider content lines
-		.filter(|s| !s.starts_with('\t'))
-		.last()
+		.rfind(|s: &&str| !s.is_empty() && !s.starts_with('\t'))
 		.map(|s| s.to_owned())
 }
 
@@ -460,13 +458,13 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 
 			let content = std::fs::read_to_string(&issue_path)?;
 
-			if let Some(blockers_section) = extract_blockers_section(&content) {
-				if let Some(current) = get_current_blocker_with_headers(&blockers_section) {
-					const MAX_LEN: usize = 70;
-					match current.len() {
-						0..=MAX_LEN => println!("{}", current),
-						_ => println!("{}...", &current[..(MAX_LEN - 3)]),
-					}
+			if let Some(blockers_section) = extract_blockers_section(&content)
+				&& let Some(current) = get_current_blocker_with_headers(&blockers_section)
+			{
+				const MAX_LEN: usize = 70;
+				match current.len() {
+					0..=MAX_LEN => println!("{}", current),
+					_ => println!("{}...", &current[..(MAX_LEN - 3)]),
 				}
 				// No current blocker - silently exit (for status line integration)
 			}

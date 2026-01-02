@@ -3,6 +3,7 @@ mod blocker;
 mod blocker_rewrite;
 mod clockify;
 pub mod config;
+mod github;
 mod manual_stats;
 mod milestones;
 pub mod mocks;

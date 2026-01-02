@@ -1,11 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use v_utils::prelude::*;
 
-use crate::config::LiveSettings;
+use crate::{
+	config::LiveSettings,
+	github::{self, GitHubComment, GitHubIssue, GitHubSubIssue, OriginalComment, OriginalSubIssue},
+};
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
 fn issues_dir() -> PathBuf {
@@ -48,68 +50,6 @@ pub struct OpenArgs {
 	/// If issue already exists locally, opens it. Otherwise creates on GitHub first.
 	#[arg(short, long)]
 	pub touch: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubIssue {
-	number: u64,
-	title: String,
-	body: Option<String>,
-	labels: Vec<GitHubLabel>,
-	user: GitHubUser,
-	state: String, // "open" or "closed" //TODO!!!!: add an actual enum
-}
-
-/// Sub-issue as returned by the GitHub API (same structure as issue for our purposes)
-#[derive(Debug, Deserialize)]
-struct GitHubSubIssue {
-	number: u64,
-	title: String,
-	state: String, // "open" or "closed"
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubLabel {
-	name: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct GitHubUser {
-	login: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct GitHubComment {
-	id: u64,
-	body: Option<String>,
-	user: GitHubUser,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct OriginalComment {
-	id: u64,
-	body: Option<String>,
-}
-
-impl From<&GitHubComment> for OriginalComment {
-	fn from(c: &GitHubComment) -> Self {
-		Self { id: c.id, body: c.body.clone() }
-	}
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct OriginalSubIssue {
-	number: u64,
-	state: String,
-}
-
-impl From<&GitHubSubIssue> for OriginalSubIssue {
-	fn from(s: &GitHubSubIssue) -> Self {
-		Self {
-			number: s.number,
-			state: s.state.clone(),
-		}
-	}
 }
 
 //------------------------------------------------------------------------------
@@ -278,30 +218,30 @@ impl Issue {
 			}
 
 			// Check for sub-issue line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
-			if content.starts_with("- [") {
-				if let Some(child_meta) = Self::parse_child_title_line(content) {
-					// Flush current
-					if in_body {
-						in_body = false;
-						let body = body_lines.join("\n").trim().to_string();
-						comments.push(Comment { id: None, body, owned: meta.owned });
-					} else if let Some((id, owned)) = current_comment_meta.take() {
-						let body = current_comment_lines.join("\n").trim().to_string();
-						comments.push(Comment { id, body, owned });
-						current_comment_lines.clear();
-					}
-
-					// Parse child issue recursively - but we need to handle this differently
-					// For now, just store as a minimal child
-					children.push(Issue {
-						meta: child_meta,
-						labels: vec![],
-						comments: vec![],
-						children: vec![],
-						blockers: vec![],
-					});
-					continue;
+			if content.starts_with("- [")
+				&& let Some(child_meta) = Self::parse_child_title_line(content)
+			{
+				// Flush current
+				if in_body {
+					in_body = false;
+					let body = body_lines.join("\n").trim().to_string();
+					comments.push(Comment { id: None, body, owned: meta.owned });
+				} else if let Some((id, owned)) = current_comment_meta.take() {
+					let body = current_comment_lines.join("\n").trim().to_string();
+					comments.push(Comment { id, body, owned });
+					current_comment_lines.clear();
 				}
+
+				// Parse child issue recursively - but we need to handle this differently
+				// For now, just store as a minimal child
+				children.push(Issue {
+					meta: child_meta,
+					labels: vec![],
+					comments: vec![],
+					children: vec![],
+					blockers: vec![],
+				});
+				continue;
 			}
 
 			// Regular content line
@@ -504,59 +444,6 @@ struct NewSubIssue {
 struct TargetComment {
 	id: Option<u64>,
 	body: String,
-}
-
-/// Parse a GitHub issue URL and extract owner, repo, and issue number.
-/// Supports formats like:
-/// - https://github.com/owner/repo/issues/123
-/// - github.com/owner/repo/issues/123
-/// - git@github.com:owner/repo (returns repo info, issue number parsing will fail)
-/// - ssh://git@github.com/owner/repo.git (returns repo info, issue number parsing will fail)
-fn parse_github_issue_url(url: &str) -> Result<(String, String, u64)> {
-	let url = url.trim();
-
-	// Try SSH format first: git@github.com:owner/repo.git or git@github.com:owner/repo
-	// SSH URLs don't support issue numbers directly, but we parse them for consistency
-	if let Some(path) = url.strip_prefix("git@github.com:") {
-		// SSH format doesn't have issue numbers - this is an error for issue URLs
-		return Err(eyre!(
-			"SSH URL format doesn't support issue numbers. Use HTTPS format: https://github.com/{}/issues/NUMBER",
-			path.strip_suffix(".git").unwrap_or(path)
-		));
-	}
-
-	// Try ssh:// format: ssh://git@github.com/owner/repo.git
-	if let Some(path) = url.strip_prefix("ssh://git@github.com/") {
-		return Err(eyre!(
-			"SSH URL format doesn't support issue numbers. Use HTTPS format: https://github.com/{}/issues/NUMBER",
-			path.strip_suffix(".git").unwrap_or(path)
-		));
-	}
-
-	// Remove protocol prefix if present (https://, http://)
-	let path = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
-
-	// Remove github.com prefix
-	let path = path.strip_prefix("github.com/").ok_or_else(|| eyre!("URL must be a GitHub URL: {}", url))?;
-
-	// Split by /
-	let parts: Vec<&str> = path.split('/').collect();
-
-	if parts.len() < 4 || parts[2] != "issues" {
-		return Err(eyre!("Invalid GitHub issue URL format. Expected: https://github.com/owner/repo/issues/123"));
-	}
-
-	let owner = parts[0].to_string();
-	let repo = parts[1].to_string();
-	let issue_number: u64 = parts[3].parse().map_err(|_| eyre!("Invalid issue number: {}", parts[3]))?;
-
-	Ok((owner, repo, issue_number))
-}
-
-/// Check if a string looks like a GitHub issue URL specifically
-fn is_github_issue_url(s: &str) -> bool {
-	let s = s.trim();
-	s.contains("github.com/") && s.contains("/issues/")
 }
 
 /// Sanitize a title for use in filenames.
@@ -781,10 +668,10 @@ fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 		}
 
 		// Check if pattern matches the issue title
-		if let Some(title) = extract_issue_title_from_file(&path) {
-			if title.to_lowercase().contains(&pattern_lower) {
-				matches.push(path);
-			}
+		if let Some(title) = extract_issue_title_from_file(&path)
+			&& title.to_lowercase().contains(&pattern_lower)
+		{
+			matches.push(path);
 		}
 	}
 
@@ -851,387 +738,6 @@ fn load_issue_meta_from_path(issue_file_path: &Path) -> Result<IssueMetaEntry> {
 	get_issue_meta(owner, repo, issue_number).ok_or_else(|| eyre!("No metadata found for issue #{} in {}/{}", issue_number, owner, repo))
 }
 
-async fn fetch_authenticated_user(settings: &LiveSettings) -> Result<String> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let client = Client::new();
-	let res = client
-		.get("https://api.github.com/user")
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to fetch authenticated user: {} - {}", status, body));
-	}
-
-	let user = res.json::<GitHubUser>().await?;
-	Ok(user.login)
-}
-
-async fn fetch_github_issue(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<GitHubIssue> {
-	let config = settings.config()?;
-	let milestones_config = config
-		.milestones
-		.as_ref()
-		.ok_or_else(|| eyre!("milestones config section is required for GitHub token. Add [milestones] section with github_token to your config"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-	let client = Client::new();
-	let res = client
-		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to fetch issue: {} - {}", status, body));
-	}
-
-	let issue = res.json::<GitHubIssue>().await?;
-	Ok(issue)
-}
-
-async fn fetch_github_comments(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubComment>> {
-	let config = settings.config()?;
-	let milestones_config = config
-		.milestones
-		.as_ref()
-		.ok_or_else(|| eyre!("milestones config section is required for GitHub token. Add [milestones] section with github_token to your config"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
-
-	let client = Client::new();
-	let res = client
-		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to fetch comments: {} - {}", status, body));
-	}
-
-	let comments = res.json::<Vec<GitHubComment>>().await?;
-	Ok(comments)
-}
-
-async fn fetch_github_sub_issues(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubSubIssue>> {
-	let config = settings.config()?;
-	let milestones_config = config
-		.milestones
-		.as_ref()
-		.ok_or_else(|| eyre!("milestones config section is required for GitHub token. Add [milestones] section with github_token to your config"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/sub_issues");
-
-	let client = Client::new();
-	let res = client
-		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		// Sub-issues API might not be available or issue has no sub-issues
-		// Return empty vec instead of erroring
-		return Ok(Vec::new());
-	}
-
-	let sub_issues = res.json::<Vec<GitHubSubIssue>>().await?;
-	Ok(sub_issues)
-}
-
-async fn update_github_issue_body(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-	let client = Client::new();
-	let res = client
-		.patch(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "body": body }))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to update issue body: {} - {}", status, body));
-	}
-
-	Ok(())
-}
-
-async fn update_github_issue_state(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64, state: &str) -> Result<()> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-	let client = Client::new();
-	let res = client
-		.patch(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "state": state }))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to update issue state: {} - {}", status, body));
-	}
-
-	Ok(())
-}
-
-async fn update_github_comment(settings: &LiveSettings, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
-
-	let client = Client::new();
-	let res = client
-		.patch(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "body": body }))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to update comment: {} - {}", status, body));
-	}
-
-	Ok(())
-}
-
-async fn create_github_comment(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
-
-	let client = Client::new();
-	let res = client
-		.post(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "body": body }))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to create comment: {} - {}", status, body));
-	}
-
-	Ok(())
-}
-
-async fn delete_github_comment(settings: &LiveSettings, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
-
-	let client = Client::new();
-	let res = client
-		.delete(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to delete comment: {} - {}", status, body));
-	}
-
-	Ok(())
-}
-
-/// Check if the authenticated user has collaborator (push/write) access to a repository
-async fn check_collaborator_access(settings: &LiveSettings, owner: &str, repo: &str) -> Result<bool> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	// Get the authenticated user's login
-	let current_user = fetch_authenticated_user(settings).await?;
-
-	// Check if user is a collaborator with write access
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/collaborators/{current_user}/permission");
-
-	let client = Client::new();
-	let res = client
-		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		// If we can't check, assume no access
-		return Ok(false);
-	}
-
-	#[derive(Deserialize)]
-	struct PermissionResponse {
-		permission: String,
-	}
-
-	let perm: PermissionResponse = res.json().await?;
-	// "admin", "write", "read", "none"
-	Ok(perm.permission == "admin" || perm.permission == "write")
-}
-
-/// Response from GitHub when creating an issue
-#[derive(Debug, Deserialize)]
-struct CreatedIssue {
-	number: u64,
-	html_url: String,
-}
-
-/// Create a new GitHub issue
-async fn create_github_issue(settings: &LiveSettings, owner: &str, repo: &str, title: &str, body: &str) -> Result<CreatedIssue> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues");
-
-	let client = Client::new();
-	let res = client
-		.post(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "title": title, "body": body }))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to create issue: {} - {}", status, body));
-	}
-
-	let issue = res.json::<CreatedIssue>().await?;
-	Ok(issue)
-}
-
-/// Add a sub-issue to a parent issue using GitHub's sub-issues API
-async fn add_sub_issue(settings: &LiveSettings, owner: &str, repo: &str, parent_issue_number: u64, child_issue_number: u64) -> Result<()> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues");
-
-	let client = Client::new();
-	let res = client
-		.post(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "sub_issue_id": child_issue_number }))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		let status = res.status();
-		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to add sub-issue: {} - {}", status, body));
-	}
-
-	Ok(())
-}
-
-/// Check if a GitHub issue exists and return its number if found by searching open issues with exact title match
-async fn find_issue_by_title(settings: &LiveSettings, owner: &str, repo: &str, title: &str) -> Result<Option<u64>> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	// Search for issues with this title (search in open and closed)
-	let encoded_title = urlencoding::encode(title);
-	let api_url = format!("https://api.github.com/search/issues?q=repo:{owner}/{repo}+in:title+{encoded_title}");
-
-	let client = Client::new();
-	let res = client
-		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	if !res.status().is_success() {
-		return Ok(None);
-	}
-
-	#[derive(Deserialize)]
-	struct SearchResult {
-		items: Vec<SearchItem>,
-	}
-	#[derive(Deserialize)]
-	struct SearchItem {
-		number: u64,
-		title: String,
-	}
-
-	let result: SearchResult = res.json().await?;
-
-	// Find exact title match
-	for item in result.items {
-		if item.title == title {
-			return Ok(Some(item.number));
-		}
-	}
-
-	Ok(None)
-}
-
-/// Check if an issue exists by number
-async fn issue_exists(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<bool> {
-	let config = settings.config()?;
-	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
-
-	let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-	let client = Client::new();
-	let res = client
-		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
-		.header("Authorization", format!("token {}", milestones_config.github_token))
-		.send()
-		.await?;
-
-	Ok(res.status().is_success())
-}
-
 fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubSubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
 	let mut content = String::new();
 
@@ -1260,17 +766,17 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 	}
 
 	// Body (indented under the issue)
-	if let Some(body) = &issue.body {
-		if !body.is_empty() {
-			if issue_owned {
-				for line in body.lines() {
-					content.push_str(&format!("\t{}\n", line));
-				}
-			} else {
-				// Double indent for immutable body
-				for line in body.lines() {
-					content.push_str(&format!("\t\t{}\n", line));
-				}
+	if let Some(body) = &issue.body
+		&& !body.is_empty()
+	{
+		if issue_owned {
+			for line in body.lines() {
+				content.push_str(&format!("\t{}\n", line));
+			}
+		} else {
+			// Double indent for immutable body
+			for line in body.lines() {
+				content.push_str(&format!("\t\t{}\n", line));
 			}
 		}
 	}
@@ -1297,17 +803,17 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 			content.push_str(&format!("\t<!--immutable {}-->\n", comment_url));
 		}
 
-		if let Some(body) = &comment.body {
-			if !body.is_empty() {
-				if comment_owned {
-					for line in body.lines() {
-						content.push_str(&format!("\t{}\n", line));
-					}
-				} else {
-					// Double indent for immutable comments
-					for line in body.lines() {
-						content.push_str(&format!("\t\t{}\n", line));
-					}
+		if let Some(body) = &comment.body
+			&& !body.is_empty()
+		{
+			if comment_owned {
+				for line in body.lines() {
+					content.push_str(&format!("\t{}\n", line));
+				}
+			} else {
+				// Double indent for immutable comments
+				for line in body.lines() {
+					content.push_str(&format!("\t\t{}\n", line));
 				}
 			}
 		}
@@ -1362,18 +868,18 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 	}
 
 	// Body - convert markdown to typst basics (indented under the issue)
-	if let Some(body) = &issue.body {
-		if !body.is_empty() {
-			let converted = convert_markdown_to_typst(body);
-			if issue_owned {
-				for line in converted.lines() {
-					content.push_str(&format!("\t{}\n", line));
-				}
-			} else {
-				// Double indent for immutable body
-				for line in converted.lines() {
-					content.push_str(&format!("\t\t{}\n", line));
-				}
+	if let Some(body) = &issue.body
+		&& !body.is_empty()
+	{
+		let converted = convert_markdown_to_typst(body);
+		if issue_owned {
+			for line in converted.lines() {
+				content.push_str(&format!("\t{}\n", line));
+			}
+		} else {
+			// Double indent for immutable body
+			for line in converted.lines() {
+				content.push_str(&format!("\t\t{}\n", line));
 			}
 		}
 	}
@@ -1399,18 +905,18 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 			content.push_str(&format!("\t// immutable {}\n", comment_url));
 		}
 
-		if let Some(body) = &comment.body {
-			if !body.is_empty() {
-				let converted = convert_markdown_to_typst(body);
-				if comment_owned {
-					for line in converted.lines() {
-						content.push_str(&format!("\t{}\n", line));
-					}
-				} else {
-					// Double indent for immutable comments
-					for line in converted.lines() {
-						content.push_str(&format!("\t\t{}\n", line));
-					}
+		if let Some(body) = &comment.body
+			&& !body.is_empty()
+		{
+			let converted = convert_markdown_to_typst(body);
+			if comment_owned {
+				for line in converted.lines() {
+					content.push_str(&format!("\t{}\n", line));
+				}
+			} else {
+				// Double indent for immutable comments
+				for line in converted.lines() {
+					content.push_str(&format!("\t\t{}\n", line));
 				}
 			}
 		}
@@ -1617,11 +1123,9 @@ fn parse_markdown_target(content: &str) -> TargetState {
 		// Check for new sub-issues (checkbox lines without markers)
 		// Only valid AFTER we've seen at least one existing sub-issue or comment marker
 		// This prevents checkbox items in the issue body from being treated as new sub-issues
-		if seen_sub_issue_or_comment {
-			if let Some((title, closed)) = parse_new_sub_issue_line(line) {
-				new_sub_issues.push(NewSubIssue { title, closed });
-				continue;
-			}
+		if seen_sub_issue_or_comment && let Some((title, closed)) = parse_new_sub_issue_line(line) {
+			new_sub_issues.push(NewSubIssue { title, closed });
+			continue;
 		}
 
 		// Check for markers in the line
@@ -1864,11 +1368,9 @@ fn parse_typst_target(content: &str) -> TargetState {
 		// Check for new sub-issues (checkbox lines without markers)
 		// Only valid AFTER we've seen at least one existing sub-issue or comment marker
 		// This prevents checkbox items in the issue body from being treated as new sub-issues
-		if seen_sub_issue_or_comment {
-			if let Some((title, closed)) = parse_new_sub_issue_line_typst(line) {
-				new_sub_issues.push(NewSubIssue { title, closed });
-				continue;
-			}
+		if seen_sub_issue_or_comment && let Some((title, closed)) = parse_new_sub_issue_line_typst(line) {
+			new_sub_issues.push(NewSubIssue { title, closed });
+			continue;
 		}
 
 		// Check for markers in the line
@@ -2002,7 +1504,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
 	if target.issue_body != original_body {
 		println!("Updating issue body...");
-		update_github_issue_body(settings, owner, repo, meta.issue_number, &target.issue_body).await?;
+		github::update_github_issue_body(settings, owner, repo, meta.issue_number, &target.issue_body).await?;
 		updates += 1;
 	}
 
@@ -2014,7 +1516,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 	for orig in &meta.original_comments {
 		if !target_ids.contains(&orig.id) {
 			println!("Deleting comment {}...", orig.id);
-			delete_github_comment(settings, owner, repo, orig.id).await?;
+			github::delete_github_comment(settings, owner, repo, orig.id).await?;
 			deletes += 1;
 		}
 	}
@@ -2027,7 +1529,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 				let original = meta.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
 				if tc.body != original {
 					println!("Updating comment {}...", id);
-					update_github_comment(settings, owner, repo, id, &tc.body).await?;
+					github::update_github_comment(settings, owner, repo, id, &tc.body).await?;
 					updates += 1;
 				}
 			}
@@ -2039,7 +1541,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 				// New comment
 				if !tc.body.is_empty() {
 					println!("Creating new comment...");
-					create_github_comment(settings, owner, repo, meta.issue_number, &tc.body).await?;
+					github::create_github_comment(settings, owner, repo, meta.issue_number, &tc.body).await?;
 					creates += 1;
 				}
 			}
@@ -2055,7 +1557,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 			if ts.closed != orig_closed {
 				let new_state = if ts.closed { "closed" } else { "open" };
 				println!("Updating sub-issue #{} to {}...", ts.number, new_state);
-				update_github_issue_state(settings, owner, repo, ts.number, new_state).await?;
+				github::update_github_issue_state(settings, owner, repo, ts.number, new_state).await?;
 				sub_issue_updates += 1;
 			}
 		}
@@ -2067,15 +1569,15 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 		println!("Creating sub-issue '{}'...", ns.title);
 
 		// Create the issue on GitHub
-		let created = create_github_issue(settings, owner, repo, &ns.title, "").await?;
+		let created = github::create_github_issue(settings, owner, repo, &ns.title, "").await?;
 		println!("Created sub-issue #{}: {}", created.number, created.html_url);
 
 		// Add as sub-issue to the parent
-		add_sub_issue(settings, owner, repo, meta.issue_number, created.number).await?;
+		github::add_sub_issue(settings, owner, repo, meta.issue_number, created.number).await?;
 
 		// If the new sub-issue should be closed, close it
 		if ns.closed {
-			update_github_issue_state(settings, owner, repo, created.number, "closed").await?;
+			github::update_github_issue_state(settings, owner, repo, created.number, "closed").await?;
 		}
 
 		new_sub_issues_created += 1;
@@ -2120,10 +1622,10 @@ async fn fetch_and_store_issue(
 ) -> Result<PathBuf> {
 	// Fetch issue data in parallel
 	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
-		fetch_authenticated_user(settings),
-		fetch_github_issue(settings, owner, repo, issue_number),
-		fetch_github_comments(settings, owner, repo, issue_number),
-		fetch_github_sub_issues(settings, owner, repo, issue_number),
+		github::fetch_authenticated_user(settings),
+		github::fetch_github_issue(settings, owner, repo, issue_number),
+		github::fetch_github_comments(settings, owner, repo, issue_number),
+		github::fetch_github_sub_issues(settings, owner, repo, issue_number),
 	)?;
 
 	// Determine file path
@@ -2214,10 +1716,10 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 
 	// Always write back the normalized content (parse → serialize round-trip)
 	// This ensures consistent formatting regardless of what the editor did
-	if let Some(ref normalized_content) = edited_serialized {
-		if *normalized_content != edited_content {
-			std::fs::write(issue_file_path, normalized_content)?;
-		}
+	if let Some(ref normalized_content) = edited_serialized
+		&& *normalized_content != edited_content
+	{
+		std::fs::write(issue_file_path, normalized_content)?;
 	}
 
 	// Check if content changed by comparing serialized representations
@@ -2313,12 +1815,12 @@ fn parse_touch_path(path: &str) -> Result<TouchPath> {
 	}
 
 	// If we have an extension, strip it from the last component
-	if extension.is_some() {
-		if let Some(last) = issue_chain.last_mut() {
-			// Strip the extension suffix (e.g., ".md" or ".typ")
-			if let Some(stem) = last.rsplit_once('.') {
-				*last = stem.0.to_string();
-			}
+	if extension.is_some()
+		&& let Some(last) = issue_chain.last_mut()
+	{
+		// Strip the extension suffix (e.g., ".md" or ".typ")
+		if let Some(stem) = last.rsplit_once('.') {
+			*last = stem.0.to_string();
 		}
 	}
 
@@ -2337,7 +1839,7 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 
 	// Step 1: Check collaborator access
 	println!("Checking collaborator access to {}/{}...", owner, repo);
-	let has_access = check_collaborator_access(settings, owner, repo).await?;
+	let has_access = github::check_collaborator_access(settings, owner, repo).await?;
 	if !has_access {
 		return Err(eyre!("You don't have collaborator (write) access to {}/{}. Cannot create issues.", owner, repo));
 	}
@@ -2351,7 +1853,7 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 		println!("Validating parent issue chain...");
 		for (i, parent_title) in touch_path.issue_chain[..touch_path.issue_chain.len() - 1].iter().enumerate() {
 			// Try to find by title first
-			let issue_number = find_issue_by_title(settings, owner, repo, parent_title).await?;
+			let issue_number = github::find_issue_by_title(settings, owner, repo, parent_title).await?;
 
 			match issue_number {
 				Some(num) => {
@@ -2361,10 +1863,10 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 				None => {
 					// If not found by title, try parsing as issue number
 					if let Ok(num) = parent_title.parse::<u64>() {
-						if issue_exists(settings, owner, repo, num).await? {
+						if github::issue_exists(settings, owner, repo, num).await? {
 							println!("  Found parent issue #{}", num);
 							// Fetch the actual title from GitHub
-							let issue = fetch_github_issue(settings, owner, repo, num).await?;
+							let issue = github::fetch_github_issue(settings, owner, repo, num).await?;
 							parent_issues.push((num, issue.title));
 						} else {
 							return Err(eyre!(
@@ -2390,13 +1892,13 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 
 	// Step 4: Create the issue on GitHub (with empty body - user will edit after)
 	println!("Creating issue '{}'...", new_issue_title);
-	let created = create_github_issue(settings, owner, repo, new_issue_title, "").await?;
+	let created = github::create_github_issue(settings, owner, repo, new_issue_title, "").await?;
 	println!("Created issue #{}: {}", created.number, created.html_url);
 
 	// Step 5: If there are parent issues, add as sub-issue to the immediate parent
 	if let Some((parent_number, _)) = parent_issues.last() {
 		println!("Adding as sub-issue to #{}...", parent_number);
-		add_sub_issue(settings, owner, repo, *parent_number, created.number).await?;
+		github::add_sub_issue(settings, owner, repo, *parent_number, created.number).await?;
 		println!("Sub-issue relationship created.");
 	}
 
@@ -2463,13 +1965,13 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 		return ext;
 	}
 
-	if let Ok(config) = settings.config() {
-		if let Some(open_config) = &config.open {
-			return match open_config.default_extension.as_str() {
-				"typ" => Extension::Typ,
-				_ => Extension::Md,
-			};
-		}
+	if let Ok(config) = settings.config()
+		&& let Some(open_config) = &config.open
+	{
+		return match open_config.default_extension.as_str() {
+			"typ" => Extension::Typ,
+			_ => Extension::Md,
+		};
 	}
 
 	Extension::Md
@@ -2502,9 +2004,9 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 	}
 
 	// Check if input is a GitHub issue URL specifically (not just any GitHub URL)
-	if is_github_issue_url(input) {
+	if github::is_github_issue_url(input) {
 		// GitHub URL mode: fetch issue and store in XDG_DATA
-		let (owner, repo, issue_number) = parse_github_issue_url(input)?;
+		let (owner, repo, issue_number) = github::parse_github_issue_url(input)?;
 
 		println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
 
@@ -2562,48 +2064,7 @@ mod tests {
 	use insta::assert_snapshot;
 
 	use super::*;
-
-	#[test]
-	fn test_parse_github_issue_url() {
-		// Standard HTTPS URL
-		let (owner, repo, num) = parse_github_issue_url("https://github.com/owner/repo/issues/123").unwrap();
-		assert_eq!(owner, "owner");
-		assert_eq!(repo, "repo");
-		assert_eq!(num, 123);
-
-		// Without protocol
-		let (owner, repo, num) = parse_github_issue_url("github.com/owner/repo/issues/456").unwrap();
-		assert_eq!(owner, "owner");
-		assert_eq!(repo, "repo");
-		assert_eq!(num, 456);
-
-		// HTTP URL
-		let (owner, repo, num) = parse_github_issue_url("http://github.com/owner/repo/issues/789").unwrap();
-		assert_eq!(owner, "owner");
-		assert_eq!(repo, "repo");
-		assert_eq!(num, 789);
-
-		// With trailing whitespace
-		let (owner, repo, num) = parse_github_issue_url("  https://github.com/owner/repo/issues/123  ").unwrap();
-		assert_eq!(owner, "owner");
-		assert_eq!(repo, "repo");
-		assert_eq!(num, 123);
-	}
-
-	#[test]
-	fn test_parse_github_issue_url_errors() {
-		// Not a GitHub URL
-		assert!(parse_github_issue_url("https://gitlab.com/owner/repo/issues/123").is_err());
-
-		// Not an issues URL
-		assert!(parse_github_issue_url("https://github.com/owner/repo/pull/123").is_err());
-
-		// Invalid issue number
-		assert!(parse_github_issue_url("https://github.com/owner/repo/issues/abc").is_err());
-
-		// Missing parts
-		assert!(parse_github_issue_url("https://github.com/owner").is_err());
-	}
+	use crate::github::{GitHubLabel, GitHubUser};
 
 	fn make_user(login: &str) -> GitHubUser {
 		GitHubUser { login: login.to_string() }
@@ -3033,36 +2494,6 @@ mod tests {
 		assert!(target.issue_body.contains("This is a todo item in the body"));
 		assert!(target.issue_body.contains("Another todo in the body"));
 		assert!(target.new_sub_issues.is_empty());
-	}
-
-	#[test]
-	fn test_parse_github_issue_url_ssh_error() {
-		// SSH URLs should give a helpful error message
-		let result = parse_github_issue_url("git@github.com:owner/repo.git");
-		assert!(result.is_err());
-		let err = result.unwrap_err().to_string();
-		assert!(err.contains("SSH URL format doesn't support issue numbers"));
-		assert!(err.contains("owner/repo"));
-
-		// ssh:// format
-		let result = parse_github_issue_url("ssh://git@github.com/owner/repo.git");
-		assert!(result.is_err());
-		let err = result.unwrap_err().to_string();
-		assert!(err.contains("SSH URL format doesn't support issue numbers"));
-	}
-
-	#[test]
-	fn test_is_github_issue_url() {
-		// Valid issue URLs
-		assert!(is_github_issue_url("https://github.com/owner/repo/issues/123"));
-		assert!(is_github_issue_url("github.com/owner/repo/issues/456"));
-		assert!(is_github_issue_url("http://github.com/owner/repo/issues/789"));
-
-		// Not issue URLs
-		assert!(!is_github_issue_url("https://github.com/owner/repo"));
-		assert!(!is_github_issue_url("git@github.com:owner/repo.git"));
-		assert!(!is_github_issue_url("https://github.com/owner/repo/pull/123"));
-		assert!(!is_github_issue_url("https://gitlab.com/owner/repo/issues/123"));
 	}
 
 	#[test]

@@ -97,7 +97,7 @@ fn parse_github_repo(url: &str) -> Result<(String, String)> {
 		let repo = sections[sections.len() - 1].trim_end_matches(".git");
 
 		// For SSH format (git@github.com:owner/repo), owner might contain ':'
-		let owner = if owner.contains(':') { owner.split(':').last().unwrap_or(owner) } else { owner };
+		let owner = if owner.contains(':') { owner.split(':').next_back().unwrap_or(owner) } else { owner };
 
 		return Ok((owner.to_string(), repo.to_string()));
 	}
