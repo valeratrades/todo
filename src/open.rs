@@ -513,8 +513,8 @@ async fn execute_issue_actions(settings: &LiveSettings, owner: &str, repo: &str,
 					let created = github::create_github_issue(settings, owner, repo, &title, "").await?;
 					println!("Created sub-issue #{}: {}", created.number, created.html_url);
 
-					// Add as sub-issue to the parent
-					github::add_sub_issue(settings, owner, repo, parent_issue_number, created.number).await?;
+					// Add as sub-issue to the parent (using the resource ID, not the issue number)
+					github::add_sub_issue(settings, owner, repo, parent_issue_number, created.id).await?;
 
 					// If it should be closed, close it
 					if closed {
@@ -2827,5 +2827,39 @@ mod tests {
 		assert_eq!(parsed.children.len(), 1, "Expected 1 child, got: {:?}", parsed.children);
 		assert_eq!(parsed.children[0].meta.title, "percent specification for protocols");
 		assert!(parsed.children[0].meta.url.is_none()); // New sub-issue
+	}
+
+	#[test]
+	fn test_collect_actions_creates_sub_issue_for_new_child() {
+		use crate::github::IssueAction;
+
+		let md = "- [ ] parent issue <!--https://github.com/owner/repo/issues/77-->
+\t- [ ] new child without url
+";
+		let parsed = Issue::parse(md).unwrap();
+
+		// No original sub-issues means this child is new
+		let original_sub_issues: Vec<OriginalSubIssue> = vec![];
+		let actions = parsed.collect_actions(&original_sub_issues);
+
+		// Level 0 should have 1 action (the CreateSubIssue)
+		// Level 1 may exist but be empty (from recursing into children)
+		assert!(!actions.is_empty(), "Expected at least 1 level of actions");
+		assert_eq!(actions[0].len(), 1, "Expected 1 action at level 0");
+
+		match &actions[0][0] {
+			IssueAction::CreateSubIssue {
+				child_path,
+				title,
+				closed,
+				parent_issue_number,
+			} => {
+				assert_eq!(child_path, &vec![0]);
+				assert_eq!(title, "new child without url");
+				assert!(!closed);
+				assert_eq!(*parent_issue_number, 77);
+			}
+			_ => panic!("Expected CreateSubIssue action"),
+		}
 	}
 }

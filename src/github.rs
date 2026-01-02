@@ -69,6 +69,7 @@ impl From<&GitHubSubIssue> for OriginalSubIssue {
 /// Response from GitHub when creating an issue
 #[derive(Debug, Deserialize)]
 pub struct CreatedIssue {
+	pub id: u64,
 	pub number: u64,
 	pub html_url: String,
 }
@@ -414,7 +415,8 @@ pub async fn create_github_issue(settings: &LiveSettings, owner: &str, repo: &st
 }
 
 /// Add a sub-issue to a parent issue using GitHub's sub-issues API
-pub async fn add_sub_issue(settings: &LiveSettings, owner: &str, repo: &str, parent_issue_number: u64, child_issue_number: u64) -> Result<()> {
+/// Note: `child_issue_id` is the resource ID (not the issue number) - get it from the `id` field of CreatedIssue
+pub async fn add_sub_issue(settings: &LiveSettings, owner: &str, repo: &str, parent_issue_number: u64, child_issue_id: u64) -> Result<()> {
 	let config = settings.config()?;
 	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required for GitHub token"))?;
 
@@ -426,7 +428,7 @@ pub async fn add_sub_issue(settings: &LiveSettings, owner: &str, repo: &str, par
 		.header("User-Agent", "Rust GitHub Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.header("Content-Type", "application/json")
-		.json(&serde_json::json!({ "sub_issue_id": child_issue_number }))
+		.json(&serde_json::json!({ "sub_issue_id": child_issue_id }))
 		.send()
 		.await?;
 
