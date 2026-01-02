@@ -32,7 +32,8 @@ impl Extension {
 pub struct OpenArgs {
 	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
 	/// With --touch: path format is workspace/project/{issue.md, issue/sub-issue.md}
-	pub url_or_pattern: String,
+	/// If omitted, opens fzf on all local issue files.
+	pub url_or_pattern: Option<String>,
 
 	/// File extension for the output file (overrides config default_extension)
 	#[arg(short = 'e', long)]
@@ -2399,7 +2400,7 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 }
 
 pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()> {
-	let input = args.url_or_pattern.trim();
+	let input = args.url_or_pattern.as_deref().unwrap_or("").trim();
 	let extension = get_effective_extension(args.extension, settings);
 
 	// Handle --touch mode
