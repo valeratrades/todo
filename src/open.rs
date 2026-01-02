@@ -891,16 +891,35 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 	}
 
 	// Body (indented under the issue)
+	// Skip checkbox lines that match sub-issue titles (they'll be shown via sub-issues list)
 	if let Some(body) = &issue.body
 		&& !body.is_empty()
 	{
-		if issue_owned {
-			for line in body.lines() {
-				content.push_str(&format!("\t{}\n", line));
+		let sub_issue_titles: Vec<&str> = sub_issues.iter().map(|s| s.title.as_str()).collect();
+		let mut skip_until_non_indented = false;
+
+		for line in body.lines() {
+			// Check if this line is a checkbox that matches a sub-issue
+			if let Some(title) = extract_checkbox_title(line) {
+				if sub_issue_titles.contains(&title.as_str()) {
+					// Skip this checkbox line and any indented content beneath it
+					skip_until_non_indented = true;
+					continue;
+				}
 			}
-		} else {
-			// Double indent for immutable body
-			for line in body.lines() {
+
+			// If we're skipping indented content after a matched checkbox
+			if skip_until_non_indented {
+				if line.starts_with('\t') || line.starts_with("    ") || line.is_empty() {
+					continue;
+				}
+				skip_until_non_indented = false;
+			}
+
+			if issue_owned {
+				content.push_str(&format!("\t{}\n", line));
+			} else {
+				// Double indent for immutable body
 				content.push_str(&format!("\t\t{}\n", line));
 			}
 		}
@@ -993,17 +1012,34 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 	}
 
 	// Body - convert markdown to typst basics (indented under the issue)
+	// Skip checkbox lines that match sub-issue titles (they'll be shown via sub-issues list)
 	if let Some(body) = &issue.body
 		&& !body.is_empty()
 	{
+		let sub_issue_titles: Vec<&str> = sub_issues.iter().map(|s| s.title.as_str()).collect();
+		let mut skip_until_non_indented = false;
+
 		let converted = convert_markdown_to_typst(body);
-		if issue_owned {
-			for line in converted.lines() {
-				content.push_str(&format!("\t{}\n", line));
+		for line in converted.lines() {
+			// Check if this line is a checkbox that matches a sub-issue
+			if let Some(title) = extract_checkbox_title(line) {
+				if sub_issue_titles.contains(&title.as_str()) {
+					skip_until_non_indented = true;
+					continue;
+				}
 			}
-		} else {
-			// Double indent for immutable body
-			for line in converted.lines() {
+
+			if skip_until_non_indented {
+				if line.starts_with('\t') || line.starts_with("    ") || line.is_empty() {
+					continue;
+				}
+				skip_until_non_indented = false;
+			}
+
+			if issue_owned {
+				content.push_str(&format!("\t{}\n", line));
+			} else {
+				// Double indent for immutable body
 				content.push_str(&format!("\t\t{}\n", line));
 			}
 		}
@@ -1121,6 +1157,20 @@ fn normalize_issue_indentation(content: &str) -> String {
 		})
 		.collect::<Vec<_>>()
 		.join("\n")
+}
+
+/// Extract title from a checkbox line if it matches the pattern `- [ ] Title` or `- [x] Title`
+/// Returns the title without the checkbox prefix
+fn extract_checkbox_title(line: &str) -> Option<String> {
+	let trimmed = line.trim();
+	if !trimmed.starts_with("- [") {
+		return None;
+	}
+	// Match `- [ ] ` or `- [x] `
+	let rest = trimmed.strip_prefix("- [ ] ").or_else(|| trimmed.strip_prefix("- [x] "))?;
+	// Title is everything before any HTML comment marker
+	let title = if let Some(idx) = rest.find("<!--") { rest[..idx].trim() } else { rest.trim() };
+	if title.is_empty() { None } else { Some(title.to_string()) }
 }
 
 /// Marker type for parsed markdown markers
