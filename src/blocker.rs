@@ -168,7 +168,7 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum HeaderLevel {
+pub enum HeaderLevel {
 	One,
 	Two,
 	Three,
@@ -203,7 +203,7 @@ impl HeaderLevel {
 
 /// Line classification for blocker files
 #[derive(Clone, Debug, PartialEq)]
-enum LineType {
+pub enum LineType {
 	/// Header with level and text (without # prefix)
 	Header { level: HeaderLevel, text: String },
 	/// List item or other content line (contributes to blocker list)
@@ -393,7 +393,7 @@ fn classify_line_markdown(line: &str) -> Option<LineType> {
 
 /// Classify a line based on its content (backwards compatibility wrapper)
 /// Uses markdown classification by default
-fn classify_line(line: &str) -> Option<LineType> {
+pub fn classify_line(line: &str) -> Option<LineType> {
 	classify_line_markdown(line)
 }
 
@@ -610,13 +610,13 @@ fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) 
 }
 
 /// Strip leading "# " or "- " prefix from a blocker line
-fn strip_blocker_prefix(line: &str) -> &str {
+pub fn strip_blocker_prefix(line: &str) -> &str {
 	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
 }
 
 /// Parse the tree of parent headers above a task
 /// Returns a vector of header texts in order from top-level to immediate parent
-fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
+pub fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
 	let lines: Vec<&str> = content.lines().collect();
 
 	// Find the index of the task line
@@ -793,25 +793,25 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	let project_changed = old_project.as_ref().is_none_or(|old| old != resolved_path);
 
 	// If currently on urgent, don't allow switching away (unless switching to another urgent file or urgent file no longer exists)
-	if let Some(old_path) = &old_project {
-		if is_urgent_file(old_path) && !is_urgent_file(resolved_path) {
-			let urgent_file_path = blockers_dir().join(old_path);
-			if urgent_file_path.exists() {
-				eprintln!("Cannot switch away from urgent project '{}'. Complete urgent tasks first.", old_path);
-				return Ok(());
-			}
+	if let Some(old_path) = &old_project
+		&& is_urgent_file(old_path)
+		&& !is_urgent_file(resolved_path)
+	{
+		let urgent_file_path = blockers_dir().join(old_path);
+		if urgent_file_path.exists() {
+			eprintln!("Cannot switch away from urgent project '{}'. Complete urgent tasks first.", old_path);
+			return Ok(());
 		}
 	}
 
 	// If switching to urgent, save the previous project
-	if is_urgent_file(resolved_path) {
-		if let Some(old_path) = &old_project {
-			if !is_urgent_file(old_path) {
-				// Save non-urgent project before switching to urgent
-				let pre_urgent_path = v_utils::xdg_state_file!(PRE_URGENT_PROJECT_FILENAME);
-				std::fs::write(&pre_urgent_path, old_path)?;
-			}
-		}
+	if is_urgent_file(resolved_path)
+		&& let Some(old_path) = &old_project
+		&& !is_urgent_file(old_path)
+	{
+		// Save non-urgent project before switching to urgent
+		let pre_urgent_path = v_utils::xdg_state_file!(PRE_URGENT_PROJECT_FILENAME);
+		std::fs::write(&pre_urgent_path, old_path)?;
 	}
 
 	// Save the new project path
@@ -1258,14 +1258,13 @@ fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 
 	// If pattern has an extension, check for exact match first
 	// e.g., "uni.md" should match "uni.md" exactly, not open fzf even if "uni_headless.md" also exists
-	if pattern.ends_with(".md") || pattern.ends_with(".typ") {
-		if let Some(exact_match) = matches.iter().find(|m| {
+	if (pattern.ends_with(".md") || pattern.ends_with(".typ"))
+		&& let Some(exact_match) = matches.iter().find(|m| {
 			// Extract just the filename from the match path
 			Path::new(m).file_name().and_then(|f| f.to_str()) == Some(pattern)
 		}) {
-			eprintln!("Found exact match: {}", exact_match);
-			return Ok(exact_match.clone());
-		}
+		eprintln!("Found exact match: {}", exact_match);
+		return Ok(exact_match.clone());
 	}
 
 	match matches.len() {
@@ -1307,21 +1306,21 @@ fn check_for_urgent_file() -> Option<String> {
 	// Look for */urgent.md and */urgent.typ in blockers_dir
 	if let Ok(entries) = std::fs::read_dir(&blockers_dir) {
 		for entry in entries.flatten() {
-			if let Ok(metadata) = entry.metadata() {
-				if metadata.is_dir() {
-					let workspace_name = entry.file_name();
+			if let Ok(metadata) = entry.metadata()
+				&& metadata.is_dir()
+			{
+				let workspace_name = entry.file_name();
 
-					// Check workspace/urgent.md
-					let ws_urgent_md = entry.path().join("urgent.md");
-					if ws_urgent_md.exists() {
-						return Some(format!("{}/urgent.md", workspace_name.to_string_lossy()));
-					}
+				// Check workspace/urgent.md
+				let ws_urgent_md = entry.path().join("urgent.md");
+				if ws_urgent_md.exists() {
+					return Some(format!("{}/urgent.md", workspace_name.to_string_lossy()));
+				}
 
-					// Check workspace/urgent.typ
-					let ws_urgent_typ = entry.path().join("urgent.typ");
-					if ws_urgent_typ.exists() {
-						return Some(format!("{}/urgent.typ", workspace_name.to_string_lossy()));
-					}
+				// Check workspace/urgent.typ
+				let ws_urgent_typ = entry.path().join("urgent.typ");
+				if ws_urgent_typ.exists() {
+					return Some(format!("{}/urgent.typ", workspace_name.to_string_lossy()));
 				}
 			}
 		}
@@ -1339,14 +1338,14 @@ fn is_urgent_file(relative_path: &str) -> bool {
 /// Check if creating a new urgent file is allowed
 /// Returns Err if another urgent file already exists (unless it's the same path)
 fn check_urgent_creation_allowed(target_urgent_path: &str) -> Result<()> {
-	if let Some(existing_urgent) = check_for_urgent_file() {
-		if existing_urgent != target_urgent_path {
-			return Err(eyre!(
-				"Cannot create urgent file '{}': another urgent file '{}' already exists. Complete it first.",
-				target_urgent_path,
-				existing_urgent
-			));
-		}
+	if let Some(existing_urgent) = check_for_urgent_file()
+		&& existing_urgent != target_urgent_path
+	{
+		return Err(eyre!(
+			"Cannot create urgent file '{}': another urgent file '{}' already exists. Complete it first.",
+			target_urgent_path,
+			existing_urgent
+		));
 	}
 	Ok(())
 }
