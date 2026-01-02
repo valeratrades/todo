@@ -1,5 +1,6 @@
 #![allow(clippy::len_zero)]
 mod blocker;
+mod blocker_rewrite;
 mod clockify;
 pub mod config;
 mod manual_stats;
@@ -39,6 +40,8 @@ enum Commands {
 	Init(shell_init::ShellInitArgs),
 	/// Blockers tree
 	Blocker(blocker::BlockerArgs),
+	/// Blocker management linked to issue files
+	BlockerRewrite(blocker_rewrite::BlockerRewriteArgs),
 	/// Clockify time tracking
 	Clockify(clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
@@ -76,6 +79,7 @@ async fn main() {
 			Ok(())
 		}
 		Commands::Blocker(args) => blocker::main(&settings, args).await,
+		Commands::BlockerRewrite(args) => blocker_rewrite::main(&settings, args).await,
 		Commands::Clockify(args) => clockify::main(&settings, args),
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
