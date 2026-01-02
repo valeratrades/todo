@@ -500,6 +500,33 @@ pub async fn issue_exists(settings: &LiveSettings, owner: &str, repo: &str, issu
 	Ok(res.status().is_success())
 }
 
+/// Extract issue number from a GitHub URL
+pub fn extract_issue_number_from_url(url: &str) -> Option<u64> {
+	// URL format: https://github.com/owner/repo/issues/123
+	url.split('/').last().and_then(|s| s.parse().ok())
+}
+
+/// Index path to locate an issue in the tree (e.g., [0, 2] = first child's third child)
+pub type IssuePath = Vec<usize>;
+
+/// An action that needs to be performed on GitHub
+#[derive(Debug)]
+pub enum IssueAction {
+	/// Create a new sub-issue and link it to parent
+	CreateSubIssue {
+		/// Path to the child issue that needs to be created
+		child_path: IssuePath,
+		/// Title for the new issue
+		title: String,
+		/// Whether it should be closed after creation
+		closed: bool,
+		/// Parent issue number to link to
+		parent_issue_number: u64,
+	},
+	/// Update an existing sub-issue's state (open/closed)
+	UpdateSubIssueState { issue_number: u64, closed: bool },
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

@@ -6,7 +6,7 @@ use v_utils::prelude::*;
 
 use crate::{
 	config::LiveSettings,
-	github::{self, GitHubComment, GitHubIssue, GitHubSubIssue, OriginalComment, OriginalSubIssue},
+	github::{self, GitHubComment, GitHubIssue, GitHubSubIssue, IssueAction, OriginalComment, OriginalSubIssue},
 };
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
@@ -414,6 +414,131 @@ impl Issue {
 
 		out
 	}
+
+	/// Collect all required GitHub actions, organized by nesting level.
+	/// Returns a Vec where index 0 = actions for root issue, index 1 = actions for children, etc.
+	/// Each level's actions can be executed in parallel, but levels must be sequential.
+	fn collect_actions(&self, original_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>> {
+		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
+		self.collect_actions_recursive(&[], original_sub_issues, &mut levels);
+		levels
+	}
+
+	/// Recursively collect actions from this issue and its children
+	fn collect_actions_recursive(&self, current_path: &[usize], original_sub_issues: &[OriginalSubIssue], levels: &mut Vec<Vec<IssueAction>>) {
+		let depth = current_path.len();
+
+		// Ensure we have a vec for this level
+		while levels.len() <= depth {
+			levels.push(Vec::new());
+		}
+
+		// Get parent issue number from URL
+		let parent_number = self.meta.url.as_ref().and_then(|url| github::extract_issue_number_from_url(url));
+
+		// Check each child for required actions
+		for (i, child) in self.children.iter().enumerate() {
+			let mut child_path = current_path.to_vec();
+			child_path.push(i);
+
+			if child.meta.url.is_none() {
+				// New sub-issue - needs to be created
+				if let Some(parent_num) = parent_number {
+					levels[depth].push(IssueAction::CreateSubIssue {
+						child_path: child_path.clone(),
+						title: child.meta.title.clone(),
+						closed: child.meta.closed,
+						parent_issue_number: parent_num,
+					});
+				}
+			} else if let Some(child_url) = &child.meta.url {
+				// Existing sub-issue - check if state changed
+				if let Some(child_number) = github::extract_issue_number_from_url(child_url) {
+					if let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number) {
+						let orig_closed = orig.state == "closed";
+						if child.meta.closed != orig_closed {
+							levels[depth].push(IssueAction::UpdateSubIssueState {
+								issue_number: child_number,
+								closed: child.meta.closed,
+							});
+						}
+					}
+				}
+			}
+
+			// Recursively process child's children
+			child.collect_actions_recursive(&child_path, original_sub_issues, levels);
+		}
+	}
+
+	/// Get a mutable reference to a child issue by path
+	fn get_child_mut(&mut self, path: &[usize]) -> Option<&mut Issue> {
+		if path.is_empty() {
+			return Some(self);
+		}
+		let mut current = self;
+		for &idx in path.iter().take(path.len() - 1) {
+			current = current.children.get_mut(idx)?;
+		}
+		current.children.get_mut(*path.last()?)
+	}
+}
+
+/// Execute collected actions level by level, updating the Issue struct with new URLs.
+/// Returns the number of actions executed.
+async fn execute_issue_actions(settings: &LiveSettings, owner: &str, repo: &str, issue: &mut Issue, actions_by_level: Vec<Vec<IssueAction>>) -> Result<usize> {
+	let mut total_actions = 0;
+
+	for (level, actions) in actions_by_level.into_iter().enumerate() {
+		if actions.is_empty() {
+			continue;
+		}
+
+		println!("Executing {} actions at level {}...", actions.len(), level);
+
+		// Execute all actions at this level
+		// We process sequentially for now because we need to update the Issue struct
+		// TODO: could parallelize with Arc<Mutex<Issue>> but complexity not worth it for typical use
+		for action in actions {
+			match action {
+				IssueAction::CreateSubIssue {
+					child_path,
+					title,
+					closed,
+					parent_issue_number,
+				} => {
+					println!("Creating sub-issue '{}'...", title);
+
+					// Create the issue on GitHub
+					let created = github::create_github_issue(settings, owner, repo, &title, "").await?;
+					println!("Created sub-issue #{}: {}", created.number, created.html_url);
+
+					// Add as sub-issue to the parent
+					github::add_sub_issue(settings, owner, repo, parent_issue_number, created.number).await?;
+
+					// If it should be closed, close it
+					if closed {
+						github::update_github_issue_state(settings, owner, repo, created.number, "closed").await?;
+					}
+
+					// Update the Issue struct with the new URL
+					if let Some(child) = issue.get_child_mut(&child_path) {
+						child.meta.url = Some(created.html_url);
+					}
+
+					total_actions += 1;
+				}
+				IssueAction::UpdateSubIssueState { issue_number, closed } => {
+					let new_state = if closed { "closed" } else { "open" };
+					println!("Updating sub-issue #{} to {}...", issue_number, new_state);
+					github::update_github_issue_state(settings, owner, repo, issue_number, new_state).await?;
+					total_actions += 1;
+				}
+			}
+		}
+	}
+
+	Ok(total_actions)
 }
 
 // Legacy types used for GitHub sync - kept for compatibility
@@ -1703,28 +1828,38 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 	// Load metadata
 	let meta = load_issue_meta_from_path(issue_file_path)?;
 
-	// Parse original content and serialize - this is our baseline for comparison
-	let original_content = std::fs::read_to_string(issue_file_path)?;
-	let original_serialized = Issue::parse(&original_content).map(|issue| issue.serialize());
-
 	// Open in editor (blocks until editor closes)
 	v_utils::io::open(issue_file_path)?;
 
-	// Read edited content, parse and serialize
+	// Read edited content and parse into Issue struct
 	let edited_content = std::fs::read_to_string(issue_file_path)?;
-	let edited_serialized = Issue::parse(&edited_content).map(|issue| issue.serialize());
+	let mut issue = Issue::parse(&edited_content).ok_or_else(|| eyre!("Failed to parse issue file"))?;
 
-	// Always write back the normalized content (parse → serialize round-trip)
-	// This ensures consistent formatting regardless of what the editor did
-	if let Some(ref normalized_content) = edited_serialized
-		&& *normalized_content != edited_content
-	{
-		std::fs::write(issue_file_path, normalized_content)?;
+	// Collect required GitHub actions (e.g., new sub-issues without URLs)
+	let actions = issue.collect_actions(&meta.original_sub_issues);
+	let has_actions = actions.iter().any(|level| !level.is_empty());
+
+	// Execute actions and update Issue struct with new URLs
+	let actions_executed = if has_actions {
+		execute_issue_actions(settings, &owner, &repo, &mut issue, actions).await?
+	} else {
+		0
+	};
+
+	// Serialize the (potentially updated) Issue back to markdown
+	let serialized = issue.serialize();
+
+	// Write the normalized/updated content back
+	if serialized != edited_content {
+		std::fs::write(issue_file_path, &serialized)?;
 	}
 
-	// Check if content changed by comparing serialized representations
-	if edited_serialized != original_serialized {
-		sync_local_issue_to_github(settings, &owner, &repo, &meta, &edited_content).await?;
+	// If we executed actions, sync to GitHub and refresh
+	if actions_executed > 0 {
+		// Read the updated content for legacy sync
+		let updated_content = std::fs::read_to_string(issue_file_path)?;
+		// Also run the legacy sync for body/comment changes
+		sync_local_issue_to_github(settings, &owner, &repo, &meta, &updated_content).await?;
 
 		// Re-fetch and update local file and metadata to reflect the synced state
 		println!("Refreshing local issue file from GitHub...");
@@ -1734,10 +1869,9 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 		};
 
 		// Determine parent issue info if this is a sub-issue
-		let parent_issue = meta.parent_issue.and_then(|parent_num| {
-			// Get parent's title from meta
-			get_issue_meta(&owner, &repo, parent_num).map(|parent_meta| (parent_num, parent_meta.title))
-		});
+		let parent_issue = meta
+			.parent_issue
+			.and_then(|parent_num| get_issue_meta(&owner, &repo, parent_num).map(|parent_meta| (parent_num, parent_meta.title)));
 
 		// Store the old path before re-fetching
 		let old_path = issue_file_path.to_path_buf();
@@ -1750,16 +1884,15 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 			println!("Issue renamed, removing old file: {:?}", old_path);
 			std::fs::remove_file(&old_path)?;
 
-			// Also clean up old sub-issues directory if it exists and is now empty/orphaned
 			let old_sub_dir = old_path.with_extension("");
 			if old_sub_dir.is_dir() {
-				// The sub-issues would have been re-fetched under the new parent directory
-				// so we can safely remove the old one
 				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
 					eprintln!("Warning: could not remove old sub-issues directory: {}", e);
 				}
 			}
 		}
+
+		println!("Synced {} actions to GitHub.", actions_executed);
 	} else {
 		println!("No changes made.");
 	}
