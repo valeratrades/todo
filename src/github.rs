@@ -14,14 +14,6 @@ pub struct GitHubIssue {
 	pub state: String, // "open" or "closed" //TODO!!!!: add an actual enum
 }
 
-/// Sub-issue as returned by the GitHub API (same structure as issue for our purposes)
-#[derive(Debug, Deserialize)]
-pub struct GitHubSubIssue {
-	pub number: u64,
-	pub title: String,
-	pub state: String, // "open" or "closed"
-}
-
 #[derive(Debug, Deserialize)]
 pub struct GitHubLabel {
 	pub name: String,
@@ -57,8 +49,8 @@ pub struct OriginalSubIssue {
 	pub state: String,
 }
 
-impl From<&GitHubSubIssue> for OriginalSubIssue {
-	fn from(s: &GitHubSubIssue) -> Self {
+impl From<&GitHubIssue> for OriginalSubIssue {
+	fn from(s: &GitHubIssue) -> Self {
 		Self {
 			number: s.number,
 			state: s.state.clone(),
@@ -203,7 +195,7 @@ pub async fn fetch_github_comments(settings: &LiveSettings, owner: &str, repo: &
 	Ok(comments)
 }
 
-pub async fn fetch_github_sub_issues(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubSubIssue>> {
+pub async fn fetch_github_sub_issues(settings: &LiveSettings, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubIssue>> {
 	let config = settings.config()?;
 	let milestones_config = config
 		.milestones
@@ -226,7 +218,7 @@ pub async fn fetch_github_sub_issues(settings: &LiveSettings, owner: &str, repo:
 		return Ok(Vec::new());
 	}
 
-	let sub_issues = res.json::<Vec<GitHubSubIssue>>().await?;
+	let sub_issues = res.json::<Vec<GitHubIssue>>().await?;
 	Ok(sub_issues)
 }
 

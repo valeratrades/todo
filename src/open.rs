@@ -6,7 +6,7 @@ use v_utils::prelude::*;
 
 use crate::{
 	config::LiveSettings,
-	github::{self, GitHubComment, GitHubIssue, GitHubSubIssue, IssueAction, OriginalComment, OriginalSubIssue},
+	github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalComment, OriginalSubIssue},
 };
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
@@ -618,13 +618,6 @@ fn get_issue_file_path(owner: &str, repo: &str, issue_number: u64, title: &str, 
 	}
 }
 
-/// Get the directory path for sub-issues of a given issue.
-/// Structure: issues/{owner}/{repo}/{number}_-_{title}/
-fn get_sub_issues_dir(owner: &str, repo: &str, issue_number: u64, title: &str) -> PathBuf {
-	let dir_name = format!("{}_-_{}", issue_number, sanitize_title_for_filename(title));
-	issues_dir().join(owner).join(repo).join(dir_name)
-}
-
 /// Get the project directory path (where meta.json lives).
 /// Structure: issues/{owner}/{repo}/
 fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
@@ -863,7 +856,7 @@ fn load_issue_meta_from_path(issue_file_path: &Path) -> Result<IssueMetaEntry> {
 	get_issue_meta(owner, repo, issue_number).ok_or_else(|| eyre!("No metadata found for issue #{} in {}/{}", issue_number, owner, repo))
 }
 
-fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubSubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
+fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
 	let mut content = String::new();
 
 	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
@@ -925,13 +918,20 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 		}
 	}
 
-	// Sub-issues (indented under the issue, after body)
+	// Sub-issues (indented under the issue, after body) - embed their body content
 	if !sub_issues.is_empty() {
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
-			// Sub-issues are read-only (we fetch their title/state, but don't manage them here)
 			content.push_str(&format!("\t- [{sub_checked}] {} <!--sub {}-->\n", sub.title, sub_url));
+			// Embed sub-issue body (double-indented under the sub-issue title)
+			if let Some(body) = &sub.body {
+				if !body.is_empty() {
+					for line in body.lines() {
+						content.push_str(&format!("\t\t{}\n", line));
+					}
+				}
+			}
 		}
 	}
 
@@ -984,7 +984,7 @@ fn convert_markdown_to_typst(body: &str) -> String {
 		.join("\n")
 }
 
-fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubSubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
+fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
 	let mut content = String::new();
 
 	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
@@ -1045,12 +1045,21 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 		}
 	}
 
-	// Sub-issues (indented under the issue, after body)
+	// Sub-issues (indented under the issue, after body) - embed their body content
 	if !sub_issues.is_empty() {
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
 			content.push_str(&format!("\t- [{sub_checked}] {} // sub {}\n", sub.title, sub_url));
+			// Embed sub-issue body (double-indented under the sub-issue title)
+			if let Some(body) = &sub.body {
+				if !body.is_empty() {
+					let converted = convert_markdown_to_typst(body);
+					for line in converted.lines() {
+						content.push_str(&format!("\t\t{}\n", line));
+					}
+				}
+			}
 		}
 	}
 
@@ -1833,26 +1842,6 @@ async fn fetch_and_store_issue(
 	};
 	save_issue_meta(owner, repo, meta_entry)?;
 
-	// If there are sub-issues, create a directory and recursively fetch them
-	if !sub_issues.is_empty() {
-		let sub_dir = get_sub_issues_dir(owner, repo, issue_number, &issue.title);
-		std::fs::create_dir_all(&sub_dir)?;
-
-		for sub in &sub_issues {
-			// Recursively fetch sub-issue (use Box::pin for recursive async)
-			Box::pin(fetch_and_store_issue(
-				settings,
-				owner,
-				repo,
-				sub.number,
-				extension,
-				render_closed,
-				Some((issue_number, issue.title.clone())),
-			))
-			.await?;
-		}
-	}
-
 	Ok(issue_file_path)
 }
 
@@ -2315,16 +2304,8 @@ mod tests {
 	fn test_format_issue_as_markdown_with_sub_issues() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "me", "open");
 		let sub_issues = vec![
-			GitHubSubIssue {
-				number: 124,
-				title: "Open sub-issue".to_string(),
-				state: "open".to_string(),
-			},
-			GitHubSubIssue {
-				number: 125,
-				title: "Closed sub-issue".to_string(),
-				state: "closed".to_string(),
-			},
+			make_issue(124, "Open sub-issue", Some("Sub-issue body content"), vec![], "me", "open"),
+			make_issue(125, "Closed sub-issue", None, vec![], "me", "closed"),
 		];
 
 		let md = format_issue_as_markdown(&issue, &[], &sub_issues, "owner", "repo", "me", false);
@@ -2332,6 +2313,7 @@ mod tests {
 		- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
 			Issue body text
 			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124-->
+				Sub-issue body content
 			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125-->
 		");
 	}
