@@ -3,8 +3,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
-    pre-commit-hooks.url = "github:cachix/git-hooks.nix/ca5b894d3e3e151ffc1db040b6ce4dcc75d31c37";
-    v-utils.url = "github:valeratrades/.github?ref=v1.4";
+    pre-commit-hooks.url = "github:cachix/git-hooks.nix";
+    v-utils.url = "github:valeratrades/.github";
   };
   outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils }:
     flake-utils.lib.eachDefaultSystem
@@ -36,6 +36,7 @@
           };
           rs = v-utils.rs {
             inherit pkgs;
+            deny = true;
           };
           readme = v-utils.readme-fw {
             inherit pkgs pname;
@@ -55,7 +56,7 @@
               };
             in
             {
-              default = rustPlatform.buildRustPackage rec {
+              default = rustPlatform.buildRustPackage {
                 inherit pname;
                 version = manifest.version;
 
@@ -84,9 +85,7 @@
                 readme.shellHook +
                 ''
                   cp -f ${(v-utils.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
-                  cp -f ${(v-utils.files.rust.deny { inherit pkgs; })} ./deny.toml
                 '';
-
               packages = [
                 mold
                 openssl
