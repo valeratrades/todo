@@ -33,6 +33,16 @@ pub enum Command {
 	List,
 	/// Show the current blocker (last item in the blockers list)
 	Current,
+	/// Open the current blocker issue file with $EDITOR
+	Open {
+		/// Optional pattern to open a different issue file (uses same matching as `set`)
+		pattern: Option<String>,
+		/// Set the opened file as current blocker file after exiting the editor
+		#[arg(short = 's', long)]
+		set_after: bool,
+	},
+	/// Pop the last blocker from the blockers section
+	Pop,
 }
 
 /// Get the path to the current blocker issue cache file
@@ -268,6 +278,117 @@ fn get_current_blocker_with_headers(blockers_content: &str) -> Option<String> {
 	}
 }
 
+/// Pop the last content line from the blockers section.
+/// Returns the modified blockers content.
+fn pop_last_blocker(blockers_content: &str) -> String {
+	let lines: Vec<&str> = blockers_content.lines().collect();
+	let mut content_line_indices: Vec<usize> = Vec::new();
+
+	// Find indices of all content lines (headers and items, not comments)
+	for (idx, line) in lines.iter().enumerate() {
+		if let Some(line_type) = blocker::classify_line(line)
+			&& line_type.is_content()
+		{
+			content_line_indices.push(idx);
+		}
+	}
+
+	// Remove the last content line
+	if let Some(&last_content_idx) = content_line_indices.last() {
+		// Keep lines before the last content line
+		let new_lines: Vec<&str> = lines.iter().enumerate().filter(|(idx, _)| *idx < last_content_idx).map(|(_, line)| *line).collect();
+
+		new_lines.join("\n")
+	} else {
+		// No content lines to remove
+		blockers_content.to_string()
+	}
+}
+
+/// Update the blockers section in an issue file.
+/// Replaces the content between <!--blockers--> marker and the next section marker.
+/// Returns the updated full file content.
+fn update_blockers_in_issue(full_content: &str, new_blockers_content: &str) -> Option<String> {
+	let normalized = normalize_issue_indentation(full_content);
+	let lines: Vec<&str> = normalized.lines().collect();
+
+	// Find the blockers marker line
+	let mut blockers_start_idx = None;
+	let mut blockers_end_idx = lines.len();
+
+	for (idx, line) in lines.iter().enumerate() {
+		// Skip the issue title (first line)
+		if idx == 0 {
+			continue;
+		}
+
+		let stripped = line.strip_prefix('\t').unwrap_or(line);
+
+		// Check for blockers marker (must be in body, so indented)
+		if line.starts_with('\t') && blockers_start_idx.is_none() {
+			let trimmed = stripped.trim();
+			// Markdown: <!--blockers--> (with flexible whitespace)
+			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->"))
+				&& inner.trim() == "blockers"
+			{
+				blockers_start_idx = Some(idx + 1); // Start from line after marker
+				continue;
+			}
+			// Typst: // blockers
+			if trimmed == "// blockers" {
+				blockers_start_idx = Some(idx + 1);
+				continue;
+			}
+		}
+
+		// Check for sub-issue - any `- [ ]` or `- [x]` at same indent level (one tab) ends blockers
+		if line.starts_with('\t') && !line.starts_with("\t\t") && blockers_start_idx.is_some() {
+			let trimmed = stripped.trim();
+			if trimmed.starts_with("- [ ] ") || trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
+				blockers_end_idx = idx;
+				break;
+			}
+		}
+
+		// Check for comment marker - this also ends the body
+		if (stripped.contains("<!--") && stripped.contains("#issuecomment"))
+			|| stripped.trim() == "<!--new comment-->"
+			|| stripped.trim() == "// new comment"
+			|| (stripped.trim().starts_with("// ") && stripped.contains("#issuecomment"))
+		{
+			blockers_end_idx = idx;
+			break;
+		}
+	}
+
+	// If no blockers marker found, return None
+	let start_idx = blockers_start_idx?;
+
+	// Build the new content
+	let mut result_lines: Vec<String> = Vec::new();
+
+	// Lines before blockers section
+	for line in &lines[..start_idx] {
+		result_lines.push(line.to_string());
+	}
+
+	// New blockers content (add body indent)
+	for line in new_blockers_content.lines() {
+		if line.is_empty() {
+			result_lines.push(String::new());
+		} else {
+			result_lines.push(format!("\t{}", line));
+		}
+	}
+
+	// Lines after blockers section
+	for line in &lines[blockers_end_idx..] {
+		result_lines.push(line.to_string());
+	}
+
+	Some(result_lines.join("\n"))
+}
+
 /// List all blockers from the content.
 /// Returns tuples of (text, is_header, is_completed).
 fn list_blockers_from_content(blockers_content: &str) -> Vec<(String, bool, bool)> {
@@ -454,6 +575,91 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			}
 			// No blockers section - silently exit
 		}
+
+		Command::Open { pattern, set_after } => {
+			// Determine which file to open
+			let issue_path = if let Some(pat) = pattern {
+				// Use pattern matching to find issue file
+				let matches = search_issue_files(&pat)?;
+
+				match matches.len() {
+					0 => {
+						// No matches - open fzf with all files
+						let all_files = search_issue_files("")?;
+						if all_files.is_empty() {
+							bail!("No issue files found. Use `todo open <url>` to fetch an issue first.");
+						}
+						match choose_issue_with_fzf(&all_files, &pat)? {
+							Some(path) => path,
+							None => bail!("No issue selected"),
+						}
+					}
+					1 => matches[0].clone(),
+					_ => {
+						// Multiple matches - open fzf to choose
+						match choose_issue_with_fzf(&matches, &pat)? {
+							Some(path) => path,
+							None => bail!("No issue selected"),
+						}
+					}
+				}
+			} else {
+				// Use current blocker issue
+				get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-rewrite set <pattern>` first."))?
+			};
+
+			// Open the file with $EDITOR
+			v_utils::io::open(&issue_path)?;
+
+			// If set_after flag is set, update the current blocker issue
+			if set_after {
+				set_current_blocker_issue(&issue_path)?;
+
+				// Get relative path for display
+				let issues_dir = issues_dir();
+				let rel_path = issue_path
+					.strip_prefix(&issues_dir)
+					.map(|p| p.to_string_lossy().to_string())
+					.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
+
+				println!("Set blocker file: {}", rel_path);
+			}
+		}
+
+		Command::Pop => {
+			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-rewrite set <pattern>` first."))?;
+
+			let content = std::fs::read_to_string(&issue_path)?;
+
+			if let Some(blockers_section) = extract_blockers_section(&content) {
+				// Get the current blocker before popping (for display)
+				let current_before = get_current_blocker_from_content(&blockers_section);
+
+				// Pop the last blocker
+				let new_blockers = pop_last_blocker(&blockers_section);
+
+				// Update the issue file with new blockers section
+				if let Some(updated_content) = update_blockers_in_issue(&content, &new_blockers) {
+					std::fs::write(&issue_path, updated_content)?;
+
+					if let Some(popped) = current_before {
+						let stripped = blocker::strip_blocker_prefix(&popped);
+						println!("Popped: {}", stripped);
+					}
+
+					// Show new current blocker
+					if let Some(new_current) = get_current_blocker_with_headers(&new_blockers) {
+						println!("Current: {}", new_current);
+					} else {
+						println!("Blockers section is now empty.");
+					}
+				} else {
+					bail!("Failed to update blockers section in issue file.");
+				}
+			} else {
+				bail!("No <!--blockers--> marker found in issue body.");
+			}
+		}
 	}
 
 	Ok(())
@@ -612,5 +818,101 @@ mod tests {
   - Task one
   - Task two
   ");
+	}
+
+	#[test]
+	fn test_pop_last_blocker_simple() {
+		let blockers_content = "- First task\n- Second task\n- Third task";
+		assert_snapshot!(pop_last_blocker(blockers_content), @r"
+  - First task
+  - Second task
+  ");
+	}
+
+	#[test]
+	fn test_pop_last_blocker_with_headers() {
+		let blockers_content = "# Phase 1\n- First task\n# Phase 2\n- Third task";
+		// Should pop "- Third task", leaving the header
+		assert_snapshot!(pop_last_blocker(blockers_content), @r"
+  # Phase 1
+  - First task
+  # Phase 2
+  ");
+	}
+
+	#[test]
+	fn test_pop_last_blocker_with_comments() {
+		let blockers_content = "- First task\n\tcomment on first\n- Second task\n\tcomment on second";
+		// Should pop "- Second task", removing its comment too (comments belong to content above)
+		assert_snapshot!(pop_last_blocker(blockers_content), @r"
+  - First task
+  	comment on first
+  ");
+	}
+
+	#[test]
+	fn test_pop_last_blocker_empty() {
+		let blockers_content = "";
+		assert_snapshot!(pop_last_blocker(blockers_content), @"");
+	}
+
+	#[test]
+	fn test_pop_last_blocker_only_comments() {
+		let blockers_content = "\tcomment only";
+		// No content to pop
+		assert_snapshot!(pop_last_blocker(blockers_content), @"	comment only");
+	}
+
+	#[test]
+	fn test_update_blockers_in_issue() {
+		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+	Body text.
+
+	<!--blockers-->
+	- First task
+	- Second task
+	- Third task
+"#;
+		let new_blockers = "- First task\n- Second task";
+		assert_snapshot!(update_blockers_in_issue(content, new_blockers).unwrap(), @r"
+  - [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+  	Body text.
+
+  	<!--blockers-->
+  	- First task
+  	- Second task
+  ");
+	}
+
+	#[test]
+	fn test_update_blockers_in_issue_with_subissue() {
+		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+	Body.
+
+	<!--blockers-->
+	- First task
+	- Second task
+	- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2-->
+"#;
+		let new_blockers = "- First task";
+		let result = update_blockers_in_issue(content, new_blockers).unwrap();
+		// Should preserve the sub-issue
+		assert!(result.contains("- [ ] Sub-issue"));
+		assert_snapshot!(result, @r"
+  - [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+  	Body.
+
+  	<!--blockers-->
+  	- First task
+  	- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2-->
+  ");
+	}
+
+	#[test]
+	fn test_update_blockers_no_marker() {
+		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+	Body without blockers marker.
+"#;
+		assert!(update_blockers_in_issue(content, "- Task").is_none());
 	}
 }

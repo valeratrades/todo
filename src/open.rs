@@ -657,6 +657,80 @@ fn read_sub_issue_body_from_file(file_path: &Path) -> Option<String> {
 	if body.is_empty() { None } else { Some(body) }
 }
 
+/// Reconstruct an issue file by re-embedding sub-issue contents from their local files.
+/// This ensures the parent file reflects the current state of all sub-issue files.
+/// Closed sub-issues have their contents folded (replaced with `<!-- omitted -->`).
+fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: &str) -> Result<()> {
+	let content = std::fs::read_to_string(issue_file_path)?;
+	let normalized = normalize_issue_indentation(&content);
+
+	// Parse to get issue metadata (number and title)
+	let issue = Issue::parse(&normalized).ok_or_else(|| eyre!("Failed to parse issue file"))?;
+	let issue_number = issue
+		.meta
+		.url
+		.as_ref()
+		.and_then(|url| github::extract_issue_number_from_url(url))
+		.ok_or_else(|| eyre!("Could not extract issue number from URL"))?;
+
+	let mut result = String::new();
+	let mut lines = normalized.lines().peekable();
+
+	while let Some(line) = lines.next() {
+		result.push_str(line);
+		result.push('\n');
+
+		// Check if this line is a sub-issue marker: `\t- [ ] title <!--sub url-->` or `\t- [x] title <!--sub url-->`
+		let trimmed = line.trim_start_matches('\t');
+		let is_closed = trimmed.starts_with("- [x] ");
+		if let Some(rest) = trimmed.strip_prefix("- [ ] ").or_else(|| trimmed.strip_prefix("- [x] ")) {
+			if rest.contains("<!--sub ") {
+				// Extract sub-issue number from the URL
+				if let Some(url_start) = rest.find("<!--sub ") {
+					let url_part = &rest[url_start + 8..];
+					if let Some(url_end) = url_part.find("-->") {
+						let sub_url = &url_part[..url_end];
+						if let Some(sub_number) = github::extract_issue_number_from_url(sub_url) {
+							// Skip any existing indented content under this sub-issue
+							let base_indent = line.len() - line.trim_start_matches('\t').len();
+							let child_indent_str = "\t".repeat(base_indent + 1);
+
+							while let Some(&next_line) = lines.peek() {
+								if next_line.is_empty() || next_line.starts_with(&child_indent_str) {
+									lines.next();
+								} else {
+									break;
+								}
+							}
+
+							// For closed sub-issues, just add <!-- omitted --> instead of content
+							if is_closed {
+								result.push_str(&child_indent_str);
+								result.push_str("<!-- omitted (use --render-closed to unfold) -->\n");
+							} else {
+								// Embed the local file contents for open sub-issues
+								if let Some(sub_file) = find_sub_issue_file(owner, repo, issue_number, &issue.meta.title, sub_number) {
+									if let Some(body) = read_sub_issue_body_from_file(&sub_file) {
+										for body_line in body.lines() {
+											result.push_str(&child_indent_str);
+											result.push_str(body_line);
+											result.push('\n');
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Write the reconstructed content back
+	std::fs::write(issue_file_path, result)?;
+	Ok(())
+}
+
 /// Stored metadata for a single issue
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct IssueMetaEntry {
@@ -1369,6 +1443,12 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 
 	// Load metadata
 	let meta = load_issue_meta_from_path(issue_file_path)?;
+
+	// Reconstruct the file with current sub-issue contents before opening
+	// This ensures we show the latest state of all sub-issue files
+	if let Err(e) = reconstruct_issue_with_sub_issues(issue_file_path, &owner, &repo) {
+		eprintln!("Warning: could not reconstruct sub-issues: {}", e);
+	}
 
 	// Open in editor (blocks until editor closes)
 	v_utils::io::open(issue_file_path)?;

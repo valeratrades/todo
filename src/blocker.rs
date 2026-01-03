@@ -238,7 +238,7 @@ impl LineType {
 	}
 
 	/// Check if this line type contributes to the blocker list (headers and items)
-	fn is_content(&self) -> bool {
+	pub fn is_content(&self) -> bool {
 		!matches!(self, LineType::Comment)
 	}
 }
