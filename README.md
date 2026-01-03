@@ -17,6 +17,7 @@ Personal productivity CLI for task tracking, time management, and GitHub issue i
 - **Manual Stats**: Track daily performance metrics (EV, focus time, etc.) with historical data.
 - **Performance Evaluation**: Screenshot-based productivity tracking with AI analysis.
 - **Clockify Integration**: Automatic time tracking tied to your current blocker task.
+If the broader architecture is of interest, see [ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 <!-- markdownlint-disable -->
 <details>
 <summary>

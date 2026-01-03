@@ -80,6 +80,26 @@ jobs:
         \ $exit_code != 0 ]; then\n\t\t\t\t\techo \"Derives are not sorted. Run \\\
         `cargo sort-derives\\` to fix it.\"\n\t\t\t\t\texit $exit_code\n\t\t\t\tfi\n\
         \t\t\t"
+  rust-unused-features:
+    name: Unused Features
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Installation
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-unused-features
+    - name: Analyze Unused Features
+      run: 'unused-features analyze
+
+        '
+    - name: Build Report
+      run: 'unused-features build-report --output report.json
+
+        '
+    - name: Check for Unused Features
+      run: "if [ -f report.json ] && [ \"$(cat report.json)\" != \"[]\" ]; then\n\
+        \  echo \"Found unused features:\"\n  cat report.json\n  exit 1\nfi\n"
   tokei:
     name: Reasonable Amount of Comments
     runs-on: ubuntu-latest
