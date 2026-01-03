@@ -39,9 +39,9 @@
           };
           readme = v-utils.readme-fw {
             inherit pkgs pname;
+            defaults = true;
             lastSupportedVersion = "nightly-1.90";
             rootDir = ./.;
-            licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }];
             badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
           };
         in
@@ -81,14 +81,10 @@
                 pre-commit-check.shellHook +
                 github.shellHook +
                 rs.shellHook +
+                readme.shellHook +
                 ''
-                  cp -f ${v-utils.files.licenses.blue_oak} ./LICENSE
-
                   cp -f ${(v-utils.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
-
                   cp -f ${(v-utils.files.rust.deny { inherit pkgs; })} ./deny.toml
-
-                  cp -f ${readme} ./README.md
                 '';
 
               packages = [
