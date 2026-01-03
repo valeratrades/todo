@@ -594,6 +594,66 @@ fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
 	issues_dir().join(owner).join(repo)
 }
 
+/// Find the local file path for a sub-issue given its number.
+/// Searches in the parent issue's directory for files matching the pattern {number}_-_*.{ext}
+/// Returns None if no matching file is found.
+fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title: &str, sub_issue_number: u64) -> Option<PathBuf> {
+	let base = issues_dir().join(owner).join(repo);
+	let parent_dir = format!("{}_-_{}", parent_number, sanitize_title_for_filename(parent_title));
+	let sub_dir = base.join(&parent_dir);
+
+	if !sub_dir.exists() {
+		return None;
+	}
+
+	// Look for files matching the sub-issue number pattern
+	let prefix = format!("{}_-_", sub_issue_number);
+	if let Ok(entries) = std::fs::read_dir(&sub_dir) {
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.is_file() {
+				if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+					// Match files starting with "{number}_-_" or exactly "{number}.{ext}"
+					if name.starts_with(&prefix) || name.starts_with(&format!("{}.", sub_issue_number)) {
+						return Some(path);
+					}
+				}
+			}
+		}
+	}
+
+	None
+}
+
+/// Read a sub-issue's local file and extract its body content (everything after the title line).
+/// Returns None if the file doesn't exist or can't be parsed.
+fn read_sub_issue_body_from_file(file_path: &Path) -> Option<String> {
+	let content = std::fs::read_to_string(file_path).ok()?;
+	let normalized = normalize_issue_indentation(&content);
+	let mut lines = normalized.lines();
+
+	// Skip the title line
+	lines.next()?;
+
+	// Collect remaining content, stripping one level of indentation
+	let body_lines: Vec<&str> = lines
+		.filter_map(|line| {
+			if line.is_empty() {
+				Some("")
+			} else {
+				// Strip one level of indentation (tab or spaces)
+				line.strip_prefix('\t').or_else(|| {
+					// Try stripping common space indents
+					line.strip_prefix("    ").or_else(|| line.strip_prefix("  "))
+				})
+			}
+		})
+		.collect();
+
+	let body = body_lines.join("\n").trim().to_string();
+	if body.is_empty() { None } else { Some(body) }
+}
+
 /// Stored metadata for a single issue
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct IssueMetaEntry {
@@ -889,13 +949,20 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 	}
 
 	// Sub-issues (indented under the issue, after body) - embed their body content
+	// Prefer local file contents over GitHub body when available
 	if !sub_issues.is_empty() {
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
 			content.push_str(&format!("\t- [{sub_checked}] {} <!--sub {}-->\n", sub.title, sub_url));
-			// Embed sub-issue body (double-indented under the sub-issue title)
-			if let Some(body) = &sub.body {
+
+			// Try to read local file contents for this sub-issue
+			let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
+
+			// Use local file contents if available, otherwise fall back to GitHub body
+			let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
+
+			if let Some(body) = body_to_embed {
 				if !body.is_empty() {
 					for line in body.lines() {
 						content.push_str(&format!("\t\t{}\n", line));
@@ -1016,13 +1083,20 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 	}
 
 	// Sub-issues (indented under the issue, after body) - embed their body content
+	// Prefer local file contents over GitHub body when available
 	if !sub_issues.is_empty() {
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
 			content.push_str(&format!("\t- [{sub_checked}] {} // sub {}\n", sub.title, sub_url));
-			// Embed sub-issue body (double-indented under the sub-issue title)
-			if let Some(body) = &sub.body {
+
+			// Try to read local file contents for this sub-issue
+			let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
+
+			// Use local file contents if available, otherwise fall back to GitHub body
+			let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
+
+			if let Some(body) = body_to_embed {
 				if !body.is_empty() {
 					let converted = convert_markdown_to_typst(body);
 					for line in converted.lines() {
@@ -2046,5 +2120,37 @@ mod tests {
 			}
 			_ => panic!("Expected CreateSubIssue action"),
 		}
+	}
+
+	#[test]
+	fn test_read_sub_issue_body_from_file() {
+		use std::io::Write;
+
+		let temp_dir = std::env::temp_dir();
+		let sub_issue_file = temp_dir.join("test_sub_issue_body.md");
+
+		// Create a sub-issue file with content
+		let mut f = std::fs::File::create(&sub_issue_file).unwrap();
+		writeln!(f, "- [ ] Sub-issue title <!--sub https://github.com/owner/repo/issues/78-->").unwrap();
+		writeln!(f, "\tThis is the sub-issue body.").unwrap();
+		writeln!(f, "\t- [ ] nested task").unwrap();
+		writeln!(f, "\t\twith details").unwrap();
+		writeln!(f, "").unwrap();
+		writeln!(f, "\t## Blockers").unwrap();
+		writeln!(f, "\t- some blocker").unwrap();
+		drop(f);
+
+		let body = read_sub_issue_body_from_file(&sub_issue_file);
+		assert!(body.is_some());
+		let body = body.unwrap();
+
+		// Should have the body content with one level of indentation stripped
+		assert!(body.contains("This is the sub-issue body."));
+		assert!(body.contains("- [ ] nested task"));
+		assert!(body.contains("\twith details")); // nested indent preserved (minus one level)
+		assert!(body.contains("## Blockers"));
+		assert!(body.contains("- some blocker"));
+
+		std::fs::remove_file(&sub_issue_file).unwrap();
 	}
 }
