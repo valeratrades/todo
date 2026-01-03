@@ -1170,36 +1170,19 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 
 /// Search for projects using a grep-like pattern
 fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
-	use std::process::Command;
-
 	let blockers_dir = blockers_dir();
 	// Search for both .md and .typ files
-	let output = Command::new("find")
-		.args([blockers_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f"])
-		.output()?;
-
-	if !output.status.success() {
-		return Err(eyre!("Failed to search for files"));
-	}
-
-	let all_files = String::from_utf8(output.stdout)?;
+	let all_files = crate::utils::fd(&["-t", "f", "-e", "md", "-e", "typ"], &blockers_dir)?;
 	let mut matches = Vec::new();
 
 	for line in all_files.lines() {
-		let file_path = line.trim();
-		if file_path.is_empty() {
+		let relative_path = line.trim();
+		if relative_path.is_empty() {
 			continue;
 		}
 
-		// Convert absolute path to relative path from blockers_dir
-		let relative_path = if let Ok(rel_path) = Path::new(file_path).strip_prefix(&blockers_dir) {
-			rel_path.to_string_lossy().to_string()
-		} else {
-			continue; // Skip files not in blockers_dir
-		};
-
 		// Extract filename without extension for matching
-		if let Some(filename) = Path::new(&relative_path).file_stem()
+		if let Some(filename) = Path::new(relative_path).file_stem()
 			&& let Some(filename_str) = filename.to_str()
 		{
 			let pattern_lower = pattern.to_lowercase();

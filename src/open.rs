@@ -563,22 +563,23 @@ fn sanitize_title_for_filename(title: &str) -> String {
 }
 
 /// Format an issue filename from number and title.
-/// Format: {number}_-_{sanitized_title}.{ext}
-fn format_issue_filename(issue_number: u64, title: &str, extension: &Extension) -> String {
+/// Format: {number}_-_{sanitized_title}.{ext} or {number}_-_{sanitized_title}.{ext}.bak for closed issues
+fn format_issue_filename(issue_number: u64, title: &str, extension: &Extension, closed: bool) -> String {
 	let sanitized = sanitize_title_for_filename(title);
-	if sanitized.is_empty() {
+	let base = if sanitized.is_empty() {
 		format!("{}.{}", issue_number, extension.as_str())
 	} else {
 		format!("{}_-_{}.{}", issue_number, sanitized, extension.as_str())
-	}
+	};
+	if closed { format!("{}.bak", base) } else { base }
 }
 
 /// Get the path for an issue file in XDG_DATA.
-/// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}
-/// For sub-issues: issues/{owner}/{repo}/{parent_number}_-_{parent_title}/{number}_-_{title}.{ext}
-fn get_issue_file_path(owner: &str, repo: &str, issue_number: u64, title: &str, extension: &Extension, parent_issue: Option<(u64, &str)>) -> PathBuf {
+/// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}[.bak]
+/// For sub-issues: issues/{owner}/{repo}/{parent_number}_-_{parent_title}/{number}_-_{title}.{ext}[.bak]
+fn get_issue_file_path(owner: &str, repo: &str, issue_number: u64, title: &str, extension: &Extension, closed: bool, parent_issue: Option<(u64, &str)>) -> PathBuf {
 	let base = issues_dir().join(owner).join(repo);
-	let filename = format_issue_filename(issue_number, title, extension);
+	let filename = format_issue_filename(issue_number, title, extension, closed);
 	match parent_issue {
 		None => base.join(filename),
 		Some((parent_num, parent_title)) => {
@@ -595,7 +596,7 @@ fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
 }
 
 /// Find the local file path for a sub-issue given its number.
-/// Searches in the parent issue's directory for files matching the pattern {number}_-_*.{ext}
+/// Searches in the parent issue's directory for files matching the pattern {number}_-_*.{ext}[.bak]
 /// Returns None if no matching file is found.
 fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title: &str, sub_issue_number: u64) -> Option<PathBuf> {
 	let base = issues_dir().join(owner).join(repo);
@@ -607,6 +608,7 @@ fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title
 	}
 
 	// Look for files matching the sub-issue number pattern
+	// This matches both regular files and .bak files (closed issues)
 	let prefix = format!("{}_-_", sub_issue_number);
 	if let Ok(entries) = std::fs::read_dir(&sub_dir) {
 		for entry in entries.flatten() {
@@ -614,6 +616,7 @@ fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title
 			if path.is_file() {
 				if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
 					// Match files starting with "{number}_-_" or exactly "{number}.{ext}"
+					// This naturally includes .bak files like "78_-_title.md.bak"
 					if name.starts_with(&prefix) || name.starts_with(&format!("{}.", sub_issue_number)) {
 						return Some(path);
 					}
@@ -668,6 +671,9 @@ struct IssueMetaEntry {
 	original_sub_issues: Vec<OriginalSubIssue>,
 	/// Parent issue number if this is a sub-issue
 	parent_issue: Option<u64>,
+	/// Original issue state (for detecting close/reopen)
+	#[serde(default)]
+	original_closed: bool,
 }
 
 /// Project-level metadata file containing all issues
@@ -759,24 +765,16 @@ fn extract_issue_title_from_file(path: &Path) -> Option<String> {
 /// - Owner/number: "owner/123" -> specific issue
 /// - Issue title: "certainty" -> searches for issues with title containing "certainty"
 /// - Sanitized title: "compact format ext" -> matches "compact_format_ext" in filename
+/// Also includes .bak files (closed issues)
 fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
-	use std::process::Command;
-
 	let issues_dir = issues_dir();
 	if !issues_dir.exists() {
 		return Ok(Vec::new());
 	}
 
-	// Search for both .md and .typ files
-	let output = Command::new("find")
-		.args([issues_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f", "!", "-name", ".*"])
-		.output()?;
-
-	if !output.status.success() {
-		return Err(eyre!("Failed to search for issue files"));
-	}
-
-	let all_files = String::from_utf8(output.stdout)?;
+	// Search for .md, .typ, and their .bak variants (closed issues)
+	// fd uses regex for extensions, so we match .md, .typ, .md.bak, .typ.bak
+	let all_files = crate::utils::fd(&["-t", "f", "-e", "md", "-e", "typ", "-e", "bak", "--exclude", ".*"], &issues_dir)?;
 	let mut matches = Vec::new();
 
 	let pattern_lower = pattern.to_lowercase();
@@ -784,21 +782,13 @@ fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 	let pattern_sanitized = sanitize_title_for_filename(pattern).to_lowercase();
 
 	for line in all_files.lines() {
-		let file_path = line.trim();
-		if file_path.is_empty() {
+		let relative_path = line.trim();
+		if relative_path.is_empty() {
 			continue;
 		}
 
-		let path = PathBuf::from(file_path);
-
-		// Get relative path from issues_dir
-		let relative = if let Ok(rel) = path.strip_prefix(&issues_dir) {
-			rel.to_string_lossy().to_string()
-		} else {
-			continue;
-		};
-
-		let relative_lower = relative.to_lowercase();
+		let path = issues_dir.join(relative_path);
+		let relative_lower = relative_path.to_lowercase();
 
 		// Check if pattern matches:
 		// - The issue number (filename without extension)
@@ -1222,10 +1212,21 @@ fn extract_checkbox_title(line: &str) -> Option<String> {
 }
 
 /// Sync changes from a local issue file back to GitHub using stored metadata.
-async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: &str, meta: &IssueMetaEntry, issue: &Issue) -> Result<()> {
+/// Returns whether the issue state changed (for file renaming).
+async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: &str, meta: &IssueMetaEntry, issue: &Issue) -> Result<bool> {
 	let mut updates = 0;
 	let mut creates = 0;
 	let mut deletes = 0;
+	let mut state_changed = false;
+
+	// Step 0: Check if issue state (open/closed) changed
+	if issue.meta.closed != meta.original_closed {
+		let new_state = if issue.meta.closed { "closed" } else { "open" };
+		println!("Updating issue state to {}...", new_state);
+		github::update_github_issue_state(settings, owner, repo, meta.issue_number, new_state).await?;
+		state_changed = true;
+		updates += 1;
+	}
 
 	// Step 1: Check issue body (first comment with no id is the body)
 	let issue_body = issue.comments.first().map(|c| c.body.as_str()).unwrap_or("");
@@ -1290,7 +1291,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 		println!("Synced to GitHub: {}", parts.join(", "));
 	}
 
-	Ok(())
+	Ok(state_changed)
 }
 
 /// Fetch an issue and all its sub-issues recursively, writing them to XDG_DATA.
@@ -1314,7 +1315,8 @@ async fn fetch_and_store_issue(
 
 	// Determine file path
 	let parent_info = parent_issue.as_ref().map(|(num, title)| (*num, title.as_str()));
-	let issue_file_path = get_issue_file_path(owner, repo, issue_number, &issue.title, extension, parent_info);
+	let issue_closed = issue.state == "closed";
+	let issue_file_path = get_issue_file_path(owner, repo, issue_number, &issue.title, extension, issue_closed, parent_info);
 
 	// Create parent directories
 	if let Some(parent) = issue_file_path.parent() {
@@ -1339,6 +1341,7 @@ async fn fetch_and_store_issue(
 		original_comments: comments.iter().map(OriginalComment::from).collect(),
 		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
 		parent_issue: parent_issue.as_ref().map(|(num, _)| *num),
+		original_closed: issue_closed,
 	};
 	save_issue_meta(owner, repo, meta_entry)?;
 
@@ -1393,11 +1396,11 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 		std::fs::write(issue_file_path, &serialized)?;
 	}
 
-	// Sync body/comment changes to GitHub
-	sync_local_issue_to_github(settings, &owner, &repo, &meta, &issue).await?;
+	// Sync body/comment/state changes to GitHub
+	let state_changed = sync_local_issue_to_github(settings, &owner, &repo, &meta, &issue).await?;
 
-	// If we executed actions, refresh from GitHub
-	if actions_executed > 0 {
+	// If we executed actions or state changed, refresh from GitHub
+	if actions_executed > 0 || state_changed {
 		// Re-fetch and update local file and metadata to reflect the synced state
 		println!("Refreshing local issue file from GitHub...");
 		let extension = match meta.extension.as_str() {
@@ -1413,14 +1416,20 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 		// Store the old path before re-fetching
 		let old_path = issue_file_path.to_path_buf();
 
-		// Re-fetch creates file with potentially new title
+		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
 		let new_path = fetch_and_store_issue(settings, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
 
-		// If the path changed (title was renamed), delete the old file
+		// If the path changed (title/state changed), delete the old file
 		if old_path != new_path && old_path.exists() {
-			println!("Issue renamed, removing old file: {:?}", old_path);
+			if state_changed {
+				println!("Issue state changed, renaming file...");
+			} else {
+				println!("Issue renamed, removing old file: {:?}", old_path);
+			}
 			std::fs::remove_file(&old_path)?;
 
+			// For state changes, we might also need to rename the sub-issues directory
+			// The directory name doesn't include .bak, so this only matters for title changes
 			let old_sub_dir = old_path.with_extension("");
 			if old_sub_dir.is_dir() {
 				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
@@ -1429,7 +1438,9 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 			}
 		}
 
-		println!("Synced {} actions to GitHub.", actions_executed);
+		if actions_executed > 0 {
+			println!("Synced {} actions to GitHub.", actions_executed);
+		}
 	} else {
 		println!("No changes made.");
 	}
@@ -2027,12 +2038,16 @@ mod tests {
 
 	#[test]
 	fn test_format_issue_filename() {
-		// With title
-		assert_eq!(format_issue_filename(123, "my issue", &Extension::Md), "123_-_my_issue.md");
-		assert_eq!(format_issue_filename(456, "another-issue", &Extension::Typ), "456_-_another-issue.typ");
+		// With title, open issue
+		assert_eq!(format_issue_filename(123, "my issue", &Extension::Md, false), "123_-_my_issue.md");
+		assert_eq!(format_issue_filename(456, "another-issue", &Extension::Typ, false), "456_-_another-issue.typ");
 
 		// Empty title - falls back to just number
-		assert_eq!(format_issue_filename(789, "", &Extension::Md), "789.md");
+		assert_eq!(format_issue_filename(789, "", &Extension::Md, false), "789.md");
+
+		// Closed issues get .bak suffix
+		assert_eq!(format_issue_filename(123, "my issue", &Extension::Md, true), "123_-_my_issue.md.bak");
+		assert_eq!(format_issue_filename(456, "another-issue", &Extension::Typ, true), "456_-_another-issue.typ.bak");
 	}
 
 	#[test]

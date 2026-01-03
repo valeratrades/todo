@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::Path, process::Command, str::FromStr};
 
 use chrono::Duration;
 #[cfg(not(test))]
@@ -8,6 +8,37 @@ use color_eyre::eyre::{Report, Result, bail};
 use crate::config::LiveSettings;
 #[cfg(test)]
 use crate::mocks::Utc;
+
+/// Run fd (find alternative) with the given arguments.
+/// Panics if fd is not installed.
+pub fn fd(args: &[&str], dir: &Path) -> Result<String> {
+	let output = Command::new("fd").args(args).current_dir(dir).output();
+
+	match output {
+		Ok(out) if out.status.success() => Ok(String::from_utf8(out.stdout)?),
+		Ok(out) => bail!("fd failed: {}", String::from_utf8_lossy(&out.stderr)),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+			panic!("fd is not installed. Install it: https://github.com/sharkdp/fd")
+		}
+		Err(e) => bail!("Failed to run fd: {}", e),
+	}
+}
+
+/// Run rg (ripgrep) with the given arguments.
+/// Panics if rg is not installed.
+pub fn rg(args: &[&str], dir: &Path) -> Result<String> {
+	let output = Command::new("rg").args(args).current_dir(dir).output();
+
+	match output {
+		Ok(out) if out.status.success() => Ok(String::from_utf8(out.stdout)?),
+		Ok(out) if out.status.code() == Some(1) => Ok(String::new()), // No matches
+		Ok(out) => bail!("rg failed: {}", String::from_utf8_lossy(&out.stderr)),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+			panic!("rg (ripgrep) is not installed. Install it: https://github.com/BurntSushi/ripgrep")
+		}
+		Err(e) => bail!("Failed to run rg: {}", e),
+	}
+}
 
 pub fn format_date(days_back: usize, settings: &LiveSettings) -> String {
 	let date = Utc::now() - Duration::days(days_back as i64);

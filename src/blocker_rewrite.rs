@@ -97,42 +97,26 @@ fn extract_issue_title_from_file(path: &Path) -> Option<String> {
 /// Search for issue files matching a pattern
 /// Uses exact same logic as open.rs
 fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
-	use std::process::Command;
-
 	let issues_dir = issues_dir();
 	if !issues_dir.exists() {
 		return Ok(Vec::new());
 	}
 
-	let output = Command::new("find")
-		.args([issues_dir.to_str().unwrap(), "(", "-name", "*.md", "-o", "-name", "*.typ", ")", "-type", "f", "!", "-name", ".*"])
-		.output()?;
-
-	if !output.status.success() {
-		return Err(eyre!("Failed to search for issue files"));
-	}
-
-	let all_files = String::from_utf8(output.stdout)?;
+	// Search for .md, .typ, and their .bak variants (closed issues)
+	let all_files = crate::utils::fd(&["-t", "f", "-e", "md", "-e", "typ", "-e", "bak", "--exclude", ".*"], &issues_dir)?;
 	let mut matches = Vec::new();
 
 	let pattern_lower = pattern.to_lowercase();
 	let pattern_sanitized = sanitize_title_for_filename(pattern).to_lowercase();
 
 	for line in all_files.lines() {
-		let file_path = line.trim();
-		if file_path.is_empty() {
+		let relative_path = line.trim();
+		if relative_path.is_empty() {
 			continue;
 		}
 
-		let path = PathBuf::from(file_path);
-
-		let relative = if let Ok(rel) = path.strip_prefix(&issues_dir) {
-			rel.to_string_lossy().to_string()
-		} else {
-			continue;
-		};
-
-		let relative_lower = relative.to_lowercase();
+		let path = issues_dir.join(relative_path);
+		let relative_lower = relative_path.to_lowercase();
 
 		if let Some(file_stem) = path.file_stem() {
 			let file_stem_str = file_stem.to_string_lossy().to_lowercase();
