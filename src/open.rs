@@ -714,7 +714,7 @@ fn read_sub_issue_body_from_file(file_path: &Path) -> Option<String> {
 /// Reconstruct an issue file by re-embedding sub-issue contents from their local files.
 /// This ensures the parent file reflects the current state of all sub-issue files.
 /// Closed sub-issues have their contents folded (replaced with `<!-- omitted -->`).
-fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: &str) -> Result<()> {
+async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str) -> Result<()> {
 	let content = std::fs::read_to_string(issue_file_path)?;
 	let normalized = normalize_issue_indentation(&content);
 
@@ -726,6 +726,11 @@ fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: 
 		.as_ref()
 		.and_then(|url| github::extract_issue_number_from_url(url))
 		.ok_or_else(|| eyre!("Could not extract issue number from URL"))?;
+
+	// Get extension from metadata
+	let meta = get_issue_meta(owner, repo, issue_number);
+	let extension = meta.as_ref().map(|m| m.extension.as_str()).unwrap_or("md");
+	let extension = if extension == "typ" { Extension::Typ } else { Extension::Md };
 
 	let mut result = String::new();
 	let mut lines = normalized.lines().peekable();
@@ -772,7 +777,7 @@ fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: 
 								result.push_str(&child_indent_str);
 								result.push_str("<!-- omitted (use --render-closed to unfold) -->\n");
 							} else {
-								// Prefer separate file contents if available, otherwise use inline content
+								// Prefer separate file contents if available
 								if let Some(sub_file) = find_sub_issue_file(owner, repo, issue_number, &issue.meta.title, sub_number) {
 									if let Some(body) = read_sub_issue_body_from_file(&sub_file) {
 										for body_line in body.lines() {
@@ -786,6 +791,20 @@ fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: 
 									for body_line in &existing_body_lines {
 										result.push_str(body_line);
 										result.push('\n');
+									}
+								} else {
+									// No local file and no inline content - fetch from GitHub
+									println!("Fetching sub-issue #{} from GitHub...", sub_number);
+									let parent_info = Some((issue_number, issue.meta.title.clone()));
+									if let Ok(sub_file_path) = fetch_and_store_issue(gh, owner, repo, sub_number, &extension, false, parent_info).await {
+										// Read the fetched sub-issue body
+										if let Some(body) = read_sub_issue_body_from_file(&sub_file_path) {
+											for body_line in body.lines() {
+												result.push_str(&child_indent_str);
+												result.push_str(body_line);
+												result.push('\n');
+											}
+										}
 									}
 								}
 							}
@@ -1542,7 +1561,8 @@ async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Res
 
 	// Reconstruct the file with current sub-issue contents before opening
 	// This ensures we show the latest state of all sub-issue files
-	if let Err(e) = reconstruct_issue_with_sub_issues(issue_file_path, &owner, &repo) {
+	// Also fetches any missing sub-issues from GitHub
+	if let Err(e) = reconstruct_issue_with_sub_issues(gh, issue_file_path, &owner, &repo).await {
 		eprintln!("Warning: could not reconstruct sub-issues: {}", e);
 	}
 

@@ -104,7 +104,7 @@ async fn main() {
 		}
 		Commands::Blocker(args) => blocker::main(&settings, args).await,
 		Commands::BlockerRewrite(args) => blocker_rewrite::main(&settings, args).await,
-		Commands::Clockify(args) => clockify::main(&settings, args),
+		Commands::Clockify(args) => clockify::main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
 		Commands::Open(args) => open::open_command(&settings, github_client, args).await,
