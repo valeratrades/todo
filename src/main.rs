@@ -6,6 +6,7 @@ pub mod config;
 mod github;
 mod manual_stats;
 mod milestones;
+mod mock_github;
 pub mod mocks;
 mod open;
 mod perf_eval;
@@ -25,6 +26,9 @@ struct Cli {
 	command: Commands,
 	#[clap(flatten)]
 	settings_flags: config::SettingsFlags,
+	/// Use mock GitHub client instead of real API (for testing)
+	#[arg(long, global = true)]
+	dbg: bool,
 }
 
 #[derive(Subcommand)]
@@ -63,11 +67,30 @@ async fn main() {
 
 	let cli = Cli::parse();
 
-	let settings = match config::LiveSettings::new(cli.settings_flags, Duration::from_secs(3)) {
+	let settings = match config::LiveSettings::new(cli.settings_flags.clone(), Duration::from_secs(3)) {
 		Ok(s) => s,
 		Err(e) => {
 			eprintln!("Error: {}", e);
 			std::process::exit(1);
+		}
+	};
+
+	// Create the GitHub client based on --dbg flag
+	let github_client: github::BoxedGitHubClient = if cli.dbg {
+		std::sync::Arc::new(mock_github::MockGitHubClient::new("mock_user"))
+	} else {
+		match github::RealGitHubClient::new(&settings) {
+			Ok(client) => std::sync::Arc::new(client),
+			Err(e) => {
+				// Only error if we're using a command that needs GitHub
+				// For now, create a dummy that will error on use
+				if matches!(cli.command, Commands::Open(_)) {
+					eprintln!("Error: {}", e);
+					std::process::exit(1);
+				}
+				// For other commands, create a mock (they won't use it)
+				std::sync::Arc::new(mock_github::MockGitHubClient::new("unused"))
+			}
 		}
 	};
 
@@ -84,7 +107,7 @@ async fn main() {
 		Commands::Clockify(args) => clockify::main(&settings, args),
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
-		Commands::Open(args) => open::open_command(&settings, args).await,
+		Commands::Open(args) => open::open_command(&settings, github_client, args).await,
 	};
 
 	match success {

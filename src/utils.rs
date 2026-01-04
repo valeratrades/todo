@@ -4,10 +4,25 @@ use chrono::Duration;
 #[cfg(not(test))]
 use chrono::Utc;
 use color_eyre::eyre::{Report, Result, bail};
+pub use tokio::sync::oneshot;
+pub use v_utils::io::file_open::{Client as OpenClient, OpenMode};
 
 use crate::config::LiveSettings;
 #[cfg(test)]
 use crate::mocks::Utc;
+
+/// Open a file in editor.
+/// If `mock_rx` is Some, uses Mock mode (for testing) - waits for signal instead of opening editor.
+/// If `mock_rx` is None, opens with $EDITOR normally.
+pub fn open_file<P: AsRef<Path>>(path: P, mock_rx: Option<oneshot::Receiver<()>>) -> Result<()> {
+	let mode = match mock_rx {
+		Some(rx) => OpenMode::Mock(rx),
+		None => OpenMode::Normal,
+	};
+
+	OpenClient::default().mode(mode).open(path)?;
+	Ok(())
+}
 
 /// Run fd (find alternative) with the given arguments.
 /// Panics if fd is not installed.

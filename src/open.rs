@@ -6,7 +6,7 @@ use v_utils::prelude::*;
 
 use crate::{
 	config::LiveSettings,
-	github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalComment, OriginalSubIssue},
+	github::{self, BoxedGitHubClient, GitHubComment, GitHubIssue, IssueAction, OriginalComment, OriginalSubIssue},
 };
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
@@ -239,12 +239,47 @@ impl Issue {
 					current_comment_lines.clear();
 				}
 
-				// Parse child issue recursively - but we need to handle this differently
-				// For now, just store as a minimal child
+				// Parse child's body content (lines at depth + 2 indentation)
+				let child_body_indent = "\t".repeat(depth + 2);
+				let mut child_body_lines: Vec<String> = Vec::new();
+
+				while let Some(&next_line) = lines.peek() {
+					// Child body lines are at depth + 2 (one more than the child title's depth + 1)
+					if next_line.is_empty() {
+						// Preserve empty lines within child content
+						let _ = lines.next();
+						child_body_lines.push(String::new());
+					} else if next_line.starts_with(&child_body_indent) {
+						let _ = lines.next();
+						// Strip the child body indent to get actual content
+						let body_content = next_line.strip_prefix(&child_body_indent).unwrap_or("");
+						child_body_lines.push(body_content.to_string());
+					} else {
+						// Not a child body line - break
+						break;
+					}
+				}
+
+				// Trim trailing empty lines
+				while child_body_lines.last().map_or(false, |l| l.is_empty()) {
+					child_body_lines.pop();
+				}
+
+				let child_body = child_body_lines.join("\n").trim().to_string();
+				let child_comments = if child_body.is_empty() {
+					vec![]
+				} else {
+					vec![Comment {
+						id: None,
+						body: child_body,
+						owned: child_meta.owned,
+					}]
+				};
+
 				children.push(Issue {
 					meta: child_meta,
 					labels: vec![],
-					comments: vec![],
+					comments: child_comments,
 					children: vec![],
 					blockers: vec![],
 				});
@@ -404,10 +439,22 @@ impl Issue {
 		// Children (sub-issues)
 		for child in &self.children {
 			let child_checked = if child.meta.closed { "x" } else { " " };
+			let child_content_indent = "\t".repeat(depth + 2);
+
+			// Output child title line
 			if let Some(url) = &child.meta.url {
 				out.push_str(&format!("{}- [{}] {} <!--sub {}-->\n", content_indent, child_checked, child.meta.title, url));
 			} else {
 				out.push_str(&format!("{}- [{}] {}\n", content_indent, child_checked, child.meta.title));
+			}
+
+			// Output child body (first comment is body)
+			if let Some(body_comment) = child.comments.first() {
+				if !body_comment.body.is_empty() {
+					for line in body_comment.body.lines() {
+						out.push_str(&format!("{}{}\n", child_content_indent, line));
+					}
+				}
 			}
 		}
 
@@ -493,7 +540,7 @@ impl Issue {
 
 /// Execute collected actions level by level, updating the Issue struct with new URLs.
 /// Returns the number of actions executed.
-async fn execute_issue_actions(settings: &LiveSettings, owner: &str, repo: &str, issue: &mut Issue, actions_by_level: Vec<Vec<IssueAction>>) -> Result<usize> {
+async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue: &mut Issue, actions_by_level: Vec<Vec<IssueAction>>) -> Result<usize> {
 	let mut total_actions = 0;
 
 	for (level, actions) in actions_by_level.into_iter().enumerate() {
@@ -517,15 +564,15 @@ async fn execute_issue_actions(settings: &LiveSettings, owner: &str, repo: &str,
 					println!("Creating sub-issue '{}'...", title);
 
 					// Create the issue on GitHub
-					let created = github::create_github_issue(settings, owner, repo, &title, "").await?;
+					let created = gh.create_issue(owner, repo, &title, "").await?;
 					println!("Created sub-issue #{}: {}", created.number, created.html_url);
 
 					// Add as sub-issue to the parent (using the resource ID, not the issue number)
-					github::add_sub_issue(settings, owner, repo, parent_issue_number, created.id).await?;
+					gh.add_sub_issue(owner, repo, parent_issue_number, created.id).await?;
 
 					// If it should be closed, close it
 					if closed {
-						github::update_github_issue_state(settings, owner, repo, created.number, "closed").await?;
+						gh.update_issue_state(owner, repo, created.number, "closed").await?;
 					}
 
 					// Update the Issue struct with the new URL
@@ -538,7 +585,7 @@ async fn execute_issue_actions(settings: &LiveSettings, owner: &str, repo: &str,
 				IssueAction::UpdateSubIssueState { issue_number, closed } => {
 					let new_state = if closed { "closed" } else { "open" };
 					println!("Updating sub-issue #{} to {}...", issue_number, new_state);
-					github::update_github_issue_state(settings, owner, repo, issue_number, new_state).await?;
+					gh.update_issue_state(owner, repo, issue_number, new_state).await?;
 					total_actions += 1;
 				}
 			}
@@ -698,16 +745,26 @@ fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: 
 					if let Some(url_end) = url_part.find("-->") {
 						let sub_url = &url_part[..url_end];
 						if let Some(sub_number) = github::extract_issue_number_from_url(sub_url) {
-							// Skip any existing indented content under this sub-issue
+							// Collect any existing inline body content under this sub-issue
 							let base_indent = line.len() - line.trim_start_matches('\t').len();
 							let child_indent_str = "\t".repeat(base_indent + 1);
+							let mut existing_body_lines: Vec<String> = Vec::new();
 
 							while let Some(&next_line) = lines.peek() {
-								if next_line.is_empty() || next_line.starts_with(&child_indent_str) {
+								if next_line.is_empty() {
+									existing_body_lines.push(String::new());
+									lines.next();
+								} else if next_line.starts_with(&child_indent_str) {
+									existing_body_lines.push(next_line.to_string());
 									lines.next();
 								} else {
 									break;
 								}
+							}
+
+							// Trim trailing empty lines from collected content
+							while existing_body_lines.last().map_or(false, |l| l.is_empty()) {
+								existing_body_lines.pop();
 							}
 
 							// For closed sub-issues, just add <!-- omitted --> instead of content
@@ -715,7 +772,7 @@ fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: 
 								result.push_str(&child_indent_str);
 								result.push_str("<!-- omitted (use --render-closed to unfold) -->\n");
 							} else {
-								// Embed the local file contents for open sub-issues
+								// Prefer separate file contents if available, otherwise use inline content
 								if let Some(sub_file) = find_sub_issue_file(owner, repo, issue_number, &issue.meta.title, sub_number) {
 									if let Some(body) = read_sub_issue_body_from_file(&sub_file) {
 										for body_line in body.lines() {
@@ -723,6 +780,12 @@ fn reconstruct_issue_with_sub_issues(issue_file_path: &Path, owner: &str, repo: 
 											result.push_str(body_line);
 											result.push('\n');
 										}
+									}
+								} else if !existing_body_lines.is_empty() {
+									// No separate file - preserve existing inline content
+									for body_line in &existing_body_lines {
+										result.push_str(body_line);
+										result.push('\n');
 									}
 								}
 							}
@@ -1320,7 +1383,7 @@ fn extract_checkbox_title(line: &str) -> Option<String> {
 
 /// Sync changes from a local issue file back to GitHub using stored metadata.
 /// Returns whether the issue state changed (for file renaming).
-async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: &str, meta: &IssueMetaEntry, issue: &Issue) -> Result<bool> {
+async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &str, meta: &IssueMetaEntry, issue: &Issue) -> Result<bool> {
 	let mut updates = 0;
 	let mut creates = 0;
 	let mut deletes = 0;
@@ -1330,7 +1393,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 	if issue.meta.closed != meta.original_closed {
 		let new_state = if issue.meta.closed { "closed" } else { "open" };
 		println!("Updating issue state to {}...", new_state);
-		github::update_github_issue_state(settings, owner, repo, meta.issue_number, new_state).await?;
+		gh.update_issue_state(owner, repo, meta.issue_number, new_state).await?;
 		state_changed = true;
 		updates += 1;
 	}
@@ -1340,7 +1403,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
 	if issue_body != original_body {
 		println!("Updating issue body...");
-		github::update_github_issue_body(settings, owner, repo, meta.issue_number, issue_body).await?;
+		gh.update_issue_body(owner, repo, meta.issue_number, issue_body).await?;
 		updates += 1;
 	}
 
@@ -1352,7 +1415,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 	for orig in &meta.original_comments {
 		if !target_ids.contains(&orig.id) {
 			println!("Deleting comment {}...", orig.id);
-			github::delete_github_comment(settings, owner, repo, orig.id).await?;
+			gh.delete_comment(owner, repo, orig.id).await?;
 			deletes += 1;
 		}
 	}
@@ -1367,7 +1430,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 				let original = meta.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
 				if comment.body != original {
 					println!("Updating comment {}...", id);
-					github::update_github_comment(settings, owner, repo, id, &comment.body).await?;
+					gh.update_comment(owner, repo, id, &comment.body).await?;
 					updates += 1;
 				}
 			}
@@ -1377,7 +1440,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 			None =>
 				if !comment.body.is_empty() {
 					println!("Creating new comment...");
-					github::create_github_comment(settings, owner, repo, meta.issue_number, &comment.body).await?;
+					gh.create_comment(owner, repo, meta.issue_number, &comment.body).await?;
 					creates += 1;
 				},
 		}
@@ -1404,7 +1467,7 @@ async fn sync_local_issue_to_github(settings: &LiveSettings, owner: &str, repo: 
 /// Fetch an issue and all its sub-issues recursively, writing them to XDG_DATA.
 /// Returns the path to the main issue file.
 async fn fetch_and_store_issue(
-	settings: &LiveSettings,
+	gh: &BoxedGitHubClient,
 	owner: &str,
 	repo: &str,
 	issue_number: u64,
@@ -1414,10 +1477,10 @@ async fn fetch_and_store_issue(
 ) -> Result<PathBuf> {
 	// Fetch issue data in parallel
 	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
-		github::fetch_authenticated_user(settings),
-		github::fetch_github_issue(settings, owner, repo, issue_number),
-		github::fetch_github_comments(settings, owner, repo, issue_number),
-		github::fetch_github_sub_issues(settings, owner, repo, issue_number),
+		gh.fetch_authenticated_user(),
+		gh.fetch_issue(owner, repo, issue_number),
+		gh.fetch_comments(owner, repo, issue_number),
+		gh.fetch_sub_issues(owner, repo, issue_number),
 	)?;
 
 	// Determine file path
@@ -1470,7 +1533,7 @@ fn extract_owner_repo_from_path(issue_file_path: &Path) -> Result<(String, Strin
 }
 
 /// Open a local issue file, let user edit, then sync changes back to GitHub.
-async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Result<()> {
+async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Result<()> {
 	// Extract owner and repo from path
 	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
 
@@ -1484,7 +1547,7 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 	}
 
 	// Open in editor (blocks until editor closes)
-	v_utils::io::open(issue_file_path)?;
+	crate::utils::open_file(issue_file_path, None)?;
 
 	// Read edited content, expand !b shorthand, and parse into Issue struct
 	let raw_content = std::fs::read_to_string(issue_file_path)?;
@@ -1507,7 +1570,7 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 
 	// Execute actions and update Issue struct with new URLs
 	let actions_executed = if has_actions {
-		execute_issue_actions(settings, &owner, &repo, &mut issue, actions).await?
+		execute_issue_actions(gh, &owner, &repo, &mut issue, actions).await?
 	} else {
 		0
 	};
@@ -1521,7 +1584,7 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 	}
 
 	// Sync body/comment/state changes to GitHub
-	let state_changed = sync_local_issue_to_github(settings, &owner, &repo, &meta, &issue).await?;
+	let state_changed = sync_local_issue_to_github(gh, &owner, &repo, &meta, &issue).await?;
 
 	// If we executed actions or state changed, refresh from GitHub
 	if actions_executed > 0 || state_changed {
@@ -1541,7 +1604,7 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
-		let new_path = fetch_and_store_issue(settings, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
+		let new_path = fetch_and_store_issue(gh, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
 
 		// If the path changed (title/state changed), delete the old file
 		if old_path != new_path && old_path.exists() {
@@ -1638,13 +1701,13 @@ fn parse_touch_path(path: &str) -> Result<TouchPath> {
 }
 
 /// Handle creating a new issue on GitHub
-async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
+async fn create_issue_on_github(gh: &BoxedGitHubClient, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
 	let owner = &touch_path.owner;
 	let repo = &touch_path.repo;
 
 	// Step 1: Check collaborator access
 	println!("Checking collaborator access to {}/{}...", owner, repo);
-	let has_access = github::check_collaborator_access(settings, owner, repo).await?;
+	let has_access = gh.check_collaborator_access(owner, repo).await?;
 	if !has_access {
 		return Err(eyre!("You don't have collaborator (write) access to {}/{}. Cannot create issues.", owner, repo));
 	}
@@ -1658,7 +1721,7 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 		println!("Validating parent issue chain...");
 		for (i, parent_title) in touch_path.issue_chain[..touch_path.issue_chain.len() - 1].iter().enumerate() {
 			// Try to find by title first
-			let issue_number = github::find_issue_by_title(settings, owner, repo, parent_title).await?;
+			let issue_number = gh.find_issue_by_title(owner, repo, parent_title).await?;
 
 			match issue_number {
 				Some(num) => {
@@ -1668,10 +1731,10 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 				None => {
 					// If not found by title, try parsing as issue number
 					if let Ok(num) = parent_title.parse::<u64>() {
-						if github::issue_exists(settings, owner, repo, num).await? {
+						if gh.issue_exists(owner, repo, num).await? {
 							println!("  Found parent issue #{}", num);
 							// Fetch the actual title from GitHub
-							let issue = github::fetch_github_issue(settings, owner, repo, num).await?;
+							let issue = gh.fetch_issue(owner, repo, num).await?;
 							parent_issues.push((num, issue.title));
 						} else {
 							return Err(eyre!(
@@ -1697,19 +1760,19 @@ async fn create_issue_on_github(settings: &LiveSettings, touch_path: &TouchPath,
 
 	// Step 4: Create the issue on GitHub (with empty body - user will edit after)
 	println!("Creating issue '{}'...", new_issue_title);
-	let created = github::create_github_issue(settings, owner, repo, new_issue_title, "").await?;
+	let created = gh.create_issue(owner, repo, new_issue_title, "").await?;
 	println!("Created issue #{}: {}", created.number, created.html_url);
 
 	// Step 5: If there are parent issues, add as sub-issue to the immediate parent
 	if let Some((parent_number, _)) = parent_issues.last() {
 		println!("Adding as sub-issue to #{}...", parent_number);
-		github::add_sub_issue(settings, owner, repo, *parent_number, created.number).await?;
+		gh.add_sub_issue(owner, repo, *parent_number, created.id).await?;
 		println!("Sub-issue relationship created.");
 	}
 
 	// Step 6: Fetch and store the newly created issue locally (like normal flow)
 	let parent_issue = parent_issues.last().cloned();
-	let issue_file_path = fetch_and_store_issue(settings, owner, repo, created.number, extension, false, parent_issue).await?;
+	let issue_file_path = fetch_and_store_issue(gh, owner, repo, created.number, extension, false, parent_issue).await?;
 
 	println!("Stored issue at: {:?}", issue_file_path);
 
@@ -1782,7 +1845,7 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 	Extension::Md
 }
 
-pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()> {
+pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs) -> Result<()> {
 	let input = args.url_or_pattern.as_deref().unwrap_or("").trim();
 	let extension = get_effective_extension(args.extension, settings);
 
@@ -1796,15 +1859,15 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 		// First, try to find an existing local issue file
 		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {:?}", existing_path);
-			open_local_issue(settings, &existing_path).await?;
+			open_local_issue(&gh, &existing_path).await?;
 			return Ok(());
 		}
 
 		// Not found locally - create on GitHub
-		let issue_file_path = create_issue_on_github(settings, &touch_path, &effective_ext).await?;
+		let issue_file_path = create_issue_on_github(&gh, &touch_path, &effective_ext).await?;
 
 		// Open the local issue file for editing
-		open_local_issue(settings, &issue_file_path).await?;
+		open_local_issue(&gh, &issue_file_path).await?;
 		return Ok(());
 	}
 
@@ -1816,12 +1879,12 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 		println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
 
 		// Fetch and store issue (and sub-issues) in XDG_DATA
-		let issue_file_path = fetch_and_store_issue(settings, &owner, &repo, issue_number, &extension, args.render_closed, None).await?;
+		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, args.render_closed, None).await?;
 
 		println!("Stored issue at: {:?}", issue_file_path);
 
 		// Open the local issue file for editing
-		open_local_issue(settings, &issue_file_path).await?;
+		open_local_issue(&gh, &issue_file_path).await?;
 		return Ok(());
 	}
 
@@ -1829,7 +1892,7 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 	let input_path = Path::new(input);
 	if input_path.exists() && input_path.is_file() {
 		// Direct file path - open it
-		open_local_issue(settings, input_path).await?;
+		open_local_issue(&gh, input_path).await?;
 		return Ok(());
 	}
 
@@ -1859,7 +1922,7 @@ pub async fn open_command(settings: &LiveSettings, args: OpenArgs) -> Result<()>
 	};
 
 	// Open the local issue file for editing
-	open_local_issue(settings, &issue_file_path).await?;
+	open_local_issue(&gh, &issue_file_path).await?;
 
 	Ok(())
 }

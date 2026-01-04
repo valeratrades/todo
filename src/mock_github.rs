@@ -1,0 +1,511 @@
+//! Mock GitHub client for testing purposes.
+//!
+//! This module provides a mock implementation of the GitHubClient trait that stores
+//! all data in memory and can be used for integration testing without hitting the real API.
+
+use std::{
+	collections::HashMap,
+	sync::{
+		Mutex,
+		atomic::{AtomicU64, Ordering},
+	},
+};
+
+use async_trait::async_trait;
+use v_utils::prelude::*;
+
+use crate::github::{CreatedIssue, GitHubClient, GitHubComment, GitHubIssue, GitHubLabel, GitHubUser};
+
+/// Internal representation of an issue in the mock
+#[derive(Clone, Debug)]
+struct MockIssueData {
+	number: u64,
+	id: u64,
+	title: String,
+	body: String,
+	state: String,
+	labels: Vec<String>,
+	owner_login: String,
+}
+
+/// Internal representation of a comment in the mock
+#[derive(Clone, Debug)]
+struct MockCommentData {
+	id: u64,
+	issue_number: u64,
+	body: String,
+	owner_login: String,
+}
+
+/// Key for looking up issues/comments by owner/repo
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct RepoKey {
+	owner: String,
+	repo: String,
+}
+
+impl RepoKey {
+	fn new(owner: &str, repo: &str) -> Self {
+		Self {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+		}
+	}
+}
+
+/// Mock GitHub client that stores all state in memory.
+/// Thread-safe for use in async contexts.
+pub struct MockGitHubClient {
+	/// The authenticated user's login
+	user_login: String,
+
+	/// Counter for generating unique issue IDs
+	next_issue_id: AtomicU64,
+
+	/// Counter for generating unique issue numbers (per repo)
+	next_issue_number: AtomicU64,
+
+	/// Counter for generating unique comment IDs
+	next_comment_id: AtomicU64,
+
+	/// All issues, keyed by (owner, repo) -> issue_number -> issue
+	issues: Mutex<HashMap<RepoKey, HashMap<u64, MockIssueData>>>,
+
+	/// All comments, keyed by (owner, repo) -> comment_id -> comment
+	comments: Mutex<HashMap<RepoKey, HashMap<u64, MockCommentData>>>,
+
+	/// Sub-issue relationships: parent_issue_number -> vec of child issue numbers
+	sub_issues: Mutex<HashMap<RepoKey, HashMap<u64, Vec<u64>>>>,
+
+	/// Repos where user has collaborator access
+	collaborator_repos: Mutex<Vec<RepoKey>>,
+
+	/// Call log for debugging
+	call_log: Mutex<Vec<String>>,
+}
+
+impl MockGitHubClient {
+	/// Create a new mock client with the given authenticated user login
+	pub fn new(user_login: &str) -> Self {
+		Self {
+			user_login: user_login.to_string(),
+			next_issue_id: AtomicU64::new(1000),
+			next_issue_number: AtomicU64::new(1),
+			next_comment_id: AtomicU64::new(5000),
+			issues: Mutex::new(HashMap::new()),
+			comments: Mutex::new(HashMap::new()),
+			sub_issues: Mutex::new(HashMap::new()),
+			collaborator_repos: Mutex::new(Vec::new()),
+			call_log: Mutex::new(Vec::new()),
+		}
+	}
+
+	/// Add an issue to the mock state
+	pub fn add_issue(&self, owner: &str, repo: &str, number: u64, title: &str, body: &str, state: &str, labels: Vec<&str>, owner_login: &str) {
+		let key = RepoKey::new(owner, repo);
+		let id = self.next_issue_id.fetch_add(1, Ordering::SeqCst);
+
+		let issue = MockIssueData {
+			number,
+			id,
+			title: title.to_string(),
+			body: body.to_string(),
+			state: state.to_string(),
+			labels: labels.into_iter().map(|s| s.to_string()).collect(),
+			owner_login: owner_login.to_string(),
+		};
+
+		let mut issues = self.issues.lock().unwrap();
+		issues.entry(key).or_default().insert(number, issue);
+	}
+
+	/// Add a comment to an issue
+	pub fn add_comment(&self, owner: &str, repo: &str, issue_number: u64, comment_id: u64, body: &str, owner_login: &str) {
+		let key = RepoKey::new(owner, repo);
+
+		let comment = MockCommentData {
+			id: comment_id,
+			issue_number,
+			body: body.to_string(),
+			owner_login: owner_login.to_string(),
+		};
+
+		let mut comments = self.comments.lock().unwrap();
+		comments.entry(key).or_default().insert(comment_id, comment);
+	}
+
+	/// Add a sub-issue relationship
+	pub fn add_sub_issue_relation(&self, owner: &str, repo: &str, parent_number: u64, child_number: u64) {
+		let key = RepoKey::new(owner, repo);
+
+		let mut sub_issues = self.sub_issues.lock().unwrap();
+		sub_issues.entry(key).or_default().entry(parent_number).or_default().push(child_number);
+	}
+
+	/// Grant collaborator access to a repo
+	pub fn grant_collaborator_access(&self, owner: &str, repo: &str) {
+		let key = RepoKey::new(owner, repo);
+		let mut repos = self.collaborator_repos.lock().unwrap();
+		if !repos.contains(&key) {
+			repos.push(key);
+		}
+	}
+
+	/// Get the call log for debugging
+	pub fn get_call_log(&self) -> Vec<String> {
+		self.call_log.lock().unwrap().clone()
+	}
+
+	/// Clear the call log
+	pub fn clear_call_log(&self) {
+		self.call_log.lock().unwrap().clear();
+	}
+
+	fn log_call(&self, call: &str) {
+		self.call_log.lock().unwrap().push(call.to_string());
+	}
+
+	fn convert_issue_data(&self, data: &MockIssueData) -> GitHubIssue {
+		GitHubIssue {
+			number: data.number,
+			title: data.title.clone(),
+			body: if data.body.is_empty() { None } else { Some(data.body.clone()) },
+			labels: data.labels.iter().map(|name| GitHubLabel { name: name.clone() }).collect(),
+			user: GitHubUser { login: data.owner_login.clone() },
+			state: data.state.clone(),
+		}
+	}
+}
+
+#[async_trait]
+impl GitHubClient for MockGitHubClient {
+	async fn fetch_authenticated_user(&self) -> Result<String> {
+		self.log_call("fetch_authenticated_user()");
+		Ok(self.user_login.clone())
+	}
+
+	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GitHubIssue> {
+		self.log_call(&format!("fetch_issue({owner}, {repo}, {issue_number})"));
+
+		let key = RepoKey::new(owner, repo);
+		let issues = self.issues.lock().unwrap();
+
+		let repo_issues = issues.get(&key).ok_or_else(|| eyre!("Repository not found: {}/{}", owner, repo))?;
+
+		let issue_data = repo_issues.get(&issue_number).ok_or_else(|| eyre!("Issue not found: #{}", issue_number))?;
+
+		Ok(self.convert_issue_data(issue_data))
+	}
+
+	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubComment>> {
+		self.log_call(&format!("fetch_comments({owner}, {repo}, {issue_number})"));
+
+		let key = RepoKey::new(owner, repo);
+		let comments = self.comments.lock().unwrap();
+
+		let repo_comments = match comments.get(&key) {
+			Some(c) => c,
+			None => return Ok(Vec::new()),
+		};
+
+		let issue_comments: Vec<GitHubComment> = repo_comments
+			.values()
+			.filter(|c| c.issue_number == issue_number)
+			.map(|c| GitHubComment {
+				id: c.id,
+				body: if c.body.is_empty() { None } else { Some(c.body.clone()) },
+				user: GitHubUser { login: c.owner_login.clone() },
+			})
+			.collect();
+
+		Ok(issue_comments)
+	}
+
+	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubIssue>> {
+		self.log_call(&format!("fetch_sub_issues({owner}, {repo}, {issue_number})"));
+
+		let key = RepoKey::new(owner, repo);
+
+		let sub_issue_numbers = {
+			let sub_issues = self.sub_issues.lock().unwrap();
+			match sub_issues.get(&key).and_then(|m| m.get(&issue_number)) {
+				Some(numbers) => numbers.clone(),
+				None => return Ok(Vec::new()),
+			}
+		};
+
+		let issues = self.issues.lock().unwrap();
+		let repo_issues = match issues.get(&key) {
+			Some(i) => i,
+			None => return Ok(Vec::new()),
+		};
+
+		let result: Vec<GitHubIssue> = sub_issue_numbers
+			.iter()
+			.filter_map(|num| repo_issues.get(num).map(|data| self.convert_issue_data(data)))
+			.collect();
+
+		Ok(result)
+	}
+
+	async fn update_issue_body(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
+		self.log_call(&format!("update_issue_body({owner}, {repo}, {issue_number}, <body>)"));
+
+		let key = RepoKey::new(owner, repo);
+		let mut issues = self.issues.lock().unwrap();
+
+		let repo_issues = issues.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {}/{}", owner, repo))?;
+
+		let issue = repo_issues.get_mut(&issue_number).ok_or_else(|| eyre!("Issue not found: #{}", issue_number))?;
+
+		issue.body = body.to_string();
+		Ok(())
+	}
+
+	async fn update_issue_state(&self, owner: &str, repo: &str, issue_number: u64, state: &str) -> Result<()> {
+		self.log_call(&format!("update_issue_state({owner}, {repo}, {issue_number}, {state})"));
+
+		let key = RepoKey::new(owner, repo);
+		let mut issues = self.issues.lock().unwrap();
+
+		let repo_issues = issues.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {}/{}", owner, repo))?;
+
+		let issue = repo_issues.get_mut(&issue_number).ok_or_else(|| eyre!("Issue not found: #{}", issue_number))?;
+
+		issue.state = state.to_string();
+		Ok(())
+	}
+
+	async fn update_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
+		self.log_call(&format!("update_comment({owner}, {repo}, {comment_id}, <body>)"));
+
+		let key = RepoKey::new(owner, repo);
+		let mut comments = self.comments.lock().unwrap();
+
+		let repo_comments = comments.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {}/{}", owner, repo))?;
+
+		let comment = repo_comments.get_mut(&comment_id).ok_or_else(|| eyre!("Comment not found: {}", comment_id))?;
+
+		comment.body = body.to_string();
+		Ok(())
+	}
+
+	async fn create_comment(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
+		self.log_call(&format!("create_comment({owner}, {repo}, {issue_number}, <body>)"));
+
+		let key = RepoKey::new(owner, repo);
+		let comment_id = self.next_comment_id.fetch_add(1, Ordering::SeqCst);
+
+		let comment = MockCommentData {
+			id: comment_id,
+			issue_number,
+			body: body.to_string(),
+			owner_login: self.user_login.clone(),
+		};
+
+		let mut comments = self.comments.lock().unwrap();
+		comments.entry(key).or_default().insert(comment_id, comment);
+
+		Ok(())
+	}
+
+	async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
+		self.log_call(&format!("delete_comment({owner}, {repo}, {comment_id})"));
+
+		let key = RepoKey::new(owner, repo);
+		let mut comments = self.comments.lock().unwrap();
+
+		if let Some(repo_comments) = comments.get_mut(&key) {
+			repo_comments.remove(&comment_id);
+		}
+
+		Ok(())
+	}
+
+	async fn check_collaborator_access(&self, owner: &str, repo: &str) -> Result<bool> {
+		self.log_call(&format!("check_collaborator_access({owner}, {repo})"));
+
+		let key = RepoKey::new(owner, repo);
+		let repos = self.collaborator_repos.lock().unwrap();
+		Ok(repos.contains(&key))
+	}
+
+	async fn create_issue(&self, owner: &str, repo: &str, title: &str, body: &str) -> Result<CreatedIssue> {
+		self.log_call(&format!("create_issue({owner}, {repo}, {title}, <body>)"));
+
+		let key = RepoKey::new(owner, repo);
+		let id = self.next_issue_id.fetch_add(1, Ordering::SeqCst);
+		let number = self.next_issue_number.fetch_add(1, Ordering::SeqCst);
+
+		let issue = MockIssueData {
+			number,
+			id,
+			title: title.to_string(),
+			body: body.to_string(),
+			state: "open".to_string(),
+			labels: Vec::new(),
+			owner_login: self.user_login.clone(),
+		};
+
+		let mut issues = self.issues.lock().unwrap();
+		issues.entry(key).or_default().insert(number, issue);
+
+		Ok(CreatedIssue {
+			id,
+			number,
+			html_url: format!("https://github.com/{}/{}/issues/{}", owner, repo, number),
+		})
+	}
+
+	async fn add_sub_issue(&self, owner: &str, repo: &str, parent_issue_number: u64, child_issue_id: u64) -> Result<()> {
+		self.log_call(&format!("add_sub_issue({owner}, {repo}, parent={parent_issue_number}, child_id={child_issue_id})"));
+
+		let key = RepoKey::new(owner, repo);
+
+		// Find the issue number that matches the child_issue_id
+		let child_number = {
+			let issues = self.issues.lock().unwrap();
+			let repo_issues = issues.get(&key).ok_or_else(|| eyre!("Repository not found: {}/{}", owner, repo))?;
+
+			repo_issues
+				.values()
+				.find(|i| i.id == child_issue_id)
+				.map(|i| i.number)
+				.ok_or_else(|| eyre!("Child issue with id {} not found", child_issue_id))?
+		};
+
+		let mut sub_issues = self.sub_issues.lock().unwrap();
+		sub_issues.entry(key).or_default().entry(parent_issue_number).or_default().push(child_number);
+
+		Ok(())
+	}
+
+	async fn find_issue_by_title(&self, owner: &str, repo: &str, title: &str) -> Result<Option<u64>> {
+		self.log_call(&format!("find_issue_by_title({owner}, {repo}, {title})"));
+
+		let key = RepoKey::new(owner, repo);
+		let issues = self.issues.lock().unwrap();
+
+		let repo_issues = match issues.get(&key) {
+			Some(i) => i,
+			None => return Ok(None),
+		};
+
+		for issue in repo_issues.values() {
+			if issue.title == title {
+				return Ok(Some(issue.number));
+			}
+		}
+
+		Ok(None)
+	}
+
+	async fn issue_exists(&self, owner: &str, repo: &str, issue_number: u64) -> Result<bool> {
+		self.log_call(&format!("issue_exists({owner}, {repo}, {issue_number})"));
+
+		let key = RepoKey::new(owner, repo);
+		let issues = self.issues.lock().unwrap();
+
+		if let Some(repo_issues) = issues.get(&key) {
+			return Ok(repo_issues.contains_key(&issue_number));
+		}
+
+		Ok(false)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn test_mock_basic_operations() {
+		let client = MockGitHubClient::new("testuser");
+
+		// Add an issue
+		client.add_issue("owner", "repo", 123, "Test Issue", "Body content", "open", vec!["bug"], "testuser");
+
+		// Fetch it
+		let issue = client.fetch_issue("owner", "repo", 123).await.unwrap();
+		assert_eq!(issue.number, 123);
+		assert_eq!(issue.title, "Test Issue");
+		assert_eq!(issue.body, Some("Body content".to_string()));
+		assert_eq!(issue.state, "open");
+
+		// Update body
+		client.update_issue_body("owner", "repo", 123, "New body").await.unwrap();
+		let issue = client.fetch_issue("owner", "repo", 123).await.unwrap();
+		assert_eq!(issue.body, Some("New body".to_string()));
+
+		// Update state
+		client.update_issue_state("owner", "repo", 123, "closed").await.unwrap();
+		let issue = client.fetch_issue("owner", "repo", 123).await.unwrap();
+		assert_eq!(issue.state, "closed");
+	}
+
+	#[tokio::test]
+	async fn test_mock_sub_issues() {
+		let client = MockGitHubClient::new("testuser");
+
+		// Add parent and child issues
+		client.add_issue("owner", "repo", 1, "Parent Issue", "", "open", vec![], "testuser");
+		client.add_issue("owner", "repo", 2, "Child Issue", "", "open", vec![], "testuser");
+
+		// Add sub-issue relationship
+		client.add_sub_issue_relation("owner", "repo", 1, 2);
+
+		// Fetch sub-issues
+		let sub_issues = client.fetch_sub_issues("owner", "repo", 1).await.unwrap();
+		assert_eq!(sub_issues.len(), 1);
+		assert_eq!(sub_issues[0].number, 2);
+		assert_eq!(sub_issues[0].title, "Child Issue");
+	}
+
+	#[tokio::test]
+	async fn test_mock_create_issue() {
+		let client = MockGitHubClient::new("testuser");
+		client.grant_collaborator_access("owner", "repo");
+
+		let created = client.create_issue("owner", "repo", "New Issue", "Issue body").await.unwrap();
+		assert!(created.number > 0);
+		assert!(created.html_url.contains("owner/repo/issues"));
+
+		// Verify it exists
+		let issue = client.fetch_issue("owner", "repo", created.number).await.unwrap();
+		assert_eq!(issue.title, "New Issue");
+	}
+
+	#[tokio::test]
+	async fn test_mock_comments() {
+		let client = MockGitHubClient::new("testuser");
+
+		client.add_issue("owner", "repo", 1, "Issue", "", "open", vec![], "testuser");
+		client.add_comment("owner", "repo", 1, 100, "First comment", "testuser");
+		client.add_comment("owner", "repo", 1, 101, "Second comment", "other");
+
+		let comments = client.fetch_comments("owner", "repo", 1).await.unwrap();
+		assert_eq!(comments.len(), 2);
+
+		// Delete a comment
+		client.delete_comment("owner", "repo", 100).await.unwrap();
+		let comments = client.fetch_comments("owner", "repo", 1).await.unwrap();
+		assert_eq!(comments.len(), 1);
+	}
+
+	#[tokio::test]
+	async fn test_mock_call_log() {
+		let client = MockGitHubClient::new("testuser");
+
+		client.add_issue("owner", "repo", 1, "Issue", "", "open", vec![], "testuser");
+		let _ = client.fetch_issue("owner", "repo", 1).await;
+		let _ = client.fetch_comments("owner", "repo", 1).await;
+
+		let log = client.get_call_log();
+		assert_eq!(log.len(), 2);
+		assert!(log[0].contains("fetch_issue"));
+		assert!(log[1].contains("fetch_comments"));
+
+		client.clear_call_log();
+		assert!(client.get_call_log().is_empty());
+	}
+}
