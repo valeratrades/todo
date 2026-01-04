@@ -6,7 +6,7 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 
 /// Error type for issue file parsing.
 /// Provides detailed error messages with source locations.
-#[derive(Debug, thiserror::Error, Diagnostic)]
+#[derive(Debug, Diagnostic, thiserror::Error)]
 pub enum ParseError {
 	#[error("file is empty")]
 	#[diagnostic(code(todo::parse::empty_file))]

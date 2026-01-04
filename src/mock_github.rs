@@ -106,9 +106,9 @@ impl MockGitHubClient {
 			&& let Ok(content) = std::fs::read_to_string(&state_file)
 		{
 			if let Err(e) = client.load_state_json(&content) {
-				eprintln!("[mock] Failed to load state from {}: {}", state_file, e);
+				eprintln!("[mock] Failed to load state from {state_file}: {e}");
 			} else {
-				eprintln!("[mock] Loaded state from {}", state_file);
+				eprintln!("[mock] Loaded state from {state_file}");
 			}
 		}
 
