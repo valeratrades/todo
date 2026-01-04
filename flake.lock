@@ -184,14 +184,18 @@
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1767531400,
-        "narHash": "sha256-f4UI8Un1Hn6TSoQdK9DfVjSpHqCOrbQwk+ZYZkR3x90=",
-        "path": "/home/v/s/g/github",
-        "type": "path"
+        "lastModified": 1767533207,
+        "narHash": "sha256-GNPJwW5UEDoodXwCkzMlReSSZfcsyLeVeh/BeSY+ycg=",
+        "owner": "valeratrades",
+        "repo": ".github",
+        "rev": "1f8a2713468898348f74d7c987171a7452bbdb4d",
+        "type": "github"
       },
       "original": {
-        "path": "/home/v/s/g/github",
-        "type": "path"
+        "owner": "valeratrades",
+        "ref": "v1.4",
+        "repo": ".github",
+        "type": "github"
       }
     }
   },

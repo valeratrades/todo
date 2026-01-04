@@ -63,8 +63,24 @@ async fn main() {
 	#[cfg(not(feature = "is_integration_test"))]
 	v_utils::clientside!();
 
-	// Initialize tracing/logging (ignore if already initialized)
-	let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
+	// Initialize tracing/logging
+	// If TODO_TRACE_FILE is set, write traces to that file for test verification
+	if let Ok(trace_file) = std::env::var("TODO_TRACE_FILE") {
+		use std::fs::OpenOptions;
+
+		use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+		let file = OpenOptions::new().create(true).append(true).open(&trace_file).expect("Failed to open trace file");
+
+		let file_layer = tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(file)).with_ansi(false).json();
+
+		let _ = tracing_subscriber::registry()
+			.with(file_layer)
+			.with(tracing_subscriber::EnvFilter::new("info,todo=debug"))
+			.try_init();
+	} else {
+		let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
+	}
 
 	let cli = Cli::parse();
 

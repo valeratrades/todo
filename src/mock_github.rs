@@ -12,6 +12,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use tracing::instrument;
 use v_utils::prelude::*;
 
 use crate::github::{CreatedIssue, GitHubClient, GitHubComment, GitHubIssue, GitHubLabel, GitHubUser};
@@ -179,12 +180,16 @@ impl MockGitHubClient {
 
 #[async_trait]
 impl GitHubClient for MockGitHubClient {
+	#[instrument(skip(self), name = "MockGitHubClient::fetch_authenticated_user")]
 	async fn fetch_authenticated_user(&self) -> Result<String> {
+		tracing::info!(target: "mock_github", "fetch_authenticated_user");
 		self.log_call("fetch_authenticated_user()");
 		Ok(self.user_login.clone())
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::fetch_issue")]
 	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GitHubIssue> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "fetch_issue");
 		self.log_call(&format!("fetch_issue({owner}, {repo}, {issue_number})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -197,7 +202,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(self.convert_issue_data(issue_data))
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::fetch_comments")]
 	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubComment>> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "fetch_comments");
 		self.log_call(&format!("fetch_comments({owner}, {repo}, {issue_number})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -221,7 +228,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(issue_comments)
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::fetch_sub_issues")]
 	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubIssue>> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "fetch_sub_issues");
 		self.log_call(&format!("fetch_sub_issues({owner}, {repo}, {issue_number})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -248,7 +257,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(result)
 	}
 
+	#[instrument(skip(self, body), name = "MockGitHubClient::update_issue_body")]
 	async fn update_issue_body(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "update_issue_body");
 		self.log_call(&format!("update_issue_body({owner}, {repo}, {issue_number}, <body>)"));
 
 		let key = RepoKey::new(owner, repo);
@@ -262,7 +273,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(())
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::update_issue_state")]
 	async fn update_issue_state(&self, owner: &str, repo: &str, issue_number: u64, state: &str) -> Result<()> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, state, "update_issue_state");
 		self.log_call(&format!("update_issue_state({owner}, {repo}, {issue_number}, {state})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -276,7 +289,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(())
 	}
 
+	#[instrument(skip(self, body), name = "MockGitHubClient::update_comment")]
 	async fn update_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
+		tracing::info!(target: "mock_github", owner, repo, comment_id, "update_comment");
 		self.log_call(&format!("update_comment({owner}, {repo}, {comment_id}, <body>)"));
 
 		let key = RepoKey::new(owner, repo);
@@ -290,7 +305,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(())
 	}
 
+	#[instrument(skip(self, body), name = "MockGitHubClient::create_comment")]
 	async fn create_comment(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "create_comment");
 		self.log_call(&format!("create_comment({owner}, {repo}, {issue_number}, <body>)"));
 
 		let key = RepoKey::new(owner, repo);
@@ -309,7 +326,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(())
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::delete_comment")]
 	async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
+		tracing::info!(target: "mock_github", owner, repo, comment_id, "delete_comment");
 		self.log_call(&format!("delete_comment({owner}, {repo}, {comment_id})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -322,7 +341,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(())
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::check_collaborator_access")]
 	async fn check_collaborator_access(&self, owner: &str, repo: &str) -> Result<bool> {
+		tracing::info!(target: "mock_github", owner, repo, "check_collaborator_access");
 		self.log_call(&format!("check_collaborator_access({owner}, {repo})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -330,7 +351,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(repos.contains(&key))
 	}
 
+	#[instrument(skip(self, body), name = "MockGitHubClient::create_issue")]
 	async fn create_issue(&self, owner: &str, repo: &str, title: &str, body: &str) -> Result<CreatedIssue> {
+		tracing::info!(target: "mock_github", owner, repo, title, "create_issue");
 		self.log_call(&format!("create_issue({owner}, {repo}, {title}, <body>)"));
 
 		let key = RepoKey::new(owner, repo);
@@ -357,7 +380,9 @@ impl GitHubClient for MockGitHubClient {
 		})
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::add_sub_issue")]
 	async fn add_sub_issue(&self, owner: &str, repo: &str, parent_issue_number: u64, child_issue_id: u64) -> Result<()> {
+		tracing::info!(target: "mock_github", owner, repo, parent_issue_number, child_issue_id, "add_sub_issue");
 		self.log_call(&format!("add_sub_issue({owner}, {repo}, parent={parent_issue_number}, child_id={child_issue_id})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -380,7 +405,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(())
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::find_issue_by_title")]
 	async fn find_issue_by_title(&self, owner: &str, repo: &str, title: &str) -> Result<Option<u64>> {
+		tracing::info!(target: "mock_github", owner, repo, title, "find_issue_by_title");
 		self.log_call(&format!("find_issue_by_title({owner}, {repo}, {title})"));
 
 		let key = RepoKey::new(owner, repo);
@@ -400,7 +427,9 @@ impl GitHubClient for MockGitHubClient {
 		Ok(None)
 	}
 
+	#[instrument(skip(self), name = "MockGitHubClient::issue_exists")]
 	async fn issue_exists(&self, owner: &str, repo: &str, issue_number: u64) -> Result<bool> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "issue_exists");
 		self.log_call(&format!("issue_exists({owner}, {repo}, {issue_number})"));
 
 		let key = RepoKey::new(owner, repo);
