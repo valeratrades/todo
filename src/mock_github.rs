@@ -102,6 +102,8 @@ impl MockGitHubClient {
 	}
 
 	/// Add an issue to the mock state
+	#[cfg(test)]
+	#[expect(clippy::too_many_arguments)]
 	pub fn add_issue(&self, owner: &str, repo: &str, number: u64, title: &str, body: &str, state: &str, labels: Vec<&str>, owner_login: &str) {
 		let key = RepoKey::new(owner, repo);
 		let id = self.next_issue_id.fetch_add(1, Ordering::SeqCst);
@@ -121,6 +123,7 @@ impl MockGitHubClient {
 	}
 
 	/// Add a comment to an issue
+	#[cfg(test)]
 	pub fn add_comment(&self, owner: &str, repo: &str, issue_number: u64, comment_id: u64, body: &str, owner_login: &str) {
 		let key = RepoKey::new(owner, repo);
 
@@ -136,6 +139,7 @@ impl MockGitHubClient {
 	}
 
 	/// Add a sub-issue relationship
+	#[cfg(test)]
 	pub fn add_sub_issue_relation(&self, owner: &str, repo: &str, parent_number: u64, child_number: u64) {
 		let key = RepoKey::new(owner, repo);
 
@@ -144,6 +148,7 @@ impl MockGitHubClient {
 	}
 
 	/// Grant collaborator access to a repo
+	#[cfg(test)]
 	pub fn grant_collaborator_access(&self, owner: &str, repo: &str) {
 		let key = RepoKey::new(owner, repo);
 		let mut repos = self.collaborator_repos.lock().unwrap();
@@ -153,11 +158,13 @@ impl MockGitHubClient {
 	}
 
 	/// Get the call log for debugging
+	#[cfg(test)]
 	pub fn get_call_log(&self) -> Vec<String> {
 		self.call_log.lock().unwrap().clone()
 	}
 
 	/// Clear the call log
+	#[cfg(test)]
 	pub fn clear_call_log(&self) {
 		self.call_log.lock().unwrap().clear();
 	}

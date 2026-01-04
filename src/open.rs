@@ -286,7 +286,7 @@ impl Issue {
 				}
 
 				// Trim trailing empty lines
-				while child_body_lines.last().map_or(false, |l| l.is_empty()) {
+				while child_body_lines.last().is_some_and(|l| l.is_empty()) {
 					child_body_lines.pop();
 				}
 
@@ -473,11 +473,11 @@ impl Issue {
 			}
 
 			// Output child body (first comment is body)
-			if let Some(body_comment) = child.comments.first() {
-				if !body_comment.body.is_empty() {
-					for line in body_comment.body.lines() {
-						out.push_str(&format!("{child_content_indent}{line}\n"));
-					}
+			if let Some(body_comment) = child.comments.first()
+				&& !body_comment.body.is_empty()
+			{
+				for line in body_comment.body.lines() {
+					out.push_str(&format!("{child_content_indent}{line}\n"));
 				}
 			}
 		}
@@ -531,15 +531,15 @@ impl Issue {
 				}
 			} else if let Some(child_url) = &child.meta.url {
 				// Existing sub-issue - check if state changed
-				if let Some(child_number) = github::extract_issue_number_from_url(child_url) {
-					if let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number) {
-						let orig_closed = orig.state == "closed";
-						if child.meta.closed != orig_closed {
-							levels[depth].push(IssueAction::UpdateSubIssueState {
-								issue_number: child_number,
-								closed: child.meta.closed,
-							});
-						}
+				if let Some(child_number) = github::extract_issue_number_from_url(child_url)
+					&& let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number)
+				{
+					let orig_closed = orig.state == "closed";
+					if child.meta.closed != orig_closed {
+						levels[depth].push(IssueAction::UpdateSubIssueState {
+							issue_number: child_number,
+							closed: child.meta.closed,
+						});
 					}
 				}
 			}
@@ -691,13 +691,13 @@ fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title
 	if let Ok(entries) = std::fs::read_dir(&sub_dir) {
 		for entry in entries.flatten() {
 			let path = entry.path();
-			if path.is_file() {
-				if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-					// Match files starting with "{number}_-_" or exactly "{number}.{ext}"
-					// This naturally includes .bak files like "78_-_title.md.bak"
-					if name.starts_with(&prefix) || name.starts_with(&format!("{sub_issue_number}.")) {
-						return Some(path);
-					}
+			if path.is_file()
+				&& let Some(name) = path.file_name().and_then(|n| n.to_str())
+			{
+				// Match files starting with "{number}_-_" or exactly "{number}.{ext}"
+				// This naturally includes .bak files like "78_-_title.md.bak"
+				if name.starts_with(&prefix) || name.starts_with(&format!("{sub_issue_number}.")) {
+					return Some(path);
 				}
 			}
 		}
@@ -766,68 +766,68 @@ async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_file_pa
 		// Check if this line is a sub-issue marker: `\t- [ ] title <!--sub url-->` or `\t- [x] title <!--sub url-->`
 		let trimmed = line.trim_start_matches('\t');
 		let is_closed = trimmed.starts_with("- [x] ");
-		if let Some(rest) = trimmed.strip_prefix("- [ ] ").or_else(|| trimmed.strip_prefix("- [x] ")) {
-			if rest.contains("<!--sub ") {
-				// Extract sub-issue number from the URL
-				if let Some(url_start) = rest.find("<!--sub ") {
-					let url_part = &rest[url_start + 8..];
-					if let Some(url_end) = url_part.find("-->") {
-						let sub_url = &url_part[..url_end];
-						if let Some(sub_number) = github::extract_issue_number_from_url(sub_url) {
-							// Collect any existing inline body content under this sub-issue
-							let base_indent = line.len() - line.trim_start_matches('\t').len();
-							let child_indent_str = "\t".repeat(base_indent + 1);
-							let mut existing_body_lines: Vec<String> = Vec::new();
+		if let Some(rest) = trimmed.strip_prefix("- [ ] ").or_else(|| trimmed.strip_prefix("- [x] "))
+			&& rest.contains("<!--sub ")
+		{
+			// Extract sub-issue number from the URL
+			if let Some(url_start) = rest.find("<!--sub ") {
+				let url_part = &rest[url_start + 8..];
+				if let Some(url_end) = url_part.find("-->") {
+					let sub_url = &url_part[..url_end];
+					if let Some(sub_number) = github::extract_issue_number_from_url(sub_url) {
+						// Collect any existing inline body content under this sub-issue
+						let base_indent = line.len() - line.trim_start_matches('\t').len();
+						let child_indent_str = "\t".repeat(base_indent + 1);
+						let mut existing_body_lines: Vec<String> = Vec::new();
 
-							while let Some(&next_line) = lines.peek() {
-								if next_line.is_empty() {
-									existing_body_lines.push(String::new());
-									lines.next();
-								} else if next_line.starts_with(&child_indent_str) {
-									existing_body_lines.push(next_line.to_string());
-									lines.next();
-								} else {
-									break;
-								}
-							}
-
-							// Trim trailing empty lines from collected content
-							while existing_body_lines.last().map_or(false, |l| l.is_empty()) {
-								existing_body_lines.pop();
-							}
-
-							// For closed sub-issues, just add <!-- omitted --> instead of content
-							if is_closed {
-								result.push_str(&child_indent_str);
-								result.push_str("<!-- omitted (use --render-closed to unfold) -->\n");
+						while let Some(&next_line) = lines.peek() {
+							if next_line.is_empty() {
+								existing_body_lines.push(String::new());
+								lines.next();
+							} else if next_line.starts_with(&child_indent_str) {
+								existing_body_lines.push(next_line.to_string());
+								lines.next();
 							} else {
-								// Prefer separate file contents if available
-								if let Some(sub_file) = find_sub_issue_file(owner, repo, issue_number, &issue.meta.title, sub_number) {
-									if let Some(body) = read_sub_issue_body_from_file(&sub_file) {
+								break;
+							}
+						}
+
+						// Trim trailing empty lines from collected content
+						while existing_body_lines.last().is_some_and(|l| l.is_empty()) {
+							existing_body_lines.pop();
+						}
+
+						// For closed sub-issues, just add <!-- omitted --> instead of content
+						if is_closed {
+							result.push_str(&child_indent_str);
+							result.push_str("<!-- omitted (use --render-closed to unfold) -->\n");
+						} else {
+							// Prefer separate file contents if available
+							if let Some(sub_file) = find_sub_issue_file(owner, repo, issue_number, &issue.meta.title, sub_number) {
+								if let Some(body) = read_sub_issue_body_from_file(&sub_file) {
+									for body_line in body.lines() {
+										result.push_str(&child_indent_str);
+										result.push_str(body_line);
+										result.push('\n');
+									}
+								}
+							} else if !existing_body_lines.is_empty() {
+								// No separate file - preserve existing inline content
+								for body_line in &existing_body_lines {
+									result.push_str(body_line);
+									result.push('\n');
+								}
+							} else {
+								// No local file and no inline content - fetch from GitHub
+								println!("Fetching sub-issue #{sub_number} from GitHub...");
+								let parent_info = Some((issue_number, issue.meta.title.clone()));
+								if let Ok(sub_file_path) = fetch_and_store_issue(gh, owner, repo, sub_number, &extension, false, parent_info).await {
+									// Read the fetched sub-issue body
+									if let Some(body) = read_sub_issue_body_from_file(&sub_file_path) {
 										for body_line in body.lines() {
 											result.push_str(&child_indent_str);
 											result.push_str(body_line);
 											result.push('\n');
-										}
-									}
-								} else if !existing_body_lines.is_empty() {
-									// No separate file - preserve existing inline content
-									for body_line in &existing_body_lines {
-										result.push_str(body_line);
-										result.push('\n');
-									}
-								} else {
-									// No local file and no inline content - fetch from GitHub
-									println!("Fetching sub-issue #{sub_number} from GitHub...");
-									let parent_info = Some((issue_number, issue.meta.title.clone()));
-									if let Ok(sub_file_path) = fetch_and_store_issue(gh, owner, repo, sub_number, &extension, false, parent_info).await {
-										// Read the fetched sub-issue body
-										if let Some(body) = read_sub_issue_body_from_file(&sub_file_path) {
-											for body_line in body.lines() {
-												result.push_str(&child_indent_str);
-												result.push_str(body_line);
-												result.push('\n');
-											}
 										}
 									}
 								}
@@ -952,6 +952,7 @@ fn extract_issue_title_from_file(path: &Path) -> Option<String> {
 /// - Owner/number: "owner/123" -> specific issue
 /// - Issue title: "certainty" -> searches for issues with title containing "certainty"
 /// - Sanitized title: "compact format ext" -> matches "compact_format_ext" in filename
+///
 /// Also includes .bak files (closed issues)
 fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 	let issues_dir = issues_dir();
@@ -1081,6 +1082,7 @@ fn convert_markdown_to_typst(body: &str) -> String {
 		.join("\n")
 }
 
+#[expect(clippy::too_many_arguments)]
 fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool, ext: Extension) -> String {
 	let mut content = String::new();
 
@@ -1127,11 +1129,11 @@ fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[G
 
 		for line in body_text.lines() {
 			// Check if this line is a checkbox that matches a sub-issue
-			if let Some(title) = extract_checkbox_title(line) {
-				if sub_issue_titles.contains(&title.as_str()) {
-					skip_until_non_indented = true;
-					continue;
-				}
+			if let Some(title) = extract_checkbox_title(line)
+				&& sub_issue_titles.contains(&title.as_str())
+			{
+				skip_until_non_indented = true;
+				continue;
 			}
 
 			if skip_until_non_indented {
@@ -1164,15 +1166,15 @@ fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[G
 		// Use local file contents if available, otherwise fall back to GitHub body
 		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
 
-		if let Some(body) = body_to_embed {
-			if !body.is_empty() {
-				let body_text = match ext {
-					Extension::Md => body.to_string(),
-					Extension::Typ => convert_markdown_to_typst(body),
-				};
-				for line in body_text.lines() {
-					content.push_str(&format!("\t\t{line}\n"));
-				}
+		if let Some(body) = body_to_embed
+			&& !body.is_empty()
+		{
+			let body_text = match ext {
+				Extension::Md => body.to_string(),
+				Extension::Typ => convert_markdown_to_typst(body),
+			};
+			for line in body_text.lines() {
+				content.push_str(&format!("\t\t{line}\n"));
 			}
 		}
 	}
@@ -1559,10 +1561,10 @@ async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Res
 			// For state changes, we might also need to rename the sub-issues directory
 			// The directory name doesn't include .bak, so this only matters for title changes
 			let old_sub_dir = old_path.with_extension("");
-			if old_sub_dir.is_dir() {
-				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
-					eprintln!("Warning: could not remove old sub-issues directory: {e}");
-				}
+			if old_sub_dir.is_dir()
+				&& let Err(e) = std::fs::remove_dir_all(&old_sub_dir)
+			{
+				eprintln!("Warning: could not remove old sub-issues directory: {e}");
 			}
 		}
 
@@ -2275,7 +2277,7 @@ mod tests {
 		writeln!(f, "\tThis is the sub-issue body.").unwrap();
 		writeln!(f, "\t- [ ] nested task").unwrap();
 		writeln!(f, "\t\twith details").unwrap();
-		writeln!(f, "").unwrap();
+		writeln!(f).unwrap();
 		writeln!(f, "\t## Blockers").unwrap();
 		writeln!(f, "\t- some blocker").unwrap();
 		drop(f);

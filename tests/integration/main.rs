@@ -20,6 +20,7 @@ pub fn ensure_binary_compiled() {
 
 mod blocker_format;
 mod blocker_project_resolution;
+mod fixtures;
 mod open_sub_issues;
 #[macro_use]
 mod tracing_utils;
