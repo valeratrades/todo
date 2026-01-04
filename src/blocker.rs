@@ -1075,7 +1075,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			}
 
 			// Open the file
-			v_utils::io::open(&path_to_open)?;
+			v_utils::io::file_open::open(&path_to_open).await?;
 
 			// If set_project_after flag is set, update the current project
 			if set_project_after {

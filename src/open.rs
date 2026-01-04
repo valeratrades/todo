@@ -215,16 +215,20 @@ impl Issue {
 					current_comment_lines.clear();
 				}
 				in_blockers = true;
+				tracing::debug!("[parse] entering blockers section");
 				continue;
 			}
 
 			// If in blockers section, parse as blocker lines
 			if in_blockers {
 				if let Some(line_type) = crate::blocker::classify_line(content) {
+					tracing::debug!("[parse] blocker line: {:?} -> {:?}", content, line_type);
 					blockers.push(Blocker {
 						line_type,
 						raw: content.to_string(),
 					});
+				} else {
+					tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {:?}", content);
 				}
 				continue;
 			}
@@ -1463,6 +1467,9 @@ async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &
 	// Step 1: Check issue body (includes blockers section)
 	let issue_body = issue.body();
 	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
+	tracing::debug!("[sync] issue.blockers.len() = {}", issue.blockers.len());
+	tracing::debug!("[sync] issue_body:\n{}", issue_body);
+	tracing::debug!("[sync] original_body:\n{}", original_body);
 	if issue_body != original_body {
 		println!("Updating issue body...");
 		gh.update_issue_body(owner, repo, meta.issue_number, &issue_body).await?;

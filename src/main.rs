@@ -96,7 +96,7 @@ async fn main() {
 
 	// All the functions here can rely on config being correct.
 	let success = match cli.command {
-		Commands::Manual(manual_args) => manual_stats::update_or_open(&settings, manual_args),
+		Commands::Manual(manual_args) => manual_stats::update_or_open(&settings, manual_args).await,
 		Commands::Milestones(milestones_command) => milestones::milestones_command(&settings, milestones_command).await,
 		Commands::Init(args) => {
 			shell_init::output(&settings, args);

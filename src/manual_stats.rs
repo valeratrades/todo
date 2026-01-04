@@ -10,7 +10,7 @@ use std::{
 use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use v_utils::{Percent, io::OpenMode, time::Timelike};
+use v_utils::{Percent, io::file_open::OpenMode, time::Timelike};
 use xattr::FileExt as _;
 
 use crate::utils;
@@ -18,7 +18,7 @@ use crate::utils;
 static PBS_FILENAME: &str = ".pbs.json";
 
 use crate::MANUAL_PATH_APPENDIX;
-pub fn update_or_open(settings: &crate::config::LiveSettings, args: ManualArgs) -> Result<()> {
+pub async fn update_or_open(settings: &crate::config::LiveSettings, args: ManualArgs) -> Result<()> {
 	let date = utils::format_date(args.days_back, settings);
 
 	let target_file_path = Day::path(&date);
@@ -50,12 +50,12 @@ pub fn update_or_open(settings: &crate::config::LiveSettings, args: ManualArgs) 
 				if !target_file_path.exists() {
 					bail!("Tried to open ev file of a day that was not initialized");
 				}
-				v_utils::io::open(&target_file_path)?;
+				v_utils::io::file_open::open(&target_file_path).await?;
 				return process_manual_updates(&target_file_path, settings);
 			}
 			true => {
 				let pbs_path = target_file_path.parent().unwrap().join(PBS_FILENAME);
-				return v_utils::io::open_with_mode(&pbs_path, OpenMode::Pager);
+				return v_utils::io::file_open::Client::default().mode(OpenMode::Pager).open(&pbs_path).await;
 			}
 		},
 		ManualSubcommands::Ev(_) | ManualSubcommands::CounterStep(_) => {}
@@ -116,7 +116,7 @@ pub fn update_or_open(settings: &crate::config::LiveSettings, args: ManualArgs) 
 	}
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
-		v_utils::io::open(&target_file_path)?;
+		v_utils::io::file_open::open(&target_file_path).await?;
 		process_manual_updates(&target_file_path, settings)?;
 	}
 

@@ -609,7 +609,7 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			};
 
 			// Open the file with $EDITOR
-			v_utils::io::open(&issue_path)?;
+			v_utils::io::file_open::open(&issue_path).await?;
 
 			// If set_after flag is set, update the current blocker issue
 			if set_after {

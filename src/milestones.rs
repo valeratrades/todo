@@ -253,7 +253,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 	fs::write(&tmp_path, &original_description)?;
 
 	// Open in editor
-	v_utils::io::open(Path::new(&tmp_path))?;
+	v_utils::io::file_open::open(Path::new(&tmp_path)).await?;
 
 	// Read back
 	let new_description = fs::read_to_string(&tmp_path)?;
