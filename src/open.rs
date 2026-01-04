@@ -30,6 +30,13 @@ impl Extension {
 	}
 }
 
+/// Open a GitHub issue in $EDITOR.
+///
+/// Issue files support a blockers section for tracking sub-tasks. Add a `<!--blockers-->` marker
+/// (or `// blockers` for Typst) in the issue body. Content after this marker until the next sub-issue
+/// or comment is treated as blockers, using the same format as standalone blocker files.
+///
+/// Shorthand: Use `!b` on its own line to auto-expand to `<!--blockers-->` (or `// blockers` for Typst).
 #[derive(Args)]
 pub struct OpenArgs {
 	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
@@ -1203,6 +1210,32 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 	content
 }
 
+/// Expand `!b` shorthand to the full blockers marker.
+/// Matches lines that are just `!b` or `!B` (with any indentation).
+/// For .md files: expands to `<!--blockers-->`
+/// For .typ files: expands to `// blockers`
+fn expand_blocker_shorthand(content: &str, extension: &Extension) -> String {
+	let replacement = match extension {
+		Extension::Md => "<!--blockers-->",
+		Extension::Typ => "// blockers",
+	};
+
+	content
+		.lines()
+		.map(|line| {
+			let trimmed = line.trim();
+			if trimmed.eq_ignore_ascii_case("!b") {
+				// Preserve the original indentation
+				let indent = &line[..line.len() - trimmed.len()];
+				format!("{}{}", indent, replacement)
+			} else {
+				line.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
 /// Normalize issue content by converting space-based indentation to tab-based.
 /// This ensures content edited in editors that convert tabs to spaces can be properly parsed.
 ///
@@ -1453,8 +1486,19 @@ async fn open_local_issue(settings: &LiveSettings, issue_file_path: &Path) -> Re
 	// Open in editor (blocks until editor closes)
 	v_utils::io::open(issue_file_path)?;
 
-	// Read edited content and parse into Issue struct
-	let edited_content = std::fs::read_to_string(issue_file_path)?;
+	// Read edited content, expand !b shorthand, and parse into Issue struct
+	let raw_content = std::fs::read_to_string(issue_file_path)?;
+	let extension = match meta.extension.as_str() {
+		"typ" => Extension::Typ,
+		_ => Extension::Md,
+	};
+	let edited_content = expand_blocker_shorthand(&raw_content, &extension);
+
+	// Write back if !b was expanded
+	if edited_content != raw_content {
+		std::fs::write(issue_file_path, &edited_content)?;
+	}
+
 	let mut issue = Issue::parse(&edited_content).ok_or_else(|| eyre!("Failed to parse issue file"))?;
 
 	// Collect required GitHub actions (e.g., new sub-issues without URLs)
@@ -2247,5 +2291,37 @@ mod tests {
 		assert!(body.contains("- some blocker"));
 
 		std::fs::remove_file(&sub_issue_file).unwrap();
+	}
+
+	#[test]
+	fn test_expand_blocker_shorthand_md() {
+		let content = "- [ ] Title <!--url-->\n\tBody text\n\t!b\n\t- task one";
+		let result = expand_blocker_shorthand(content, &Extension::Md);
+		assert_snapshot!(result, @r"
+  - [ ] Title <!--url-->
+  	Body text
+  	<!--blockers-->
+  	- task one
+  ");
+	}
+
+	#[test]
+	fn test_expand_blocker_shorthand_typ() {
+		let content = "- [ ] Title // url\n\tBody text\n\t!B\n\t- task one";
+		let result = expand_blocker_shorthand(content, &Extension::Typ);
+		assert_snapshot!(result, @r"
+  - [ ] Title // url
+  	Body text
+  	// blockers
+  	- task one
+  ");
+	}
+
+	#[test]
+	fn test_expand_blocker_shorthand_no_match() {
+		let content = "- [ ] Title <!--url-->\n\tBody with !b inside\n\t!blocker";
+		let result = expand_blocker_shorthand(content, &Extension::Md);
+		// Should not expand !b when it's part of other text
+		assert_eq!(result, content);
 	}
 }

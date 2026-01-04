@@ -204,15 +204,15 @@ fn extract_blockers_section(content: &str) -> Option<String> {
 		// Check for blockers marker (must be in body, so indented)
 		if line.starts_with('\t') && blockers_start_idx.is_none() {
 			let trimmed = stripped.trim();
-			// Markdown: <!--blockers--> (with flexible whitespace)
+			// Markdown: <!--blockers--> or <!--blocker--> (with flexible whitespace)
 			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->"))
-				&& inner.trim() == "blockers"
+				&& (inner.trim() == "blockers" || inner.trim() == "blocker")
 			{
 				blockers_start_idx = Some(idx + 1); // Start from line after marker
 				continue;
 			}
-			// Typst: // blockers
-			if trimmed == "// blockers" {
+			// Typst: // blockers or // blocker
+			if trimmed == "// blockers" || trimmed == "// blocker" {
 				blockers_start_idx = Some(idx + 1);
 				continue;
 			}
@@ -327,15 +327,15 @@ fn update_blockers_in_issue(full_content: &str, new_blockers_content: &str) -> O
 		// Check for blockers marker (must be in body, so indented)
 		if line.starts_with('\t') && blockers_start_idx.is_none() {
 			let trimmed = stripped.trim();
-			// Markdown: <!--blockers--> (with flexible whitespace)
+			// Markdown: <!--blockers--> or <!--blocker--> (with flexible whitespace)
 			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->"))
-				&& inner.trim() == "blockers"
+				&& (inner.trim() == "blockers" || inner.trim() == "blocker")
 			{
 				blockers_start_idx = Some(idx + 1); // Start from line after marker
 				continue;
 			}
-			// Typst: // blockers
-			if trimmed == "// blockers" {
+			// Typst: // blockers or // blocker
+			if trimmed == "// blockers" || trimmed == "// blocker" {
 				blockers_start_idx = Some(idx + 1);
 				continue;
 			}
@@ -817,6 +817,36 @@ mod tests {
 		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
   - Task one
   - Task two
+  ");
+	}
+
+	#[test]
+	fn test_blocker_marker_singular() {
+		// Support <!--blocker--> without the 's'
+		let content = r#"- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+	Body text.
+
+	<!--blocker-->
+	- Task one
+	- Task two
+"#;
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
+  - Task one
+  - Task two
+  ");
+	}
+
+	#[test]
+	fn test_blocker_marker_singular_typst() {
+		// Support // blocker without the 's'
+		let content = r#"- [ ] Issue Title // https://github.com/owner/repo/issues/1
+	Body text.
+
+	// blocker
+	- Task one
+"#;
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
+  - Task one
   ");
 	}
 
