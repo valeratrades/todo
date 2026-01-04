@@ -57,6 +57,7 @@ pub fn main(_settings: &LiveSettings, _args: WatchMonitorsArgs) -> Result<()> {
 
 	tracing::info!("Starting monitor watch daemon. Taking screenshots every 60 seconds.");
 
+	//LOOP: it's a daemon
 	loop {
 		let now = Local::now();
 		let date_dir = cache_dir.join(now.format("%Y-%m-%d").to_string());

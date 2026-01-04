@@ -293,7 +293,7 @@ fn typst_to_markdown(content: &str) -> Result<String> {
 			let body_text = heading.body().to_untyped().clone().into_text();
 			let trimmed_body = body_text.trim();
 			// Convert Typst heading (= foo) to markdown heading (# foo)
-			markdown_lines.push(format!("{} {}", "#".repeat(level_num), trimmed_body));
+			markdown_lines.push(format!("{} {trimmed_body}", "#".repeat(level_num)));
 			continue;
 		}
 
@@ -605,7 +605,7 @@ fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) 
 	if parts.is_empty() {
 		Some(stripped.to_string())
 	} else {
-		Some(format!("{}: {}", parts.join(": "), stripped))
+		Some(format!("{}: {stripped}", parts.join(": ")))
 	}
 }
 

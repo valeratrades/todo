@@ -595,7 +595,7 @@ async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, 
 			continue;
 		}
 
-		println!("Executing {} actions at level {}...", actions.len(), level);
+		println!("Executing {} actions at level {level}...", actions.len());
 
 		// Execute all actions at this level
 		// We process sequentially for now because we need to update the Issue struct
@@ -668,9 +668,9 @@ fn sanitize_title_for_filename(title: &str) -> String {
 fn format_issue_filename(issue_number: u64, title: &str, extension: &Extension, closed: bool) -> String {
 	let sanitized = sanitize_title_for_filename(title);
 	let base = if sanitized.is_empty() {
-		format!("{}.{}", issue_number, extension.as_str())
+		format!("{issue_number}.{}", extension.as_str())
 	} else {
-		format!("{}_-_{}.{}", issue_number, sanitized, extension.as_str())
+		format!("{issue_number}_-_{sanitized}.{}", extension.as_str())
 	};
 	if closed { format!("{base}.bak") } else { base }
 }

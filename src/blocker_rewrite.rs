@@ -261,7 +261,7 @@ fn get_current_blocker_with_headers(blockers_content: &str) -> Option<String> {
 	if parent_headers.is_empty() {
 		Some(stripped.to_string())
 	} else {
-		Some(format!("{}: {}", parent_headers.join(": "), stripped))
+		Some(format!("{}: {stripped}", parent_headers.join(": ")))
 	}
 }
 

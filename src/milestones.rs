@@ -273,7 +273,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 		println!("Milestone was outdated, updating due date to {}", new_date.format("%Y-%m-%d"));
 
 		// Archive title: "2025/12/17_1d"
-		let archive_title = format!("{}_{}", Utc::now().format("%Y/%m/%d"), tf);
+		let archive_title = format!("{}_{tf}", Utc::now().format("%Y/%m/%d"));
 
 		// Run both API calls in parallel: update current milestone and create archived one
 		let (update_result, archive_result) = tokio::join!(
