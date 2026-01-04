@@ -3,10 +3,22 @@
 //! These tests verify that sub-issue content is preserved correctly through
 //! the parse → edit → serialize → sync cycle.
 //!
-//! Note: These tests use existing sub-issues (all have URLs) so no GitHub API
-//! calls are made. Tests for creating new sub-issues would require more setup.
+//! The tests use a pipe-based mock mechanism:
+//! 1. Create a named pipe (FIFO)
+//! 2. Spawn the binary with TODO_MOCK_PIPE env var pointing to the pipe
+//! 3. The binary waits for a signal on the pipe instead of opening an editor
+//! 4. Test modifies the file while binary is waiting
+//! 5. Test writes to the pipe to signal "editor closed"
+//! 6. Binary continues and syncs changes
 
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+	fs,
+	io::Write,
+	path::PathBuf,
+	process::{Child, Command, Stdio},
+	thread,
+	time::Duration,
+};
 
 use tempfile::TempDir;
 
@@ -25,6 +37,7 @@ struct OpenTestSetup {
 	xdg_state_home: PathBuf,
 	xdg_data_home: PathBuf,
 	issues_dir: PathBuf,
+	pipe_path: PathBuf,
 }
 
 impl OpenTestSetup {
@@ -37,10 +50,15 @@ impl OpenTestSetup {
 		let issues_dir = data_dir.join("issues");
 		fs::create_dir_all(&issues_dir).unwrap();
 
+		// Create a named pipe for mock editor signaling
+		let pipe_path = temp_dir.path().join("mock_editor_pipe");
+		nix::unistd::mkfifo(&pipe_path, nix::sys::stat::Mode::S_IRWXU).unwrap();
+
 		Self {
 			xdg_state_home: temp_dir.path().join("state"),
 			xdg_data_home: temp_dir.path().join("data"),
 			issues_dir,
+			pipe_path,
 			temp_dir,
 		}
 	}
@@ -68,33 +86,43 @@ impl OpenTestSetup {
 		fs::read_to_string(path).unwrap()
 	}
 
-	/// Run `todo --dbg open <file>` with EDITOR=true (exits immediately without modifying)
-	fn run_open(&self, file_path: &PathBuf) -> Result<String, String> {
-		let output = Command::new(get_binary_path())
+	/// Spawn the todo binary with mock pipe mode.
+	/// Returns the child process handle.
+	fn spawn_open(&self, file_path: &PathBuf) -> Child {
+		Command::new(get_binary_path())
 			.args(["--dbg", "open", file_path.to_str().unwrap()])
 			.env("XDG_STATE_HOME", &self.xdg_state_home)
 			.env("XDG_DATA_HOME", &self.xdg_data_home)
-			.env("EDITOR", "true") // Unix true command - exits immediately
-			.output()
-			.unwrap();
+			.env("TODO_MOCK_PIPE", &self.pipe_path)
+			.stdout(Stdio::piped())
+			.stderr(Stdio::piped())
+			.spawn()
+			.expect("Failed to spawn todo binary")
+	}
 
+	/// Signal the mock editor to "close" by writing to the pipe.
+	fn signal_editor_close(&self) {
+		// Open the pipe for writing - this unblocks the reading side
+		let mut pipe = fs::OpenOptions::new().write(true).open(&self.pipe_path).expect("Failed to open pipe for writing");
+		pipe.write_all(b"x").expect("Failed to write to pipe");
+	}
+
+	/// Wait for the child process to complete and return (stdout, stderr, success).
+	fn wait_for_child(&self, mut child: Child) -> (String, String, bool) {
+		let output = child.wait_with_output().expect("Failed to wait for child");
 		let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 		let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-		if !output.status.success() {
-			return Err(format!("Exit code: {:?}\nstdout: {}\nstderr: {}", output.status.code(), stdout, stderr));
-		}
-		Ok(stdout)
+		(stdout, stderr, output.status.success())
 	}
 }
 
-/// Test that sub-issue body content is preserved through the open command cycle.
-/// All sub-issues have URLs so no GitHub creation is triggered.
+/// Test that sub-issue body content is preserved through the open command cycle
+/// when no changes are made during editing.
 #[test]
 fn test_sub_issue_content_preserved_through_open() {
 	let setup = OpenTestSetup::new();
 
-	// All sub-issues have URLs - no new ones to create
+	// Initial file content with all sub-issues having URLs (no GitHub creation needed)
 	let content = "- [ ] Parent Issue <!--https://github.com/owner/repo/issues/46-->
 \tParent body content.
 
@@ -129,11 +157,18 @@ fn test_sub_issue_content_preserved_through_open() {
 }"#;
 	setup.write_meta("owner", "repo", meta_content);
 
-	// Run the open command (EDITOR=true exits immediately, so file is unchanged)
-	let result = setup.run_open(&issue_file);
+	// Spawn the binary (it will wait on the pipe)
+	let child = setup.spawn_open(&issue_file);
 
-	// Should succeed (mock GitHub client is used with --dbg)
-	assert!(result.is_ok(), "Open command failed: {:?}", result.err());
+	// Give it a moment to start and reach the pipe wait
+	thread::sleep(Duration::from_millis(100));
+
+	// Signal editor close (no file modifications)
+	setup.signal_editor_close();
+
+	// Wait for completion
+	let (stdout, stderr, success) = setup.wait_for_child(child);
+	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
 
 	// Read back the file
 	let final_content = setup.read_issue_file(&issue_file);
@@ -147,7 +182,7 @@ fn test_sub_issue_content_preserved_through_open() {
 	assert!(final_content.contains("It has multiple lines"), "Sub-issue multi-line content missing");
 }
 
-/// Test that multiple sub-issues (open and closed) are all preserved
+/// Test that multiple sub-issues (open and closed) are all preserved.
 #[test]
 fn test_multiple_sub_issues_preserved() {
 	let setup = OpenTestSetup::new();
@@ -190,8 +225,12 @@ fn test_multiple_sub_issues_preserved() {
 }"#;
 	setup.write_meta("owner", "repo", meta_content);
 
-	let result = setup.run_open(&issue_file);
-	assert!(result.is_ok(), "Open command failed: {:?}", result.err());
+	let child = setup.spawn_open(&issue_file);
+	thread::sleep(Duration::from_millis(100));
+	setup.signal_editor_close();
+
+	let (stdout, stderr, success) = setup.wait_for_child(child);
+	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
 
 	let final_content = setup.read_issue_file(&issue_file);
 
@@ -204,14 +243,120 @@ fn test_multiple_sub_issues_preserved() {
 	assert!(final_content.contains("Closed sub-issue 2"), "Closed sub 2 missing");
 }
 
-/// Test the scenario with mixed open/closed sub-issues
-/// Note: Closed sub-issues have their content folded (replaced with <!-- omitted -->)
-/// This is intentional to reduce clutter - use --render-closed to see full content
+/// Test that adding blockers during edit are preserved.
+/// This reproduces a bug where blockers added during editing get lost.
 #[test]
-fn test_sub_issues_with_body_content_preserved() {
+fn test_adding_blockers_during_edit_are_preserved() {
 	let setup = OpenTestSetup::new();
 
-	// Issue with sub-issues that have actual body content (not just omitted markers)
+	// Start with simple issue without blockers
+	let initial_content = "- [ ] blocker rewrite <!--https://github.com/owner/repo/issues/49-->
+\tget all the present functionality + legacy supported
+";
+
+	let issue_file = setup.write_issue_file("owner", "repo", "49_-_blocker_rewrite.md", initial_content);
+
+	let meta_content = r#"{
+  "owner": "owner",
+  "repo": "repo",
+  "issues": {
+    "49": {
+      "issue_number": 49,
+      "title": "blocker rewrite",
+      "extension": "md",
+      "original_issue_body": "get all the present functionality + legacy supported",
+      "original_comments": [],
+      "original_sub_issues": [],
+      "parent_issue": null,
+      "original_closed": false
+    }
+  }
+}"#;
+	setup.write_meta("owner", "repo", meta_content);
+
+	let child = setup.spawn_open(&issue_file);
+	thread::sleep(Duration::from_millis(100));
+
+	// Add blockers during "editing"
+	let modified_content = "- [ ] blocker rewrite <!--https://github.com/owner/repo/issues/49-->
+\tget all the present functionality + legacy supported
+\t<!--blockers-->
+\t- support for virtual blockers
+\t- move all primitives into new blocker.rs
+";
+	fs::write(&issue_file, modified_content).unwrap();
+
+	setup.signal_editor_close();
+
+	let (stdout, stderr, success) = setup.wait_for_child(child);
+	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
+
+	let final_content = setup.read_issue_file(&issue_file);
+	insta::assert_snapshot!(final_content, @r#"
+- [ ] blocker rewrite <!-- https://github.com/owner/repo/issues/49 -->
+	get all the present functionality + legacy supported
+
+	<!--blockers-->
+	- support for virtual blockers
+	- move all primitives into new blocker.rs
+"#);
+}
+
+/// Test that blockers section is preserved through the open command cycle.
+#[test]
+fn test_blockers_preserved_through_open() {
+	let setup = OpenTestSetup::new();
+
+	let content = "- [ ] Issue with blockers <!--https://github.com/owner/repo/issues/49-->
+\tget all the present functionality + legacy supported
+\t<!--blockers-->
+\t- support for virtual blockers
+\t- move all primitives into new blocker.rs
+\t- get clockify integration
+";
+
+	let issue_file = setup.write_issue_file("owner", "repo", "49_-_Issue_with_blockers.md", content);
+
+	let meta_content = r#"{
+  "owner": "owner",
+  "repo": "repo",
+  "issues": {
+    "49": {
+      "issue_number": 49,
+      "title": "Issue with blockers",
+      "extension": "md",
+      "original_issue_body": "get all the present functionality + legacy supported",
+      "original_comments": [],
+      "original_sub_issues": [],
+      "parent_issue": null,
+      "original_closed": false
+    }
+  }
+}"#;
+	setup.write_meta("owner", "repo", meta_content);
+
+	let child = setup.spawn_open(&issue_file);
+	thread::sleep(Duration::from_millis(100));
+	setup.signal_editor_close();
+
+	let (stdout, stderr, success) = setup.wait_for_child(child);
+	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
+
+	let final_content = setup.read_issue_file(&issue_file);
+
+	// Blockers section should be preserved
+	assert!(final_content.contains("blockers"), "Blockers marker missing");
+	assert!(final_content.contains("support for virtual blockers"), "First blocker missing");
+	assert!(final_content.contains("move all primitives"), "Second blocker missing");
+	assert!(final_content.contains("clockify integration"), "Third blocker missing");
+}
+
+/// Test that closed sub-issues have their content folded to <!-- omitted -->.
+#[test]
+fn test_closed_sub_issues_content_folded() {
+	let setup = OpenTestSetup::new();
+
+	// Start with expanded content for the closed sub-issue
 	let content = "- [ ] v2_interface <!--https://github.com/owner/repo/issues/46-->
 \tMain issue body here.
 
@@ -246,8 +391,12 @@ fn test_sub_issues_with_body_content_preserved() {
 }"#;
 	setup.write_meta("owner", "repo", meta_content);
 
-	let result = setup.run_open(&issue_file);
-	assert!(result.is_ok(), "Open command failed: {:?}", result.err());
+	let child = setup.spawn_open(&issue_file);
+	thread::sleep(Duration::from_millis(100));
+	setup.signal_editor_close();
+
+	let (stdout, stderr, success) = setup.wait_for_child(child);
+	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
 
 	let final_content = setup.read_issue_file(&issue_file);
 

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 static BINARY_COMPILED: OnceLock<()> = OnceLock::new();
 
 /// Compile the binary with is_integration_test feature before running any tests
-fn ensure_binary_compiled() {
+pub fn ensure_binary_compiled() {
 	BINARY_COMPILED.get_or_init(|| {
 		let status = std::process::Command::new("cargo")
 			.args(["build", "--features", "is_integration_test"])

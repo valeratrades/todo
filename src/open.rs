@@ -14,6 +14,32 @@ fn issues_dir() -> PathBuf {
 	v_utils::xdg_data_dir!("issues")
 }
 
+/// Check if a line is a blockers section marker.
+/// Recognized formats (case-insensitive):
+/// - `<!--blockers-->` (preferred, what `!b` expands to)
+/// - `#{1,6} Blockers` (any header level)
+/// - `**Blockers**` (with optional trailing `:`)
+/// - `// blockers` (typst)
+fn is_blockers_marker(line: &str) -> bool {
+	let trimmed = line.trim();
+	let lower = trimmed.to_ascii_lowercase();
+	if lower == "<!--blockers-->" || lower == "// blockers" {
+		return true;
+	}
+	// Match **Blockers** or **Blockers:**
+	if lower.starts_with("**blockers**") {
+		return true;
+	}
+	// Match markdown headers: # Blockers, ## Blockers, etc.
+	if let Some(rest) = lower.strip_prefix('#') {
+		let rest = rest.trim_start_matches('#');
+		if rest.trim().trim_end_matches(':') == "blockers" {
+			return true;
+		}
+	}
+	false
+}
+
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum Extension {
 	#[default]
@@ -158,7 +184,7 @@ impl Issue {
 			let content = line.strip_prefix(&child_indent).unwrap_or(line);
 
 			// Check for blockers marker
-			if content == "## Blockers" || content == "**Blockers:**" {
+			if is_blockers_marker(content) {
 				// Flush current comment/body
 				if in_body {
 					in_body = false;
@@ -394,9 +420,9 @@ impl Issue {
 		let checked = if self.meta.closed { "x" } else { " " };
 		let url_part = self.meta.url.as_deref().unwrap_or("");
 		if self.meta.owned {
-			out.push_str(&format!("{}- [{}] {} <!--{}-->\n", indent, checked, self.meta.title, url_part));
+			out.push_str(&format!("{}- [{}] {} <!-- {} -->\n", indent, checked, self.meta.title, url_part));
 		} else {
-			out.push_str(&format!("{}- [{}] {} <!--immutable {}-->\n", indent, checked, self.meta.title, url_part));
+			out.push_str(&format!("{}- [{}] {} <!--immutable {} -->\n", indent, checked, self.meta.title, url_part));
 		}
 
 		// Labels
@@ -421,12 +447,12 @@ impl Issue {
 				if let Some(id) = comment.id {
 					let url = self.meta.url.as_deref().unwrap_or("");
 					if comment.owned {
-						out.push_str(&format!("{}<!--{}#issuecomment-{}-->\n", content_indent, url, id));
+						out.push_str(&format!("{}<!-- {}#issuecomment-{} -->\n", content_indent, url, id));
 					} else {
-						out.push_str(&format!("{}<!--immutable {}#issuecomment-{}-->\n", content_indent, url, id));
+						out.push_str(&format!("{}<!--immutable {}#issuecomment-{} -->\n", content_indent, url, id));
 					}
 				} else {
-					out.push_str(&format!("{}<!--new comment-->\n", content_indent));
+					out.push_str(&format!("{}<!-- new comment -->\n", content_indent));
 				}
 				if !comment.body.is_empty() {
 					for line in comment.body.lines() {
@@ -443,7 +469,7 @@ impl Issue {
 
 			// Output child title line
 			if let Some(url) = &child.meta.url {
-				out.push_str(&format!("{}- [{}] {} <!--sub {}-->\n", content_indent, child_checked, child.meta.title, url));
+				out.push_str(&format!("{}- [{}] {} <!--sub {} -->\n", content_indent, child_checked, child.meta.title, url));
 			} else {
 				out.push_str(&format!("{}- [{}] {}\n", content_indent, child_checked, child.meta.title));
 			}
@@ -460,7 +486,7 @@ impl Issue {
 
 		// Blockers
 		if !self.blockers.is_empty() {
-			out.push_str(&format!("\n{}## Blockers\n", content_indent));
+			out.push_str(&format!("\n{}<!--blockers-->\n", content_indent));
 			for blocker in &self.blockers {
 				out.push_str(&format!("{}{}\n", content_indent, blocker.raw));
 			}
@@ -1049,9 +1075,9 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 
 	// Issue title as checkbox item with URL inline
 	if issue_owned {
-		content.push_str(&format!("- [{checked}] {} <!--{}-->\n", issue.title, issue_url));
+		content.push_str(&format!("- [{checked}] {} <!-- {} -->\n", issue.title, issue_url));
 	} else {
-		content.push_str(&format!("- [{checked}] {} <!--immutable {}-->\n", issue.title, issue_url));
+		content.push_str(&format!("- [{checked}] {} <!--immutable {} -->\n", issue.title, issue_url));
 	}
 
 	// If issue is closed and render_closed is false, omit contents
@@ -1107,7 +1133,7 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 		for sub in sub_issues {
 			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 			let sub_checked = if sub.state == "closed" { "x" } else { " " };
-			content.push_str(&format!("\t- [{sub_checked}] {} <!--sub {}-->\n", sub.title, sub_url));
+			content.push_str(&format!("\t- [{sub_checked}] {} <!--sub {} -->\n", sub.title, sub_url));
 
 			// Try to read local file contents for this sub-issue
 			let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
@@ -1132,9 +1158,9 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 
 		content.push('\n');
 		if comment_owned {
-			content.push_str(&format!("\t<!--{}-->\n", comment_url));
+			content.push_str(&format!("\t<!-- {} -->\n", comment_url));
 		} else {
-			content.push_str(&format!("\t<!--immutable {}-->\n", comment_url));
+			content.push_str(&format!("\t<!--immutable {} -->\n", comment_url));
 		}
 
 		if let Some(body) = &comment.body
@@ -1567,7 +1593,8 @@ async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Res
 	}
 
 	// Open in editor (blocks until editor closes)
-	crate::utils::open_file(issue_file_path, None)?;
+	// If TODO_MOCK_PIPE env var is set, waits for pipe signal instead
+	crate::utils::open_file(issue_file_path).await?;
 
 	// Read edited content, expand !b shorthand, and parse into Issue struct
 	let raw_content = std::fs::read_to_string(issue_file_path)?;

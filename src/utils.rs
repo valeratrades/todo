@@ -12,15 +12,30 @@ use crate::config::LiveSettings;
 use crate::mocks::Utc;
 
 /// Open a file in editor.
-/// If `mock_rx` is Some, uses Mock mode (for testing) - waits for signal instead of opening editor.
-/// If `mock_rx` is None, opens with $EDITOR normally.
-pub fn open_file<P: AsRef<Path>>(path: P, mock_rx: Option<oneshot::Receiver<()>>) -> Result<()> {
-	let mode = match mock_rx {
-		Some(rx) => OpenMode::Mock(rx),
-		None => OpenMode::Normal,
-	};
+///
+/// Behavior depends on environment:
+/// - If `TODO_MOCK_PIPE` env var is set: waits for any data on the named pipe, then returns.
+///   This allows integration tests to control when the "editor" closes.
+/// - Otherwise: opens with $EDITOR normally.
+pub async fn open_file<P: AsRef<Path>>(path: P) -> Result<()> {
+	// Check for integration test pipe-based mock mode
+	if let Ok(pipe_path) = std::env::var("TODO_MOCK_PIPE") {
+		// Wait for signal on the pipe (any data or EOF when writer closes)
+		eprintln!("[mock] Waiting for signal on pipe: {}", pipe_path);
+		let mut buf = [0u8; 1];
+		// Use blocking read in a spawn_blocking to not block the async runtime
+		tokio::task::spawn_blocking(move || {
+			use std::io::Read;
+			if let Ok(mut pipe) = std::fs::File::open(&pipe_path) {
+				let _ = pipe.read(&mut buf);
+			}
+		})
+		.await?;
+		eprintln!("[mock] Signal received, continuing...");
+		return Ok(());
+	}
 
-	OpenClient::default().mode(mode).open(path)?;
+	OpenClient::default().mode(OpenMode::Normal).open(path).await?;
 	Ok(())
 }
 
