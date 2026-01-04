@@ -28,19 +28,19 @@ serde_json = { version = "^1.0.148", features = ["std"] }
 smart-default = "^0.7"
 tempfile = "^3.24.0"
 thiserror = "2.0.17"
-tokio = { version = "^1.48.0", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "^1.49.0", features = ["rt", "rt-multi-thread"] }
 tracing = "^0.1.44"
 tracing-subscriber = { version = "^0.3", features = ["env-filter", "json"] }
 typst = "0.14.2"
 urlencoding = "^2.1.3"
-v_utils = { version = "^2.15.18", features = ["io", "async-io", "macros", "trades", "xdg", "cli"] }
+v_utils = { version = "^2.15.19", features = ["io", "async-io", "macros", "trades", "xdg", "cli"] }
 xattr = "1.6.1"
 xdg = "3.0.0"
 
 [dev-dependencies]
-insta = "1.45"
-nix = { version = "0.29", features = ["fs"] }
-rstest = "0.25"
+insta = "1.46"
+nix = { version = "0.30", features = ["fs"] }
+rstest = "0.26"
 
 [[test]]
 name = "integration"

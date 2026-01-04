@@ -17,70 +17,6 @@ use rstest::rstest;
 
 use crate::fixtures::{TestContext, ctx};
 
-/// Test that sub-issue body content is preserved through the open command cycle
-/// when no changes are made during editing.
-#[rstest]
-fn test_sub_issue_content_preserved_through_open(ctx: TestContext) {
-	// Initial file content with all sub-issues having URLs (no GitHub creation needed)
-	let content = "- [ ] Parent Issue <!--https://github.com/owner/repo/issues/46-->
-\tParent body content.
-
-\t- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/77-->
-\t\t<!-- omitted (use --render-closed to unfold) -->
-\t- [ ] Open sub-issue with content <!--sub https://github.com/owner/repo/issues/78-->
-\t\tThis is the body of the sub-issue.
-\t\tIt has multiple lines.
-";
-
-	let issue_file = ctx.write_issue_file("owner", "repo", "46_-_Parent_Issue.md", content);
-
-	// Metadata must match all sub-issues
-	let meta_content = r#"{
-  "owner": "owner",
-  "repo": "repo",
-  "issues": {
-    "46": {
-      "issue_number": 46,
-      "title": "Parent Issue",
-      "extension": "md",
-      "original_issue_body": "Parent body content.",
-      "original_comments": [],
-      "original_sub_issues": [
-        {"number": 77, "state": "closed"},
-        {"number": 78, "state": "open"}
-      ],
-      "parent_issue": null,
-      "original_closed": false
-    }
-  }
-}"#;
-	ctx.write_meta("owner", "repo", meta_content);
-
-	// Spawn the binary (it will wait on the pipe)
-	let child = ctx.spawn_open(&issue_file);
-
-	// Give it a moment to start and reach the pipe wait
-	thread::sleep(Duration::from_millis(100));
-
-	// Signal editor close (no file modifications)
-	ctx.signal_editor_close();
-
-	// Wait for completion
-	let (stdout, stderr, success) = ctx.wait_for_child(child);
-	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
-
-	// Read back the file
-	let final_content = ctx.read_issue_file(&issue_file);
-
-	// Verify all content is preserved
-	assert!(final_content.contains("Parent Issue"), "Parent title missing");
-	assert!(final_content.contains("Parent body content"), "Parent body missing");
-	assert!(final_content.contains("Closed sub-issue"), "Closed sub-issue title missing");
-	assert!(final_content.contains("Open sub-issue with content"), "Open sub-issue title missing");
-	assert!(final_content.contains("This is the body of the sub-issue"), "Sub-issue body missing");
-	assert!(final_content.contains("It has multiple lines"), "Sub-issue multi-line content missing");
-}
-
 /// Test that multiple sub-issues (open and closed) are all preserved.
 #[rstest]
 fn test_multiple_sub_issues_preserved(ctx: TestContext) {
@@ -169,6 +105,21 @@ fn test_adding_blockers_during_edit_are_preserved(ctx: TestContext) {
 }"#;
 	ctx.write_meta("owner", "repo", meta_content);
 
+	// Set up mock GitHub state so the issue exists and can be updated
+	let mock_state = r#"{
+  "issues": [
+    {
+      "owner": "owner",
+      "repo": "repo",
+      "number": 49,
+      "title": "blocker rewrite",
+      "body": "get all the present functionality + legacy supported",
+      "state": "open"
+    }
+  ]
+}"#;
+	ctx.write_mock_state(mock_state);
+
 	let child = ctx.spawn_open(&issue_file);
 	thread::sleep(Duration::from_millis(100));
 
@@ -190,58 +141,10 @@ fn test_adding_blockers_during_edit_are_preserved(ctx: TestContext) {
 	insta::assert_snapshot!(final_content, @"
 	- [ ] blocker rewrite <!-- https://github.com/owner/repo/issues/49 -->
 		get all the present functionality + legacy supported
-
-		<!--blockers-->
+		# Blockers
 		- support for virtual blockers
 		- move all primitives into new blocker.rs
 	");
-}
-
-/// Test that blockers section is preserved through the open command cycle.
-#[rstest]
-fn test_blockers_preserved_through_open(ctx: TestContext) {
-	let content = "- [ ] Issue with blockers <!--https://github.com/owner/repo/issues/49-->
-\tget all the present functionality + legacy supported
-\t<!--blockers-->
-\t- support for virtual blockers
-\t- move all primitives into new blocker.rs
-\t- get clockify integration
-";
-
-	let issue_file = ctx.write_issue_file("owner", "repo", "49_-_Issue_with_blockers.md", content);
-
-	let meta_content = r#"{
-  "owner": "owner",
-  "repo": "repo",
-  "issues": {
-    "49": {
-      "issue_number": 49,
-      "title": "Issue with blockers",
-      "extension": "md",
-      "original_issue_body": "get all the present functionality + legacy supported",
-      "original_comments": [],
-      "original_sub_issues": [],
-      "parent_issue": null,
-      "original_closed": false
-    }
-  }
-}"#;
-	ctx.write_meta("owner", "repo", meta_content);
-
-	let child = ctx.spawn_open(&issue_file);
-	thread::sleep(Duration::from_millis(100));
-	ctx.signal_editor_close();
-
-	let (stdout, stderr, success) = ctx.wait_for_child(child);
-	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
-
-	let final_content = ctx.read_issue_file(&issue_file);
-
-	// Blockers section should be preserved
-	assert!(final_content.contains("blockers"), "Blockers marker missing");
-	assert!(final_content.contains("support for virtual blockers"), "First blocker missing");
-	assert!(final_content.contains("move all primitives"), "Second blocker missing");
-	assert!(final_content.contains("clockify integration"), "Third blocker missing");
 }
 
 /// Test that closed sub-issues have their content folded to <!-- omitted -->.

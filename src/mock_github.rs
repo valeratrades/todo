@@ -88,7 +88,7 @@ pub struct MockGitHubClient {
 impl MockGitHubClient {
 	/// Create a new mock client with the given authenticated user login
 	pub fn new(user_login: &str) -> Self {
-		Self {
+		let client = Self {
 			user_login: user_login.to_string(),
 			next_issue_id: AtomicU64::new(1000),
 			next_issue_number: AtomicU64::new(1),
@@ -98,7 +98,75 @@ impl MockGitHubClient {
 			sub_issues: Mutex::new(HashMap::new()),
 			collaborator_repos: Mutex::new(Vec::new()),
 			call_log: Mutex::new(Vec::new()),
+		};
+
+		// Load initial state from file if TODO_MOCK_STATE is set
+		#[cfg(feature = "is_integration_test")]
+		if let Ok(state_file) = std::env::var("TODO_MOCK_STATE")
+			&& let Ok(content) = std::fs::read_to_string(&state_file)
+		{
+			if let Err(e) = client.load_state_json(&content) {
+				eprintln!("[mock] Failed to load state from {}: {}", state_file, e);
+			} else {
+				eprintln!("[mock] Loaded state from {}", state_file);
+			}
 		}
+
+		client
+	}
+
+	/// Load state from JSON content
+	#[cfg(feature = "is_integration_test")]
+	fn load_state_json(&self, content: &str) -> Result<(), String> {
+		use serde_json::Value;
+
+		let state: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
+
+		// Load issues
+		if let Some(issues) = state.get("issues").and_then(|v| v.as_array()) {
+			for issue in issues {
+				let owner = issue.get("owner").and_then(|v| v.as_str()).ok_or("missing owner")?;
+				let repo = issue.get("repo").and_then(|v| v.as_str()).ok_or("missing repo")?;
+				let number = issue.get("number").and_then(|v| v.as_u64()).ok_or("missing number")?;
+				let title = issue.get("title").and_then(|v| v.as_str()).unwrap_or("");
+				let body = issue.get("body").and_then(|v| v.as_str()).unwrap_or("");
+				let state_str = issue.get("state").and_then(|v| v.as_str()).unwrap_or("open");
+				let owner_login = issue.get("owner_login").and_then(|v| v.as_str()).unwrap_or("mock_user");
+
+				let labels: Vec<String> = issue
+					.get("labels")
+					.and_then(|v| v.as_array())
+					.map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+					.unwrap_or_default();
+
+				let key = RepoKey::new(owner, repo);
+				let id = self.next_issue_id.fetch_add(1, Ordering::SeqCst);
+
+				let issue_data = MockIssueData {
+					number,
+					id,
+					title: title.to_string(),
+					body: body.to_string(),
+					state: state_str.to_string(),
+					labels,
+					owner_login: owner_login.to_string(),
+				};
+
+				self.issues.lock().unwrap().entry(key).or_default().insert(number, issue_data);
+			}
+		}
+
+		// Load collaborator repos
+		if let Some(repos) = state.get("collaborator_repos").and_then(|v| v.as_array()) {
+			let mut collab_repos = self.collaborator_repos.lock().unwrap();
+			for repo in repos {
+				let owner = repo.get("owner").and_then(|v| v.as_str()).ok_or("missing owner")?;
+				let repo_name = repo.get("repo").and_then(|v| v.as_str()).ok_or("missing repo")?;
+				collab_repos.push(RepoKey::new(owner, repo_name));
+			}
+		}
+
+		Ok(())
 	}
 
 	/// Add an issue to the mock state

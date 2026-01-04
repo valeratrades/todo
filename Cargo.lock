@@ -2820,9 +2820,9 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nix"
-version = "0.29.0"
+version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
 dependencies = [
  "bitflags 2.10.0",
  "cfg-if",
@@ -3783,21 +3783,20 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rstest"
-version = "0.25.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fc39292f8613e913f7df8fa892b8944ceb47c247b78e1b1ae2f09e019be789d"
+checksum = "f5a3193c063baaa2a95a33f03035c8a72b83d97a54916055ba22d35ed3839d49"
 dependencies = [
  "futures-timer",
  "futures-util",
  "rstest_macros",
- "rustc_version",
 ]
 
 [[package]]
 name = "rstest_macros"
-version = "0.25.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f168d99749d307be9de54d23fd226628d99768225ef08f6ffb52e0182a27746"
+checksum = "9c845311f0ff7951c5506121a9ad75aec44d083c31583b2ea5a30bcb0b0abba0"
 dependencies = [
  "cfg-if",
  "glob",
@@ -5506,9 +5505,9 @@ dependencies = [
 
 [[package]]
 name = "v_utils"
-version = "2.15.18"
+version = "2.15.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70cb3f7971287891985397fd63a32aa3ab6cb58731af63b21df0640c8aa4fb1c"
+checksum = "a74d2d75e4b4241f1cec93f8ebcc8494f653f65023454944bb4e25b19cbc68bb"
 dependencies = [
  "config",
  "const_format",
@@ -5539,9 +5538,9 @@ dependencies = [
 
 [[package]]
 name = "v_utils_macros"
-version = "2.11.18"
+version = "2.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "263cc9a9140b364066631e8aa5222c3db3e204d14f8d796c07a103ae55196302"
+checksum = "d6f490924c181c414f6ae3aeed73ff1836555bac2bbd52da1e04c797df4af703"
 dependencies = [
  "eyre",
  "heck",

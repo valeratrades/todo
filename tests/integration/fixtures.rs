@@ -21,6 +21,7 @@ pub struct TestContext {
 	pub xdg_data_home: PathBuf,
 	pub issues_dir: PathBuf,
 	pub pipe_path: PathBuf,
+	pub mock_state_path: PathBuf,
 }
 
 impl TestContext {
@@ -51,6 +52,14 @@ impl TestContext {
 		fs::read_to_string(path).unwrap()
 	}
 
+	/// Write mock GitHub state that will be loaded by the binary.
+	/// The state is a JSON object with:
+	/// - "issues": array of {owner, repo, number, title, body, state, labels, owner_login}
+	/// - "collaborator_repos": array of {owner, repo}
+	pub fn write_mock_state(&self, state_json: &str) {
+		fs::write(&self.mock_state_path, state_json).unwrap();
+	}
+
 	/// Spawn the todo binary with mock pipe mode.
 	pub fn spawn_open(&self, file_path: &Path) -> Child {
 		Command::new(get_binary_path())
@@ -58,6 +67,7 @@ impl TestContext {
 			.env("XDG_STATE_HOME", &self.xdg_state_home)
 			.env("XDG_DATA_HOME", &self.xdg_data_home)
 			.env("TODO_MOCK_PIPE", &self.pipe_path)
+			.env("TODO_MOCK_STATE", &self.mock_state_path)
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
 			.spawn()
@@ -135,11 +145,15 @@ pub fn ctx() -> TestContext {
 	let pipe_path = temp_dir.path().join("mock_editor_pipe");
 	nix::unistd::mkfifo(&pipe_path, nix::sys::stat::Mode::S_IRWXU).unwrap();
 
+	// Path for mock GitHub state file
+	let mock_state_path = temp_dir.path().join("mock_state.json");
+
 	TestContext {
 		xdg_state_home: temp_dir.path().join("state"),
 		xdg_data_home: temp_dir.path().join("data"),
 		issues_dir,
 		pipe_path,
+		mock_state_path,
 		temp_dir,
 	}
 }

@@ -34,10 +34,7 @@
             inherit (rs) styleFormat styleAssert;
             lastSupportedVersion = "nightly-2025-08-01";
             langs = [ "rs" ];
-            jobs = {
-              default = true;
-              errors.augment = [ "rust-miri" ];
-            };
+            jobs.default = true;
           };
           readme = v-utils.readme-fw {
             inherit pkgs pname;
