@@ -2,10 +2,12 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
+use todo::Extension;
 
 use crate::{
 	blocker::{self, LineType},
 	config::LiveSettings,
+	marker::Marker,
 };
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
@@ -203,17 +205,8 @@ fn extract_blockers_section(content: &str) -> Option<String> {
 
 		// Check for blockers marker (must be in body, so indented)
 		if line.starts_with('\t') && blockers_start_idx.is_none() {
-			let trimmed = stripped.trim();
-			// Markdown: <!--blockers--> or <!--blocker--> (with flexible whitespace)
-			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->"))
-				&& (inner.trim() == "blockers" || inner.trim() == "blocker")
-			{
+			if matches!(Marker::decode(stripped, Extension::Md), Some(Marker::BlockersSection)) {
 				blockers_start_idx = Some(idx + 1); // Start from line after marker
-				continue;
-			}
-			// Typst: // blockers or // blocker
-			if trimmed == "// blockers" || trimmed == "// blocker" {
-				blockers_start_idx = Some(idx + 1);
 				continue;
 			}
 		}
@@ -229,11 +222,7 @@ fn extract_blockers_section(content: &str) -> Option<String> {
 		}
 
 		// Check for comment marker - this also ends the body
-		if (stripped.contains("<!--") && stripped.contains("#issuecomment"))
-			|| stripped.trim() == "<!--new comment-->"
-			|| stripped.trim() == "// new comment"
-			|| (stripped.trim().starts_with("// ") && stripped.contains("#issuecomment"))
-		{
+		if matches!(Marker::decode(stripped, Extension::Md), Some(Marker::Comment { .. } | Marker::NewComment)) {
 			body_end_idx = idx;
 			break;
 		}
@@ -326,17 +315,8 @@ fn update_blockers_in_issue(full_content: &str, new_blockers_content: &str) -> O
 
 		// Check for blockers marker (must be in body, so indented)
 		if line.starts_with('\t') && blockers_start_idx.is_none() {
-			let trimmed = stripped.trim();
-			// Markdown: <!--blockers--> or <!--blocker--> (with flexible whitespace)
-			if let Some(inner) = trimmed.strip_prefix("<!--").and_then(|s| s.strip_suffix("-->"))
-				&& (inner.trim() == "blockers" || inner.trim() == "blocker")
-			{
+			if matches!(Marker::decode(stripped, Extension::Md), Some(Marker::BlockersSection)) {
 				blockers_start_idx = Some(idx + 1); // Start from line after marker
-				continue;
-			}
-			// Typst: // blockers or // blocker
-			if trimmed == "// blockers" || trimmed == "// blocker" {
-				blockers_start_idx = Some(idx + 1);
 				continue;
 			}
 		}
@@ -351,11 +331,7 @@ fn update_blockers_in_issue(full_content: &str, new_blockers_content: &str) -> O
 		}
 
 		// Check for comment marker - this also ends the body
-		if (stripped.contains("<!--") && stripped.contains("#issuecomment"))
-			|| stripped.trim() == "<!--new comment-->"
-			|| stripped.trim() == "// new comment"
-			|| (stripped.trim().starts_with("// ") && stripped.contains("#issuecomment"))
-		{
+		if matches!(Marker::decode(stripped, Extension::Md), Some(Marker::Comment { .. } | Marker::NewComment)) {
 			blockers_end_idx = idx;
 			break;
 		}
@@ -686,15 +662,15 @@ mod tests {
 	# Phase 2
 	- Third task
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r#"
-  # Phase 1
-  - First task
-  	comment on first task
-  - Second task
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		# Phase 1
+		- First task
+			comment on first task
+		- Second task
 
-  # Phase 2
-  - Third task
-  "#);
+		# Phase 2
+		- Third task
+		");
 	}
 
 	#[test]
@@ -707,10 +683,10 @@ mod tests {
 	# Main
 	- Do something
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r#"
-  # Main
-  - Do something
-  "#);
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		# Main
+		- Do something
+		");
 	}
 
 	#[test]
@@ -723,10 +699,10 @@ mod tests {
 	- Blocker two
 	- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2-->
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
-  - Blocker one
-  - Blocker two
-  ");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		- Blocker one
+		- Blocker two
+		");
 	}
 
 	#[test]
@@ -741,11 +717,11 @@ mod tests {
 	- [ ] new sub-issue I just added
 		without any markers around it
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
-  - last
-  - middle
-  - first
-  ");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		- last
+		- middle
+		- first
+		");
 	}
 
 	#[test]
@@ -760,11 +736,10 @@ mod tests {
 	<!--https://github.com/owner/repo/issues/1#issuecomment-123-->
 	Comment body here.
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
-  - Blocker one
-  - Blocker two
-
-  ");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		- Blocker one
+		- Blocker two
+		");
 	}
 
 	#[test]
@@ -798,11 +773,11 @@ mod tests {
 	#[test]
 	fn test_normalize_indentation() {
 		let content = "- [ ] Title <!--url-->\n    Body with 4 spaces\n    - List item";
-		assert_snapshot!(normalize_issue_indentation(content), @r"
-  - [ ] Title <!--url-->
-  	Body with 4 spaces
-  	- List item
-  ");
+		assert_snapshot!(normalize_issue_indentation(content), @"
+		- [ ] Title <!--url-->
+			Body with 4 spaces
+			- List item
+		");
 	}
 
 	#[test]
@@ -814,10 +789,10 @@ mod tests {
 	- Task one
 	- Task two
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
-  - Task one
-  - Task two
-  ");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		- Task one
+		- Task two
+		");
 	}
 
 	#[test]
@@ -830,10 +805,10 @@ mod tests {
 	- Task one
 	- Task two
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
-  - Task one
-  - Task two
-  ");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"
+		- Task one
+		- Task two
+		");
 	}
 
 	#[test]
@@ -845,39 +820,37 @@ mod tests {
 	// blocker
 	- Task one
 "#;
-		assert_snapshot!(extract_blockers_section(content).unwrap(), @r"
-  - Task one
-  ");
+		assert_snapshot!(extract_blockers_section(content).unwrap(), @"- Task one");
 	}
 
 	#[test]
 	fn test_pop_last_blocker_simple() {
 		let blockers_content = "- First task\n- Second task\n- Third task";
-		assert_snapshot!(pop_last_blocker(blockers_content), @r"
-  - First task
-  - Second task
-  ");
+		assert_snapshot!(pop_last_blocker(blockers_content), @"
+		- First task
+		- Second task
+		");
 	}
 
 	#[test]
 	fn test_pop_last_blocker_with_headers() {
 		let blockers_content = "# Phase 1\n- First task\n# Phase 2\n- Third task";
 		// Should pop "- Third task", leaving the header
-		assert_snapshot!(pop_last_blocker(blockers_content), @r"
-  # Phase 1
-  - First task
-  # Phase 2
-  ");
+		assert_snapshot!(pop_last_blocker(blockers_content), @"
+		# Phase 1
+		- First task
+		# Phase 2
+		");
 	}
 
 	#[test]
 	fn test_pop_last_blocker_with_comments() {
 		let blockers_content = "- First task\n\tcomment on first\n- Second task\n\tcomment on second";
 		// Should pop "- Second task", removing its comment too (comments belong to content above)
-		assert_snapshot!(pop_last_blocker(blockers_content), @r"
-  - First task
-  	comment on first
-  ");
+		assert_snapshot!(pop_last_blocker(blockers_content), @"
+		- First task
+			comment on first
+		");
 	}
 
 	#[test]
@@ -904,14 +877,14 @@ mod tests {
 	- Third task
 "#;
 		let new_blockers = "- First task\n- Second task";
-		assert_snapshot!(update_blockers_in_issue(content, new_blockers).unwrap(), @r"
-  - [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
-  	Body text.
+		assert_snapshot!(update_blockers_in_issue(content, new_blockers).unwrap(), @"
+		- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+			Body text.
 
-  	<!--blockers-->
-  	- First task
-  	- Second task
-  ");
+			<!--blockers-->
+			- First task
+			- Second task
+		");
 	}
 
 	#[test]
@@ -928,14 +901,14 @@ mod tests {
 		let result = update_blockers_in_issue(content, new_blockers).unwrap();
 		// Should preserve the sub-issue
 		assert!(result.contains("- [ ] Sub-issue"));
-		assert_snapshot!(result, @r"
-  - [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
-  	Body.
+		assert_snapshot!(result, @"
+		- [ ] Issue Title <!--https://github.com/owner/repo/issues/1-->
+			Body.
 
-  	<!--blockers-->
-  	- First task
-  	- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2-->
-  ");
+			<!--blockers-->
+			- First task
+			- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2-->
+		");
 	}
 
 	#[test]

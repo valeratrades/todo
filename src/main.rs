@@ -5,6 +5,7 @@ mod clockify;
 pub mod config;
 mod github;
 mod manual_stats;
+pub mod marker;
 mod milestones;
 mod mock_github;
 pub mod mocks;

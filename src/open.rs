@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use clap::{Args, ValueEnum};
+use clap::Args;
 use serde::{Deserialize, Serialize};
 use v_utils::prelude::*;
 
 use crate::{
 	config::LiveSettings,
 	github::{self, BoxedGitHubClient, GitHubComment, GitHubIssue, IssueAction, OriginalComment, OriginalSubIssue},
+	marker::Marker,
 };
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
@@ -14,55 +15,32 @@ fn issues_dir() -> PathBuf {
 	v_utils::xdg_data_dir!("issues")
 }
 
+pub use todo::Extension;
+
 /// Check if a line is a blockers section marker.
 /// Recognized formats (case-insensitive):
-/// - `<!--blockers-->` (preferred, what `!b` expands to)
+/// - `# Blockers` (preferred for .md, what `!b` expands to)
+/// - `<!--blockers-->` (legacy, still supported)
 /// - `#{1,6} Blockers` (any header level)
 /// - `**Blockers**` (with optional trailing `:`)
-/// - `// blockers` (typst)
+/// - `// blockers` (typst, what `!b` expands to for .typ)
 fn is_blockers_marker(line: &str) -> bool {
-	let trimmed = line.trim();
-	let lower = trimmed.to_ascii_lowercase();
-	if lower == "<!--blockers-->" || lower == "// blockers" {
+	// Use Marker enum for standard formats
+	if matches!(Marker::decode(line, Extension::Md), Some(Marker::BlockersSection)) {
 		return true;
 	}
-	// Match **Blockers** or **Blockers:**
-	if lower.starts_with("**blockers**") {
-		return true;
-	}
-	// Match markdown headers: # Blockers, ## Blockers, etc.
-	if let Some(rest) = lower.strip_prefix('#') {
-		let rest = rest.trim_start_matches('#');
-		if rest.trim().trim_end_matches(':') == "blockers" {
-			return true;
-		}
-	}
-	false
-}
-
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
-pub enum Extension {
-	#[default]
-	Md,
-	Typ,
-}
-
-impl Extension {
-	fn as_str(&self) -> &'static str {
-		match self {
-			Extension::Md => "md",
-			Extension::Typ => "typ",
-		}
-	}
+	// Also support **Blockers** format (not in Marker enum as it's non-standard)
+	let lower = line.trim().to_ascii_lowercase();
+	lower.starts_with("**blockers**")
 }
 
 /// Open a GitHub issue in $EDITOR.
 ///
-/// Issue files support a blockers section for tracking sub-tasks. Add a `<!--blockers-->` marker
+/// Issue files support a blockers section for tracking sub-tasks. Add a `# Blockers` marker
 /// (or `// blockers` for Typst) in the issue body. Content after this marker until the next sub-issue
 /// or comment is treated as blockers, using the same format as standalone blocker files.
 ///
-/// Shorthand: Use `!b` on its own line to auto-expand to `<!--blockers-->` (or `// blockers` for Typst).
+/// Shorthand: Use `!b` on its own line to auto-expand to `# Blockers` (or `// blockers` for Typst).
 #[derive(Args)]
 pub struct OpenArgs {
 	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
@@ -138,7 +116,7 @@ impl Issue {
 			base_body.to_string()
 		} else {
 			let mut full_body = base_body.to_string();
-			full_body.push_str("\n<!--blockers-->\n");
+			full_body.push_str("\n# Blockers\n");
 			for blocker in &self.blockers {
 				full_body.push_str(&blocker.raw);
 				full_body.push('\n');
@@ -507,7 +485,7 @@ impl Issue {
 
 		// Blockers
 		if !self.blockers.is_empty() {
-			out.push_str(&format!("\n{}<!--blockers-->\n", content_indent));
+			out.push_str(&format!("{}# Blockers\n", content_indent));
 			for blocker in &self.blockers {
 				out.push_str(&format!("{}{}\n", content_indent, blocker.raw));
 			}
@@ -1341,11 +1319,11 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 
 /// Expand `!b` shorthand to the full blockers marker.
 /// Matches lines that are just `!b` or `!B` (with any indentation).
-/// For .md files: expands to `<!--blockers-->`
+/// For .md files: expands to `# Blockers`
 /// For .typ files: expands to `// blockers`
 fn expand_blocker_shorthand(content: &str, extension: &Extension) -> String {
 	let replacement = match extension {
-		Extension::Md => "<!--blockers-->",
+		Extension::Md => "# Blockers",
 		Extension::Typ => "// blockers",
 	};
 
@@ -2026,7 +2004,7 @@ mod tests {
 
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
 		assert_snapshot!(md, @"
-		- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
+		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			**Labels:** bug, help wanted
 			Issue body text
 		");
@@ -2038,7 +2016,7 @@ mod tests {
 
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
 		assert_snapshot!(md, @"
-		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123-->
+		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
 		");
 	}
@@ -2049,8 +2027,8 @@ mod tests {
 
 		// Default: closed issues have omitted contents
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
-		assert_snapshot!(md, @r"
-		- [x] Closed Issue <!--https://github.com/owner/repo/issues/123-->
+		assert_snapshot!(md, @"
+		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			<!-- omitted -->
 		");
 	}
@@ -2062,7 +2040,7 @@ mod tests {
 		// With render_closed: full contents shown
 		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", true);
 		assert_snapshot!(md, @"
-		- [x] Closed Issue <!--https://github.com/owner/repo/issues/123-->
+		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
 		");
 	}
@@ -2077,11 +2055,11 @@ mod tests {
 
 		let md = format_issue_as_markdown(&issue, &[], &sub_issues, "owner", "repo", "me", false);
 		assert_snapshot!(md, @"
-		- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
+		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
-			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124-->
+			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124 -->
 				Sub-issue body content
-			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125-->
+			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125 -->
 		");
 	}
 
@@ -2103,13 +2081,13 @@ mod tests {
 
 		let md = format_issue_as_markdown(&issue, &comments, &[], "owner", "repo", "me", false);
 		assert_snapshot!(md, @"
-		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123-->
+		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
 
-			<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
+			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
 			First comment
 
-			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002-->
+			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
 				Second comment
 		");
 	}
@@ -2151,7 +2129,7 @@ mod tests {
 		let issue = make_issue(123, "Closed Issue", Some("Body text"), vec![], "me", "closed");
 
 		let typ = format_issue_as_typst(&issue, &[], &[], "owner", "repo", "me", false);
-		assert_snapshot!(typ, @r"
+		assert_snapshot!(typ, @"
 		- [x] Closed Issue // https://github.com/owner/repo/issues/123
 			// omitted
 		");
@@ -2431,24 +2409,24 @@ mod tests {
 	fn test_expand_blocker_shorthand_md() {
 		let content = "- [ ] Title <!--url-->\n\tBody text\n\t!b\n\t- task one";
 		let result = expand_blocker_shorthand(content, &Extension::Md);
-		assert_snapshot!(result, @r"
-  - [ ] Title <!--url-->
-  	Body text
-  	<!--blockers-->
-  	- task one
-  ");
+		assert_snapshot!(result, @"
+		- [ ] Title <!--url-->
+			Body text
+			# Blockers
+			- task one
+		");
 	}
 
 	#[test]
 	fn test_expand_blocker_shorthand_typ() {
 		let content = "- [ ] Title // url\n\tBody text\n\t!B\n\t- task one";
 		let result = expand_blocker_shorthand(content, &Extension::Typ);
-		assert_snapshot!(result, @r"
-  - [ ] Title // url
-  	Body text
-  	// blockers
-  	- task one
-  ");
+		assert_snapshot!(result, @"
+		- [ ] Title // url
+			Body text
+			// blockers
+			- task one
+		");
 	}
 
 	#[test]

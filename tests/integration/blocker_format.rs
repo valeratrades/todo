@@ -119,7 +119,7 @@ fn test_blocker_format_adds_spaces_md() {
 	setup.run_format().expect("Format command should succeed");
 
 	let formatted = setup.read_blocker_file();
-	insta::assert_snapshot!(formatted, @r"
+	insta::assert_snapshot!(formatted, @"
 	- move these todos over into a persisted directory
 		comment
 	- move all typst projects
@@ -268,7 +268,7 @@ fn test_blocker_format_typst_mixed_content() {
 	setup.run_format().expect("Format command should succeed");
 
 	let formatted = setup.read_formatted_file();
-	insta::assert_snapshot!(formatted, @r"
+	insta::assert_snapshot!(formatted, @"
 	# Main Project
 	- first task
 

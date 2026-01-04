@@ -292,14 +292,14 @@ fn test_adding_blockers_during_edit_are_preserved() {
 	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
 
 	let final_content = setup.read_issue_file(&issue_file);
-	insta::assert_snapshot!(final_content, @r#"
-- [ ] blocker rewrite <!-- https://github.com/owner/repo/issues/49 -->
-	get all the present functionality + legacy supported
+	insta::assert_snapshot!(final_content, @"
+	- [ ] blocker rewrite <!-- https://github.com/owner/repo/issues/49 -->
+		get all the present functionality + legacy supported
 
-	<!--blockers-->
-	- support for virtual blockers
-	- move all primitives into new blocker.rs
-"#);
+		<!--blockers-->
+		- support for virtual blockers
+		- move all primitives into new blocker.rs
+	");
 }
 
 /// Test that blockers section is preserved through the open command cycle.
