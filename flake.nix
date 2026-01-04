@@ -26,7 +26,7 @@
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
           rs = v-utils.rs {
-            inherit pkgs;
+            inherit pkgs rust;
             deny = true;
           };
           github = v-utils.github {
