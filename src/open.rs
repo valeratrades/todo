@@ -130,6 +130,23 @@ struct Issue {
 }
 
 impl Issue {
+	/// Get the full issue body including blockers section.
+	/// This is what should be synced to GitHub as the issue body.
+	fn body(&self) -> String {
+		let base_body = self.comments.first().map(|c| c.body.as_str()).unwrap_or("");
+		if self.blockers.is_empty() {
+			base_body.to_string()
+		} else {
+			let mut full_body = base_body.to_string();
+			full_body.push_str("\n<!--blockers-->\n");
+			for blocker in &self.blockers {
+				full_body.push_str(&blocker.raw);
+				full_body.push('\n');
+			}
+			full_body
+		}
+	}
+
 	/// Parse markdown content into an Issue.
 	fn parse(content: &str) -> Option<Self> {
 		let normalized = normalize_issue_indentation(content);
@@ -1443,12 +1460,12 @@ async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &
 		updates += 1;
 	}
 
-	// Step 1: Check issue body (first comment with no id is the body)
-	let issue_body = issue.comments.first().map(|c| c.body.as_str()).unwrap_or("");
+	// Step 1: Check issue body (includes blockers section)
+	let issue_body = issue.body();
 	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
 	if issue_body != original_body {
 		println!("Updating issue body...");
-		gh.update_issue_body(owner, repo, meta.issue_number, issue_body).await?;
+		gh.update_issue_body(owner, repo, meta.issue_number, &issue_body).await?;
 		updates += 1;
 	}
 
