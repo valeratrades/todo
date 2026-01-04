@@ -3,6 +3,7 @@ mod blocker;
 mod blocker_rewrite;
 mod clockify;
 pub mod config;
+pub mod error;
 mod github;
 mod manual_stats;
 pub mod marker;

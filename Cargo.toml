@@ -9,17 +9,18 @@ is_integration_test = []
 
 [dependencies]
 ask_llm = { version = "^2.1.4" }
-async-trait = "0.1"
+async-trait = "^0.1.89"
 base64 = "0.22"
 chrono = { version = "^0.4.42", features = ["serde"] }
-clap = { version = "^4.5.53", features = ["derive"] }
+clap = { version = "^4.5.54", features = ["derive"] }
 clap_complete = "4.5.64"
 color-eyre = "0.6.5"
 config = "^0.15.19"
 derive-new = "^0"
-derive_more = { version = "2.1.1", features = ["from_str", "display"] }
+derive_more = { version = "2.1.1", features = ["from_str", "display", "from"] }
 image = "0.25.9"
 libwayshot = "0.6.0"
+miette = { version = "7", features = ["fancy"] }
 pandoc = "^0.8.11"
 png = "0.18"
 reqwest = { version = "^0.13.1", features = ["blocking", "json"] }

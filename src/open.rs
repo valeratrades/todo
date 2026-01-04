@@ -6,6 +6,7 @@ use v_utils::prelude::*;
 
 use crate::{
 	config::LiveSettings,
+	error::{ParseContext, ParseError},
 	github::{self, BoxedGitHubClient, GitHubComment, GitHubIssue, IssueAction, OriginalComment, OriginalSubIssue},
 	marker::Marker,
 };
@@ -126,24 +127,29 @@ impl Issue {
 	}
 
 	/// Parse markdown content into an Issue.
-	fn parse(content: &str) -> Option<Self> {
+	/// Returns an error with a detailed message if any part of the file cannot be understood.
+	fn parse(content: &str, ctx: &ParseContext) -> Result<Self, ParseError> {
 		let normalized = normalize_issue_indentation(content);
 		let mut lines = normalized.lines().peekable();
 
-		Self::parse_at_depth(&mut lines, 0)
+		Self::parse_at_depth(&mut lines, 0, 1, ctx)
 	}
 
 	/// Parse an issue at given nesting depth (0 = root, 1 = sub-issue, etc.)
-	fn parse_at_depth(lines: &mut std::iter::Peekable<std::str::Lines>, depth: usize) -> Option<Self> {
+	/// `line_num` tracks the current line for error reporting.
+	fn parse_at_depth(lines: &mut std::iter::Peekable<std::str::Lines>, depth: usize, line_num: usize, ctx: &ParseContext) -> Result<Self, ParseError> {
 		let indent = "\t".repeat(depth);
 		let child_indent = "\t".repeat(depth + 1);
 
-		// Parse title line: `- [ ] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
-		let first_line = lines.next()?;
-		let title_content = first_line.strip_prefix(&indent)?;
-		let meta = Self::parse_title_line(title_content)?;
+		// Parse title line: `- [ ] [label1, label2] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
+		let first_line = lines.next().ok_or(ParseError::EmptyFile)?;
+		let title_content = first_line.strip_prefix(&indent).ok_or_else(|| ParseError::BadIndentation {
+			src: ctx.named_source(),
+			span: ctx.line_span(line_num),
+			expected_tabs: depth,
+		})?;
+		let (meta, labels) = Self::parse_title_line(title_content, line_num, ctx)?;
 
-		let mut labels = Vec::new();
 		let mut comments = Vec::new();
 		let mut children = Vec::new();
 		let mut blockers = Vec::new();
@@ -208,13 +214,6 @@ impl Issue {
 				} else {
 					tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {:?}", content);
 				}
-				continue;
-			}
-
-			// Check for labels line
-			if in_body && content.starts_with("**Labels:**") {
-				let labels_text = content.strip_prefix("**Labels:**").unwrap_or("").trim();
-				labels = labels_text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
 				continue;
 			}
 
@@ -329,7 +328,7 @@ impl Issue {
 			comments.push(Comment { id, body, owned });
 		}
 
-		Some(Issue {
+		Ok(Issue {
 			meta,
 			labels,
 			comments,
@@ -338,20 +337,47 @@ impl Issue {
 		})
 	}
 
-	/// Parse title line: `- [ ] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
-	fn parse_title_line(line: &str) -> Option<IssueMeta> {
+	/// Parse title line: `- [ ] [label1, label2] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
+	/// Returns (IssueMeta, labels)
+	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<(IssueMeta, Vec<String>), ParseError> {
 		let (closed, rest) = if let Some(rest) = line.strip_prefix("- [ ] ") {
 			(false, rest)
 		} else if let Some(rest) = line.strip_prefix("- [x] ").or_else(|| line.strip_prefix("- [X] ")) {
 			(true, rest)
 		} else {
-			return None;
+			return Err(ParseError::InvalidTitle {
+				src: ctx.named_source(),
+				span: ctx.line_span(line_num),
+				detail: format!("got: {:?}", line),
+			});
 		};
 
-		let marker_start = rest.find("<!--")?;
-		let marker_end = rest.find("-->")?;
+		// Check for labels: [label1, label2] at the start
+		let (labels, rest) = if rest.starts_with('[') {
+			if let Some(bracket_end) = rest.find("] ") {
+				let labels_str = &rest[1..bracket_end];
+				let labels: Vec<String> = labels_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+				(labels, &rest[bracket_end + 2..])
+			} else {
+				(vec![], rest)
+			}
+		} else {
+			(vec![], rest)
+		};
+
+		let marker_start = rest.find("<!--").ok_or_else(|| ParseError::MissingUrlMarker {
+			src: ctx.named_source(),
+			span: ctx.line_span(line_num),
+		})?;
+		let marker_end = rest.find("-->").ok_or_else(|| ParseError::MalformedUrlMarker {
+			src: ctx.named_source(),
+			span: ctx.line_span(line_num),
+		})?;
 		if marker_end <= marker_start {
-			return None;
+			return Err(ParseError::MalformedUrlMarker {
+				src: ctx.named_source(),
+				span: ctx.line_span(line_num),
+			});
 		}
 
 		let title = rest[..marker_start].trim().to_string();
@@ -363,7 +389,7 @@ impl Issue {
 			(true, Some(inner.to_string()))
 		};
 
-		Some(IssueMeta { title, url, closed, owned })
+		Ok((IssueMeta { title, url, closed, owned }, labels))
 	}
 
 	/// Parse child/sub-issue title line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
@@ -415,61 +441,66 @@ impl Issue {
 		let content_indent = "\t".repeat(depth + 1);
 		let mut out = String::new();
 
-		// Title line
+		// Title line: `- [ ] [label1, label2] Title <!-- url -->` or `- [ ] Title <!-- url -->` if no labels
 		let checked = if self.meta.closed { "x" } else { " " };
 		let url_part = self.meta.url.as_deref().unwrap_or("");
+		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
 		if self.meta.owned {
-			out.push_str(&format!("{}- [{}] {} <!-- {} -->\n", indent, checked, self.meta.title, url_part));
+			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!-- {url_part} -->\n", self.meta.title));
 		} else {
-			out.push_str(&format!("{}- [{}] {} <!--immutable {} -->\n", indent, checked, self.meta.title, url_part));
+			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--immutable {url_part} -->\n", self.meta.title));
 		}
 
-		// Labels
-		if !self.labels.is_empty() {
-			out.push_str(&format!("{}**Labels:** {}\n", content_indent, self.labels.join(", ")));
-		}
-
-		// Comments (first is body, rest have markers)
-		for (i, comment) in self.comments.iter().enumerate() {
-			let comment_indent = if comment.owned { &content_indent } else { &format!("{content_indent}\t") };
-
-			if i == 0 {
-				// Body - no marker
-				if !comment.body.is_empty() {
-					for line in comment.body.lines() {
-						out.push_str(&format!("{comment_indent}{line}\n"));
-					}
-				}
-			} else {
-				// Comment with marker
-				if let Some(id) = comment.id {
-					let url = self.meta.url.as_deref().unwrap_or("");
-					if comment.owned {
-						out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
-					} else {
-						out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
-					}
-				} else {
-					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
-				}
-				if !comment.body.is_empty() {
-					for line in comment.body.lines() {
-						out.push_str(&format!("{comment_indent}{line}\n"));
-					}
+		// Body (first comment, no marker)
+		if let Some(body_comment) = self.comments.first() {
+			let comment_indent = if body_comment.owned { &content_indent } else { &format!("{content_indent}\t") };
+			if !body_comment.body.is_empty() {
+				for line in body_comment.body.lines() {
+					out.push_str(&format!("{comment_indent}{line}\n"));
 				}
 			}
 		}
 
-		// Children (sub-issues)
+		// Comments (all other comments, part of the description)
+		for comment in self.comments.iter().skip(1) {
+			let comment_indent = if comment.owned { &content_indent } else { &format!("{content_indent}\t") };
+
+			// Comment with marker
+			if let Some(id) = comment.id {
+				let url = self.meta.url.as_deref().unwrap_or("");
+				if comment.owned {
+					out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
+				} else {
+					out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
+				}
+			} else {
+				out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
+			}
+			if !comment.body.is_empty() {
+				for line in comment.body.lines() {
+					out.push_str(&format!("{comment_indent}{line}\n"));
+				}
+			}
+		}
+
+		// Blockers (separate section at bottom, before sub-issues)
+		if !self.blockers.is_empty() {
+			out.push_str(&format!("{content_indent}# Blockers\n"));
+			for blocker in &self.blockers {
+				out.push_str(&format!("{content_indent}{}\n", blocker.raw));
+			}
+		}
+
+		// Children (sub-issues) at the very end
 		for child in &self.children {
 			let child_checked = if child.meta.closed { "x" } else { " " };
 			let child_content_indent = "\t".repeat(depth + 2);
 
 			// Output child title line
 			if let Some(url) = &child.meta.url {
-				out.push_str(&format!("{}- [{}] {} <!--sub {} -->\n", content_indent, child_checked, child.meta.title, url));
+				out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub {url} -->\n", child.meta.title));
 			} else {
-				out.push_str(&format!("{}- [{}] {}\n", content_indent, child_checked, child.meta.title));
+				out.push_str(&format!("{content_indent}- [{child_checked}] {}\n", child.meta.title));
 			}
 
 			// Output child body (first comment is body)
@@ -479,14 +510,6 @@ impl Issue {
 				for line in body_comment.body.lines() {
 					out.push_str(&format!("{child_content_indent}{line}\n"));
 				}
-			}
-		}
-
-		// Blockers
-		if !self.blockers.is_empty() {
-			out.push_str(&format!("{content_indent}# Blockers\n"));
-			for blocker in &self.blockers {
-				out.push_str(&format!("{}{}\n", content_indent, blocker.raw));
 			}
 		}
 
@@ -743,7 +766,8 @@ async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_file_pa
 	let normalized = normalize_issue_indentation(&content);
 
 	// Parse to get issue metadata (number and title)
-	let issue = Issue::parse(&normalized).ok_or_else(|| eyre!("Failed to parse issue file"))?;
+	let ctx = ParseContext::new(normalized.clone(), issue_file_path.display().to_string());
+	let issue = Issue::parse(&normalized, &ctx)?;
 	let issue_number = issue
 		.meta
 		.url
@@ -1091,12 +1115,18 @@ fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[G
 	let issue_closed = issue.state == "closed";
 	let checked = if issue_closed { "x" } else { " " };
 
-	// Issue title as checkbox item with URL inline
+	// Title line: `- [ ] [label1, label2] Title <!-- url -->` or `- [ ] Title <!-- url -->` if no labels
 	let title_marker = Marker::IssueUrl {
 		url: issue_url.clone(),
 		immutable: !issue_owned,
 	};
-	content.push_str(&format!("- [{checked}] {} {}\n", issue.title, title_marker.encode(ext)));
+	let labels_part = if issue.labels.is_empty() {
+		String::new()
+	} else {
+		let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
+		format!("[{}] ", labels.join(", "))
+	};
+	content.push_str(&format!("- [{checked}] {labels_part}{} {}\n", issue.title, title_marker.encode(ext)));
 
 	// If issue is closed and render_closed is false, omit contents
 	if issue_closed && !render_closed {
@@ -1104,17 +1134,7 @@ fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[G
 		return content;
 	}
 
-	// Labels if any (indented under the issue)
-	if !issue.labels.is_empty() {
-		let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-		let label_fmt = match ext {
-			Extension::Md => format!("**Labels:** {}", labels.join(", ")),
-			Extension::Typ => format!("*Labels:* {}", labels.join(", ")),
-		};
-		content.push_str(&format!("\t{label_fmt}\n"));
-	}
-
-	// Body (indented under the issue)
+	// Body (description - indented under the issue)
 	// Skip checkbox lines that match sub-issue titles (they'll be shown via sub-issues list)
 	if let Some(body) = &issue.body
 		&& !body.is_empty()
@@ -1152,34 +1172,7 @@ fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[G
 		}
 	}
 
-	// Sub-issues (indented under the issue, after body) - embed their body content
-	// Prefer local file contents over GitHub body when available
-	for sub in sub_issues {
-		let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
-		let sub_checked = if sub.state == "closed" { "x" } else { " " };
-		let sub_marker = Marker::SubIssue { url: sub_url };
-		content.push_str(&format!("\t- [{sub_checked}] {} {}\n", sub.title, sub_marker.encode(ext)));
-
-		// Try to read local file contents for this sub-issue
-		let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
-
-		// Use local file contents if available, otherwise fall back to GitHub body
-		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
-
-		if let Some(body) = body_to_embed
-			&& !body.is_empty()
-		{
-			let body_text = match ext {
-				Extension::Md => body.to_string(),
-				Extension::Typ => convert_markdown_to_typst(body),
-			};
-			for line in body_text.lines() {
-				content.push_str(&format!("\t\t{line}\n"));
-			}
-		}
-	}
-
-	// Comments (indented under the issue)
+	// Comments (part of body, indented under the issue)
 	for comment in comments {
 		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
 		let comment_owned = comment.user.login == current_user;
@@ -1207,6 +1200,33 @@ fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[G
 				for line in body_text.lines() {
 					content.push_str(&format!("\t\t{line}\n"));
 				}
+			}
+		}
+	}
+
+	// Sub-issues at the very end - embed their body content
+	// Prefer local file contents over GitHub body when available
+	for sub in sub_issues {
+		let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
+		let sub_checked = if sub.state == "closed" { "x" } else { " " };
+		let sub_marker = Marker::SubIssue { url: sub_url };
+		content.push_str(&format!("\t- [{sub_checked}] {} {}\n", sub.title, sub_marker.encode(ext)));
+
+		// Try to read local file contents for this sub-issue
+		let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
+
+		// Use local file contents if available, otherwise fall back to GitHub body
+		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
+
+		if let Some(body) = body_to_embed
+			&& !body.is_empty()
+		{
+			let body_text = match ext {
+				Extension::Md => body.to_string(),
+				Extension::Typ => convert_markdown_to_typst(body),
+			};
+			for line in body_text.lines() {
+				content.push_str(&format!("\t\t{line}\n"));
 			}
 		}
 	}
@@ -1505,7 +1525,8 @@ async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Res
 		std::fs::write(issue_file_path, &edited_content)?;
 	}
 
-	let mut issue = Issue::parse(&edited_content).ok_or_else(|| eyre!("Failed to parse issue file"))?;
+	let ctx = ParseContext::new(edited_content.clone(), issue_file_path.display().to_string());
+	let mut issue = Issue::parse(&edited_content, &ctx)?;
 
 	// Collect required GitHub actions (e.g., new sub-issues without URLs)
 	let actions = issue.collect_actions(&meta.original_sub_issues);
@@ -1877,6 +1898,11 @@ mod tests {
 	use super::*;
 	use crate::github::{GitHubLabel, GitHubUser};
 
+	/// Create a test parse context for the given content.
+	fn test_ctx(content: &str) -> ParseContext {
+		ParseContext::new(content.to_string(), "test.md")
+	}
+
 	fn make_user(login: &str) -> GitHubUser {
 		GitHubUser { login: login.to_string() }
 	}
@@ -1898,8 +1924,7 @@ mod tests {
 
 		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
 		assert_snapshot!(md, @"
-		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
-			**Labels:** bug, help wanted
+		- [ ] [bug, help wanted] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
 		");
 	}
@@ -1990,8 +2015,7 @@ mod tests {
 
 		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ);
 		assert_snapshot!(typ, @"
-		- [ ] Test Issue // https://github.com/owner/repo/issues/123
-			*Labels:* enhancement
+		- [ ] [enhancement] Test Issue // https://github.com/owner/repo/issues/123
 			== Subheading
 			Body text
 		");
@@ -2178,6 +2202,31 @@ mod tests {
 	}
 
 	#[test]
+	fn test_parse_errors_are_descriptive() {
+		use crate::error::ParseError;
+
+		// Empty file
+		let md = "";
+		let result = Issue::parse(md, &test_ctx(md));
+		assert!(matches!(result, Err(ParseError::EmptyFile)));
+
+		// Missing checkbox prefix
+		let md = "Title without checkbox";
+		let result = Issue::parse(md, &test_ctx(md));
+		assert!(matches!(result, Err(ParseError::InvalidTitle { .. })));
+
+		// Missing URL marker
+		let md = "- [ ] Title without URL marker";
+		let result = Issue::parse(md, &test_ctx(md));
+		assert!(matches!(result, Err(ParseError::MissingUrlMarker { .. })));
+
+		// Unclosed URL marker
+		let md = "- [ ] Title <!-- unclosed";
+		let result = Issue::parse(md, &test_ctx(md));
+		assert!(matches!(result, Err(ParseError::MalformedUrlMarker { .. })));
+	}
+
+	#[test]
 	fn test_issue_parse_serialize_roundtrip() {
 		let md = "- [ ] Test Issue <!--https://github.com/owner/repo/issues/123-->
 \t**Labels:** bug, help wanted
@@ -2188,20 +2237,69 @@ mod tests {
 \t<!--https://github.com/owner/repo/issues/123#issuecomment-1001-->
 \tA comment
 ";
-		let parsed = Issue::parse(md).unwrap();
-		assert_eq!(parsed.meta.title, "Test Issue");
-		assert_eq!(parsed.meta.url, Some("https://github.com/owner/repo/issues/123".to_string()));
-		assert!(!parsed.meta.closed);
-		assert!(parsed.meta.owned);
-		assert_eq!(parsed.labels, vec!["bug", "help wanted"]);
-		assert_eq!(parsed.children.len(), 2);
-		// comments[0] is body, comments[1] is the comment
-		assert_eq!(parsed.comments.len(), 2);
-		assert_eq!(parsed.comments[0].body, "Issue body text");
+		let parsed = Issue::parse(md, &test_ctx(md)).unwrap();
+		insta::assert_debug_snapshot!(parsed, @r#"
+		Issue {
+		    meta: IssueMeta {
+		        title: "Test Issue",
+		        url: Some(
+		            "https://github.com/owner/repo/issues/123",
+		        ),
+		        closed: false,
+		        owned: true,
+		    },
+		    labels: [],
+		    comments: [
+		        Comment {
+		            id: None,
+		            body: "**Labels:** bug, help wanted\nIssue body text",
+		            owned: true,
+		        },
+		        Comment {
+		            id: Some(
+		                1001,
+		            ),
+		            body: "A comment",
+		            owned: true,
+		        },
+		    ],
+		    children: [
+		        Issue {
+		            meta: IssueMeta {
+		                title: "Sub-issue 1",
+		                url: Some(
+		                    "https://github.com/owner/repo/issues/124",
+		                ),
+		                closed: false,
+		                owned: true,
+		            },
+		            labels: [],
+		            comments: [],
+		            children: [],
+		            blockers: [],
+		        },
+		        Issue {
+		            meta: IssueMeta {
+		                title: "Sub-issue 2",
+		                url: Some(
+		                    "https://github.com/owner/repo/issues/125",
+		                ),
+		                closed: true,
+		                owned: true,
+		            },
+		            labels: [],
+		            comments: [],
+		            children: [],
+		            blockers: [],
+		        },
+		    ],
+		    blockers: [],
+		}
+		"#);
 
 		// Round-trip should produce equivalent structure
 		let serialized = parsed.serialize();
-		let reparsed = Issue::parse(&serialized).unwrap();
+		let reparsed = Issue::parse(&serialized, &test_ctx(&serialized)).unwrap();
 		assert_eq!(parsed, reparsed);
 	}
 
@@ -2221,7 +2319,7 @@ mod tests {
 \t- [ ] percent specification for protocols
 \t\t1. extend CompactFormat
 ";
-		let parsed = Issue::parse(md).unwrap();
+		let parsed = Issue::parse(md, &test_ctx(md)).unwrap();
 		assert_eq!(parsed.meta.title, "v2_interface");
 
 		// Should have detected the new sub-issue
@@ -2237,7 +2335,7 @@ mod tests {
 		let md = "- [ ] parent issue <!--https://github.com/owner/repo/issues/77-->
 \t- [ ] new child without url
 ";
-		let parsed = Issue::parse(md).unwrap();
+		let parsed = Issue::parse(md, &test_ctx(md)).unwrap();
 
 		// No original sub-issues means this child is new
 		let original_sub_issues: Vec<OriginalSubIssue> = vec![];
@@ -2326,5 +2424,114 @@ mod tests {
 		let result = expand_blocker_shorthand(content, &Extension::Md);
 		// Should not expand !b when it's part of other text
 		assert_eq!(result, content);
+	}
+
+	/// Test the correct rendering order for issues:
+	/// 1. Title line with labels inline
+	/// 2. Body (first comment)
+	/// 3. Comments (with markers)
+	/// 4. Blockers section
+	/// 5. Sub-issues at the very end
+	#[test]
+	fn test_issue_render_order_complete() {
+		let issue = make_issue(123, "Main Issue", Some("This is the body text.\nWith multiple lines."), vec!["bug", "priority"], "me", "open");
+		let comments = vec![
+			GitHubComment {
+				id: 1001,
+				body: Some("First comment from me".to_string()),
+				user: make_user("me"),
+			},
+			GitHubComment {
+				id: 1002,
+				body: Some("Second comment from other".to_string()),
+				user: make_user("other"),
+			},
+		];
+		let sub_issues = vec![
+			make_issue(124, "Sub Issue One", Some("Sub issue body"), vec![], "me", "open"),
+			make_issue(125, "Sub Issue Two", None, vec![], "me", "closed"),
+		];
+
+		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", false, Extension::Md);
+
+		// Expected order:
+		// 1. Title line with labels: `- [ ] [label1, label2] Title <!-- url -->`
+		// 2. Body (description + comments + blockers)
+		// 3. Sub-issues at the very end
+		assert_snapshot!(md, @r#"
+		- [ ] [bug, priority] Main Issue <!-- https://github.com/owner/repo/issues/123 -->
+			This is the body text.
+			With multiple lines.
+			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
+			First comment from me
+			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
+				Second comment from other
+			- [ ] Sub Issue One <!--sub https://github.com/owner/repo/issues/124 -->
+				Sub issue body
+			- [x] Sub Issue Two <!--sub https://github.com/owner/repo/issues/125 -->
+		"#);
+	}
+
+	/// Test that blockers appear after comments but before sub-issues
+	#[test]
+	fn test_issue_serialize_with_blockers_order() {
+		let issue = Issue {
+			meta: IssueMeta {
+				title: "Test Issue".to_string(),
+				url: Some("https://github.com/owner/repo/issues/1".to_string()),
+				closed: false,
+				owned: true,
+			},
+			labels: vec!["enhancement".to_string()],
+			comments: vec![
+				Comment {
+					id: None,
+					body: "Main body text".to_string(),
+					owned: true,
+				},
+				Comment {
+					id: Some(100),
+					body: "A comment".to_string(),
+					owned: true,
+				},
+			],
+			children: vec![Issue {
+				meta: IssueMeta {
+					title: "Child Issue".to_string(),
+					url: Some("https://github.com/owner/repo/issues/2".to_string()),
+					closed: false,
+					owned: true,
+				},
+				labels: vec![],
+				comments: vec![Comment {
+					id: None,
+					body: "Child body".to_string(),
+					owned: true,
+				}],
+				children: vec![],
+				blockers: vec![],
+			}],
+			blockers: vec![Blocker {
+				line_type: crate::blocker::LineType::Item,
+				raw: "- a blocker task".to_string(),
+			}],
+		};
+
+		let serialized = issue.serialize();
+
+		// Expected order:
+		// 1. Title line with labels: `- [ ] [label] Title <!-- url -->`
+		// 2. Body (description + comments + blockers)
+		// 3. Children (sub-issues) at the very end
+		assert_snapshot!(serialized, @r#"
+- [ ] [enhancement] Test Issue <!-- https://github.com/owner/repo/issues/1 -->
+	Main body text
+	<!-- https://github.com/owner/repo/issues/1#issuecomment-100 -->
+	A comment
+	# Blockers
+	- a blocker task
+	- [ ] Child Issue <!--sub https://github.com/owner/repo/issues/2 -->
+		Child body
+"#);
 	}
 }
