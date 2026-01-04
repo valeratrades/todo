@@ -71,7 +71,7 @@ async fn main() {
 	let settings = match config::LiveSettings::new(cli.settings_flags.clone(), Duration::from_secs(3)) {
 		Ok(s) => s,
 		Err(e) => {
-			eprintln!("Error: {}", e);
+			eprintln!("Error: {e}");
 			std::process::exit(1);
 		}
 	};
@@ -86,7 +86,7 @@ async fn main() {
 				// Only error if we're using a command that needs GitHub
 				// For now, create a dummy that will error on use
 				if matches!(cli.command, Commands::Open(_)) {
-					eprintln!("Error: {}", e);
+					eprintln!("Error: {e}");
 					std::process::exit(1);
 				}
 				// For other commands, create a mock (they won't use it)
@@ -114,7 +114,7 @@ async fn main() {
 	match success {
 		Ok(_) => std::process::exit(0),
 		Err(e) => {
-			eprintln!("Error: {}", e);
+			eprintln!("Error: {e}");
 			std::process::exit(1);
 		}
 	}

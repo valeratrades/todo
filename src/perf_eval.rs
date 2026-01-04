@@ -167,7 +167,7 @@ pub async fn main(_settings: &LiveSettings, args: PerfEvalArgs) -> Result<()> {
 	}
 
 	let num_captures = capture_groups.len().min(5);
-	tracing::info!("Loaded {} screenshot capture(s) from the last 5 minutes", num_captures);
+	tracing::info!("Loaded {num_captures} screenshot capture(s) from the last 5 minutes");
 
 	// Get current blocker
 	let blocker_output = Command::new(std::env::current_exe()?)
@@ -250,7 +250,7 @@ Replace N with an integer from 0 to 10."#
 				eprintln!("Failed to extract <score> tag. Full response:\n{}\n", response.text);
 			})?;
 
-			let score_int: i32 = score_raw.trim().parse().wrap_err(format!("Failed to parse score as integer: '{}'", score_raw))?;
+			let score_int: i32 = score_raw.trim().parse().wrap_err(format!("Failed to parse score as integer: '{score_raw}'"))?;
 
 			if !(0..=10).contains(&score_int) {
 				return Err(color_eyre::eyre::eyre!("Score out of range: {}", score_int));
@@ -260,8 +260,8 @@ Replace N with an integer from 0 to 10."#
 				eprintln!("Failed to extract <explanation> tag. Full response:\n{}\n", response.text);
 			})?;
 
-			println!("\nCurrent blocker: {}", current_blocker);
-			println!("Relevance score: {}/10", score_int);
+			println!("\nCurrent blocker: {current_blocker}");
+			println!("Relevance score: {score_int}/10");
 			println!("\nExplanation: {}", explanation.trim());
 
 			tracing::info!("Cost: {:.4} cents", response.cost_cents);

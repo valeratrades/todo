@@ -113,29 +113,47 @@ impl Marker {
 	}
 
 	/// Encode the marker to a string with consistent formatting.
-	/// Uses `<!-- content -->` format with spaces for readability.
+	/// Uses `<!-- content -->` format for markdown, `// content` for typst.
 	pub fn encode(&self, ext: Extension) -> String {
-		match self {
-			Marker::IssueUrl { url, immutable } =>
-				if *immutable {
-					format!("<!--immutable {} -->", url)
-				} else {
-					format!("<!-- {} -->", url)
-				},
-			Marker::SubIssue { url } => format!("<!--sub {} -->", url),
-			Marker::Comment { url, immutable, .. } =>
-				if *immutable {
-					format!("<!--immutable {} -->", url)
-				} else {
-					format!("<!-- {} -->", url)
-				},
-			Marker::NewComment => "<!-- new comment -->".to_string(),
-			Marker::BlockersSection => match ext {
-				Extension::Md => "# Blockers".to_string(),
-				Extension::Typ => "// blockers".to_string(),
+		match ext {
+			Extension::Md => match self {
+				Marker::IssueUrl { url, immutable } =>
+					if *immutable {
+						format!("<!--immutable {url} -->")
+					} else {
+						format!("<!-- {url} -->")
+					},
+				Marker::SubIssue { url } => format!("<!--sub {url} -->"),
+				Marker::Comment { url, immutable, .. } =>
+					if *immutable {
+						format!("<!--immutable {url} -->")
+					} else {
+						format!("<!-- {url} -->")
+					},
+				Marker::NewComment => "<!-- new comment -->".to_string(),
+				Marker::BlockersSection => "# Blockers".to_string(),
+				Marker::Omitted => "<!-- omitted -->".to_string(),
+				Marker::OmittedWithHint => "<!-- omitted (use --render-closed to unfold) -->".to_string(),
 			},
-			Marker::Omitted => "<!-- omitted -->".to_string(),
-			Marker::OmittedWithHint => "<!-- omitted (use --render-closed to unfold) -->".to_string(),
+			Extension::Typ => match self {
+				Marker::IssueUrl { url, immutable } =>
+					if *immutable {
+						format!("// immutable {url}")
+					} else {
+						format!("// {url}")
+					},
+				Marker::SubIssue { url } => format!("// sub {url}"),
+				Marker::Comment { url, immutable, .. } =>
+					if *immutable {
+						format!("// immutable {url}")
+					} else {
+						format!("// {url}")
+					},
+				Marker::NewComment => "// new comment".to_string(),
+				Marker::BlockersSection => "// blockers".to_string(),
+				Marker::Omitted => "// omitted".to_string(),
+				Marker::OmittedWithHint => "// omitted (use --render-closed to unfold)".to_string(),
+			},
 		}
 	}
 }
@@ -313,7 +331,7 @@ mod tests {
 
 		for marker in markers {
 			let encoded = marker.encode(Extension::Md);
-			let decoded = Marker::decode(&encoded, Extension::Md).expect(&format!("Failed to decode: {}", encoded));
+			let decoded = Marker::decode(&encoded, Extension::Md).expect(&format!("Failed to decode: {encoded}"));
 			assert_eq!(marker, decoded, "Roundtrip failed for {:?}", marker);
 		}
 	}

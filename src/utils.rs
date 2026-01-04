@@ -21,7 +21,7 @@ pub async fn open_file<P: AsRef<Path>>(path: P) -> Result<()> {
 	// Check for integration test pipe-based mock mode
 	if let Ok(pipe_path) = std::env::var("TODO_MOCK_PIPE") {
 		// Wait for signal on the pipe (any data or EOF when writer closes)
-		eprintln!("[mock] Waiting for signal on pipe: {}", pipe_path);
+		eprintln!("[mock] Waiting for signal on pipe: {pipe_path}");
 		let mut buf = [0u8; 1];
 		// Use blocking read in a spawn_blocking to not block the async runtime
 		tokio::task::spawn_blocking(move || {

@@ -282,7 +282,7 @@ struct Streak {
 impl Day {
 	pub fn path(date: &str) -> PathBuf {
 		let data_storage_dir = v_utils::xdg_data_dir!(MANUAL_PATH_APPENDIX);
-		data_storage_dir.join(format!("{}.json", date))
+		data_storage_dir.join(format!("{date}.json"))
 	}
 
 	pub fn load(date: &str) -> Result<Self> {
@@ -302,8 +302,8 @@ impl Day {
 				Some(v) => v.to_string(),
 				None => "None".to_owned(),
 			};
-			let announcement = format!("New pb on {}! ({} -> {})", name, old_value, new_value);
-			println!("{}", announcement);
+			let announcement = format!("New pb on {name}! ({old_value} -> {new_value})");
+			println!("{announcement}");
 			std::process::Command::new("notify-send").arg(announcement).spawn().unwrap().wait().unwrap();
 		}
 
@@ -355,7 +355,7 @@ impl Day {
 
 		// Returns bool for convienience of recursing some of these
 		let mut streak_update = |metric: &str, condition: &dyn Fn(&Day) -> bool| -> bool {
-			let load_streaks_from = data_storage_dir.as_ref().join(format!("{}.json", yd_date));
+			let load_streaks_from = data_storage_dir.as_ref().join(format!("{yd_date}.json"));
 			let yd_streaks_source = match std::fs::read_to_string(&load_streaks_from) {
 				Ok(s) => Some(serde_json::from_str::<Day>(&s).unwrap()),
 				Err(_) => None,

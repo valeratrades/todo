@@ -4,7 +4,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
-    v-utils.url = "github:valeratrades/.github";
+    v-utils.url = "path:/home/v/s/g/github";
   };
   outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils }:
     flake-utils.lib.eachDefaultSystem
@@ -95,7 +95,7 @@
                 libgbm
                 rust
                 wayland
-              ] ++ pre-commit-check.enabledPackages ++ github.enabledPackages;
+              ] ++ pre-commit-check.enabledPackages ++ github.enabledPackages ++ rs.enabledPackages;
 
               env.RUST_BACKTRACE = 1;
               env.RUST_LIB_BACKTRACE = 0;

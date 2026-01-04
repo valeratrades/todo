@@ -353,7 +353,7 @@ fn update_blockers_in_issue(full_content: &str, new_blockers_content: &str) -> O
 		if line.is_empty() {
 			result_lines.push(String::new());
 		} else {
-			result_lines.push(format!("\t{}", line));
+			result_lines.push(format!("\t{line}"));
 		}
 	}
 
@@ -494,13 +494,13 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 				.map(|p| p.to_string_lossy().to_string())
 				.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
 
-			println!("Set blocker file: {}", rel_path);
+			println!("Set blocker file: {rel_path}");
 
 			// Show current blocker if any
 			let content = std::fs::read_to_string(&issue_path)?;
 			if let Some(blockers_section) = extract_blockers_section(&content) {
 				if let Some(current) = get_current_blocker_with_headers(&blockers_section) {
-					println!("Current blocker: {}", current);
+					println!("Current blocker: {current}");
 				} else {
 					println!("Blockers section is empty.");
 				}
@@ -522,10 +522,10 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 				} else {
 					for (text, is_header, completed) in &blockers {
 						if *is_header {
-							println!("# {}", text);
+							println!("# {text}");
 						} else {
 							let marker = if *completed { "[x]" } else { "[ ]" };
-							println!("{} {}", marker, text);
+							println!("{marker} {text}");
 						}
 					}
 				}
@@ -544,7 +544,7 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			{
 				const MAX_LEN: usize = 70;
 				match current.len() {
-					0..=MAX_LEN => println!("{}", current),
+					0..=MAX_LEN => println!("{current}"),
 					_ => println!("{}...", &current[..(MAX_LEN - 3)]),
 				}
 				// No current blocker - silently exit (for status line integration)
@@ -598,7 +598,7 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 					.map(|p| p.to_string_lossy().to_string())
 					.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
 
-				println!("Set blocker file: {}", rel_path);
+				println!("Set blocker file: {rel_path}");
 			}
 		}
 
@@ -620,12 +620,12 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 
 					if let Some(popped) = current_before {
 						let stripped = blocker::strip_blocker_prefix(&popped);
-						println!("Popped: {}", stripped);
+						println!("Popped: {stripped}");
 					}
 
 					// Show new current blocker
 					if let Some(new_current) = get_current_blocker_with_headers(&new_blockers) {
-						println!("Current: {}", new_current);
+						println!("Current: {new_current}");
 					} else {
 						println!("Blockers section is now empty.");
 					}

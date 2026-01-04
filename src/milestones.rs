@@ -249,7 +249,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 	let is_outdated = milestone.due_on.map(|d| d.signed_duration_since(Utc::now()).num_hours() < 0).unwrap_or(true);
 
 	// Write to temp file
-	let tmp_path = format!("/tmp/milestone_{}.md", tf);
+	let tmp_path = format!("/tmp/milestone_{tf}.md");
 	fs::write(&tmp_path, &original_description)?;
 
 	// Open in editor
@@ -263,7 +263,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 
 	// Check if changed
 	if new_description == original_description {
-		println!("No changes made to milestone '{}'", tf);
+		println!("No changes made to milestone '{tf}'");
 		return Ok(());
 	}
 
@@ -283,14 +283,14 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 
 		update_result?;
 		if let Err(e) = archive_result {
-			eprintln!("Warning: Failed to archive old milestone contents: {}", e);
+			eprintln!("Warning: Failed to archive old milestone contents: {e}");
 		}
 	} else {
 		// Not outdated, just update description
 		update_milestone(settings, milestone_number, &new_description, None).await?;
 	}
 
-	println!("Updated milestone '{}'", tf);
+	println!("Updated milestone '{tf}'");
 
 	// Run healthcheck after update
 	healthcheck(settings).await?;

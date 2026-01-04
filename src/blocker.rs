@@ -320,7 +320,7 @@ fn typst_to_markdown(content: &str) -> Result<String> {
 					// Handle numbered format like "1. item"
 					if let Some(pos) = trimmed.find('.') { trimmed[pos + 1..].trim() } else { trimmed }
 				};
-				markdown_lines.push(format!("- {}", item_text));
+				markdown_lines.push(format!("- {item_text}"));
 			}
 			continue;
 		}
@@ -377,7 +377,7 @@ fn classify_line_markdown(line: &str) -> Option<LineType> {
 
 				// Warn if header is nested too deeply (level > 5)
 				if count > 5 {
-					eprintln!("Warning: Header level {} is too deep (max 5 supported). Treating as regular item: {}", count, trimmed);
+					eprintln!("Warning: Header level {count} is too deep (max 5 supported). Treating as regular item: {trimmed}");
 					return Some(LineType::Item);
 				}
 
@@ -471,7 +471,7 @@ fn format_blocker_content(content: &str) -> Result<String> {
 				} else {
 					// Space-indented, convert to tab
 					let trimmed = line.trim_start();
-					formatted_lines.push(format!("\t{}", trimmed));
+					formatted_lines.push(format!("\t{trimmed}"));
 				}
 			}
 			Some(LineType::Header { level, text }) => {
@@ -499,7 +499,7 @@ fn format_blocker_content(content: &str) -> Result<String> {
 
 				// Reconstruct the header line
 				let header_prefix = "#".repeat(level.to_usize());
-				formatted_lines.push(format!("{} {}", header_prefix, text));
+				formatted_lines.push(format!("{header_prefix} {text}"));
 			}
 			Some(LineType::Item) => {
 				let trimmed = line.trim();
@@ -507,7 +507,7 @@ fn format_blocker_content(content: &str) -> Result<String> {
 				if trimmed.starts_with("- ") {
 					formatted_lines.push(trimmed.to_string());
 				} else {
-					formatted_lines.push(format!("- {}", trimmed));
+					formatted_lines.push(format!("- {trimmed}"));
 				}
 			}
 		}
@@ -691,7 +691,7 @@ fn get_workspace_fully_qualified_setting(workspace: &str) -> Result<bool> {
 		Ok(settings.fully_qualified)
 	} else {
 		// Ask user for preference
-		println!("Workspace '{}' fully-qualified mode setting not found.", workspace);
+		println!("Workspace '{workspace}' fully-qualified mode setting not found.");
 		print!("Use fully-qualified mode (legacy) for this workspace? [y/N]: ");
 		Write::flush(&mut std::io::stdout())?;
 
@@ -709,7 +709,7 @@ fn get_workspace_fully_qualified_setting(workspace: &str) -> Result<bool> {
 		);
 		save_workspace_cache(&cache)?;
 
-		println!("Saved fully-qualified mode preference for workspace '{}': {}", workspace, use_fully_qualified);
+		println!("Saved fully-qualified mode preference for workspace '{workspace}': {use_fully_qualified}");
 		Ok(use_fully_qualified)
 	}
 }
@@ -762,7 +762,7 @@ async fn restart_tracking_for_project(relative_path: &str, workspace: Option<&st
 		let stripped_task = strip_blocker_prefix(&current_blocker).to_string();
 
 		if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace).await {
-			eprintln!("Warning: Failed to start tracking for task: {}", e);
+			eprintln!("Warning: Failed to start tracking for task: {e}");
 		}
 	}
 	Ok(())
@@ -799,7 +799,7 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	{
 		let urgent_file_path = blockers_dir().join(old_path);
 		if urgent_file_path.exists() {
-			eprintln!("Cannot switch away from urgent project '{}'. Complete urgent tasks first.", old_path);
+			eprintln!("Cannot switch away from urgent project '{old_path}'. Complete urgent tasks first.");
 			return Ok(());
 		}
 	}
@@ -817,7 +817,7 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	// Save the new project path
 	std::fs::write(&current_project_file, resolved_path)?;
 
-	println!("Set current project to: {}", resolved_path);
+	println!("Set current project to: {resolved_path}");
 
 	// If project changed and tracking is enabled, handle the transition
 	if project_changed && is_blocker_tracking_enabled() {
@@ -897,7 +897,7 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 
 		// Only switch if we're not already on the urgent project
 		if current_project != urgent_path {
-			eprintln!("Detected urgent file, switching to: {}", urgent_path);
+			eprintln!("Detected urgent file, switching to: {urgent_path}");
 			set_current_project(&urgent_path).await?;
 		}
 	}
@@ -934,7 +934,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				// --urgent flag takes precedence: use workspace-specific "urgent.md"
 				// Requires a workspace context
 				let urgent_path = if let Some(workspace) = workspace_from_path.as_ref() {
-					format!("{}/urgent.md", workspace)
+					format!("{workspace}/urgent.md")
 				} else {
 					return Err(eyre!(
 						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')"
@@ -1019,13 +1019,13 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				println!("{s}");
 			}
 			let content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
-			println!("{}", content);
+			println!("{content}");
 		}
 		Command::Current { fully_qualified } =>
 			if let Some(output) = get_current_blocker_with_headers(&relative_path, fully_qualified) {
 				const MAX_LEN: usize = 70;
 				match output.len() {
-					0..=MAX_LEN => println!("{}", output),
+					0..=MAX_LEN => println!("{output}"),
 					_ => println!("{}...", &output[..(MAX_LEN - 3)]),
 				}
 			},
@@ -1044,7 +1044,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				// --urgent flag takes precedence: use workspace-specific "urgent.md"
 				// Requires a workspace context
 				let urgent_path = if let Some(workspace) = workspace_from_path.as_ref() {
-					format!("{}/urgent.md", workspace)
+					format!("{workspace}/urgent.md")
 				} else {
 					return Err(eyre!(
 						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')"
@@ -1150,12 +1150,12 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 					// If we converted from .typ to .md, remove the old .typ file
 					if extension == Some("typ") {
 						std::fs::remove_file(&blocker_path)?;
-						println!("Converted and formatted blocker file: {} -> {}", relative_path, new_relative_path);
+						println!("Converted and formatted blocker file: {relative_path} -> {new_relative_path}");
 					} else {
-						println!("Formatted blocker file: {}", relative_path);
+						println!("Formatted blocker file: {relative_path}");
 					}
 				} else {
-					println!("Blocker file already formatted: {}", relative_path);
+					println!("Blocker file already formatted: {relative_path}");
 				}
 
 				// Cleanup urgent file if it's now empty
@@ -1246,7 +1246,7 @@ fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 			// Extract just the filename from the match path
 			Path::new(m).file_name().and_then(|f| f.to_str()) == Some(pattern)
 		}) {
-		eprintln!("Found exact match: {}", exact_match);
+		eprintln!("Found exact match: {exact_match}");
 		return Ok(exact_match.clone());
 	}
 
@@ -1259,7 +1259,7 @@ fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 				} else {
 					format!("{pattern}.md")
 				};
-				eprintln!("Creating new project file: {}", new_path);
+				eprintln!("Creating new project file: {new_path}");
 				Ok(new_path)
 			} else {
 				Err(eyre!("No projects found matching pattern: {pattern}"))
@@ -1350,7 +1350,7 @@ async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 	if is_semantically_empty(&normalized) {
 		// Delete the urgent file
 		std::fs::remove_file(&blocker_path)?;
-		eprintln!("Removed empty urgent file: {}", relative_path);
+		eprintln!("Removed empty urgent file: {relative_path}");
 
 		// Check if this was the current project
 		let current_project_path = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);

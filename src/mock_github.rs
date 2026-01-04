@@ -353,7 +353,7 @@ impl GitHubClient for MockGitHubClient {
 		Ok(CreatedIssue {
 			id,
 			number,
-			html_url: format!("https://github.com/{}/{}/issues/{}", owner, repo, number),
+			html_url: format!("https://github.com/{owner}/{repo}/issues/{number}"),
 		})
 	}
 

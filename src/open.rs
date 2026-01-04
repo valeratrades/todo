@@ -116,7 +116,7 @@ impl Issue {
 			base_body.to_string()
 		} else {
 			let mut full_body = base_body.to_string();
-			full_body.push_str("\n# Blockers\n");
+			full_body.push_str("# Blockers\n");
 			for blocker in &self.blockers {
 				full_body.push_str(&blocker.raw);
 				full_body.push('\n');
@@ -431,31 +431,30 @@ impl Issue {
 
 		// Comments (first is body, rest have markers)
 		for (i, comment) in self.comments.iter().enumerate() {
-			let comment_indent = if comment.owned { &content_indent } else { &format!("{}\t", content_indent) };
+			let comment_indent = if comment.owned { &content_indent } else { &format!("{content_indent}\t") };
 
 			if i == 0 {
 				// Body - no marker
 				if !comment.body.is_empty() {
 					for line in comment.body.lines() {
-						out.push_str(&format!("{}{}\n", comment_indent, line));
+						out.push_str(&format!("{comment_indent}{line}\n"));
 					}
 				}
 			} else {
 				// Comment with marker
-				out.push('\n');
 				if let Some(id) = comment.id {
 					let url = self.meta.url.as_deref().unwrap_or("");
 					if comment.owned {
-						out.push_str(&format!("{}<!-- {}#issuecomment-{} -->\n", content_indent, url, id));
+						out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
 					} else {
-						out.push_str(&format!("{}<!--immutable {}#issuecomment-{} -->\n", content_indent, url, id));
+						out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
 					}
 				} else {
-					out.push_str(&format!("{}<!-- new comment -->\n", content_indent));
+					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
 				if !comment.body.is_empty() {
 					for line in comment.body.lines() {
-						out.push_str(&format!("{}{}\n", comment_indent, line));
+						out.push_str(&format!("{comment_indent}{line}\n"));
 					}
 				}
 			}
@@ -477,7 +476,7 @@ impl Issue {
 			if let Some(body_comment) = child.comments.first() {
 				if !body_comment.body.is_empty() {
 					for line in body_comment.body.lines() {
-						out.push_str(&format!("{}{}\n", child_content_indent, line));
+						out.push_str(&format!("{child_content_indent}{line}\n"));
 					}
 				}
 			}
@@ -485,7 +484,7 @@ impl Issue {
 
 		// Blockers
 		if !self.blockers.is_empty() {
-			out.push_str(&format!("{}# Blockers\n", content_indent));
+			out.push_str(&format!("{content_indent}# Blockers\n"));
 			for blocker in &self.blockers {
 				out.push_str(&format!("{}{}\n", content_indent, blocker.raw));
 			}
@@ -586,7 +585,7 @@ async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, 
 					closed,
 					parent_issue_number,
 				} => {
-					println!("Creating sub-issue '{}'...", title);
+					println!("Creating sub-issue '{title}'...");
 
 					// Create the issue on GitHub
 					let created = gh.create_issue(owner, repo, &title, "").await?;
@@ -609,7 +608,7 @@ async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, 
 				}
 				IssueAction::UpdateSubIssueState { issue_number, closed } => {
 					let new_state = if closed { "closed" } else { "open" };
-					println!("Updating sub-issue #{} to {}...", issue_number, new_state);
+					println!("Updating sub-issue #{issue_number} to {new_state}...");
 					gh.update_issue_state(owner, repo, issue_number, new_state).await?;
 					total_actions += 1;
 				}
@@ -650,7 +649,7 @@ fn format_issue_filename(issue_number: u64, title: &str, extension: &Extension, 
 	} else {
 		format!("{}_-_{}.{}", issue_number, sanitized, extension.as_str())
 	};
-	if closed { format!("{}.bak", base) } else { base }
+	if closed { format!("{base}.bak") } else { base }
 }
 
 /// Get the path for an issue file in XDG_DATA.
@@ -688,7 +687,7 @@ fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title
 
 	// Look for files matching the sub-issue number pattern
 	// This matches both regular files and .bak files (closed issues)
-	let prefix = format!("{}_-_", sub_issue_number);
+	let prefix = format!("{sub_issue_number}_-_");
 	if let Ok(entries) = std::fs::read_dir(&sub_dir) {
 		for entry in entries.flatten() {
 			let path = entry.path();
@@ -696,7 +695,7 @@ fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title
 				if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
 					// Match files starting with "{number}_-_" or exactly "{number}.{ext}"
 					// This naturally includes .bak files like "78_-_title.md.bak"
-					if name.starts_with(&prefix) || name.starts_with(&format!("{}.", sub_issue_number)) {
+					if name.starts_with(&prefix) || name.starts_with(&format!("{sub_issue_number}.")) {
 						return Some(path);
 					}
 				}
@@ -819,7 +818,7 @@ async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_file_pa
 									}
 								} else {
 									// No local file and no inline content - fetch from GitHub
-									println!("Fetching sub-issue #{} from GitHub...", sub_number);
+									println!("Fetching sub-issue #{sub_number} from GitHub...");
 									let parent_info = Some((issue_number, issue.meta.title.clone()));
 									if let Ok(sub_file_path) = fetch_and_store_issue(gh, owner, repo, sub_number, &extension, false, parent_info).await {
 										// Read the fetched sub-issue body
@@ -1064,7 +1063,25 @@ fn load_issue_meta_from_path(issue_file_path: &Path) -> Result<IssueMetaEntry> {
 	get_issue_meta(owner, repo, issue_number).ok_or_else(|| eyre!("No metadata found for issue #{} in {}/{}", issue_number, owner, repo))
 }
 
-fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
+fn convert_markdown_to_typst(body: &str) -> String {
+	body.lines()
+		.map(|line| {
+			// Convert markdown headers to typst
+			if let Some(rest) = line.strip_prefix("### ") {
+				format!("=== {rest}")
+			} else if let Some(rest) = line.strip_prefix("## ") {
+				format!("== {rest}")
+			} else if let Some(rest) = line.strip_prefix("# ") {
+				format!("= {rest}")
+			} else {
+				line.to_string()
+			}
+		})
+		.collect::<Vec<_>>()
+		.join("\n")
+}
+
+fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool, ext: Extension) -> String {
 	let mut content = String::new();
 
 	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
@@ -1073,22 +1090,26 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 	let checked = if issue_closed { "x" } else { " " };
 
 	// Issue title as checkbox item with URL inline
-	if issue_owned {
-		content.push_str(&format!("- [{checked}] {} <!-- {} -->\n", issue.title, issue_url));
-	} else {
-		content.push_str(&format!("- [{checked}] {} <!--immutable {} -->\n", issue.title, issue_url));
-	}
+	let title_marker = Marker::IssueUrl {
+		url: issue_url.clone(),
+		immutable: !issue_owned,
+	};
+	content.push_str(&format!("- [{checked}] {} {}\n", issue.title, title_marker.encode(ext)));
 
 	// If issue is closed and render_closed is false, omit contents
 	if issue_closed && !render_closed {
-		content.push_str("\t<!-- omitted -->\n");
+		content.push_str(&format!("\t{}\n", Marker::Omitted.encode(ext)));
 		return content;
 	}
 
 	// Labels if any (indented under the issue)
 	if !issue.labels.is_empty() {
 		let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-		content.push_str(&format!("\t**Labels:** {}\n", labels.join(", ")));
+		let label_fmt = match ext {
+			Extension::Md => format!("**Labels:** {}", labels.join(", ")),
+			Extension::Typ => format!("*Labels:* {}", labels.join(", ")),
+		};
+		content.push_str(&format!("\t{label_fmt}\n"));
 	}
 
 	// Body (indented under the issue)
@@ -1099,143 +1120,12 @@ fn format_issue_as_markdown(issue: &GitHubIssue, comments: &[GitHubComment], sub
 		let sub_issue_titles: Vec<&str> = sub_issues.iter().map(|s| s.title.as_str()).collect();
 		let mut skip_until_non_indented = false;
 
-		for line in body.lines() {
-			// Check if this line is a checkbox that matches a sub-issue
-			if let Some(title) = extract_checkbox_title(line) {
-				if sub_issue_titles.contains(&title.as_str()) {
-					// Skip this checkbox line and any indented content beneath it
-					skip_until_non_indented = true;
-					continue;
-				}
-			}
+		let body_text = match ext {
+			Extension::Md => body.clone(),
+			Extension::Typ => convert_markdown_to_typst(body),
+		};
 
-			// If we're skipping indented content after a matched checkbox
-			if skip_until_non_indented {
-				if line.starts_with('\t') || line.starts_with("    ") || line.is_empty() {
-					continue;
-				}
-				skip_until_non_indented = false;
-			}
-
-			if issue_owned {
-				content.push_str(&format!("\t{}\n", line));
-			} else {
-				// Double indent for immutable body
-				content.push_str(&format!("\t\t{}\n", line));
-			}
-		}
-	}
-
-	// Sub-issues (indented under the issue, after body) - embed their body content
-	// Prefer local file contents over GitHub body when available
-	if !sub_issues.is_empty() {
-		for sub in sub_issues {
-			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
-			let sub_checked = if sub.state == "closed" { "x" } else { " " };
-			content.push_str(&format!("\t- [{sub_checked}] {} <!--sub {} -->\n", sub.title, sub_url));
-
-			// Try to read local file contents for this sub-issue
-			let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
-
-			// Use local file contents if available, otherwise fall back to GitHub body
-			let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
-
-			if let Some(body) = body_to_embed {
-				if !body.is_empty() {
-					for line in body.lines() {
-						content.push_str(&format!("\t\t{}\n", line));
-					}
-				}
-			}
-		}
-	}
-
-	// Comments (indented under the issue)
-	for comment in comments {
-		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
-		let comment_owned = comment.user.login == current_user;
-
-		content.push('\n');
-		if comment_owned {
-			content.push_str(&format!("\t<!-- {} -->\n", comment_url));
-		} else {
-			content.push_str(&format!("\t<!--immutable {} -->\n", comment_url));
-		}
-
-		if let Some(body) = &comment.body
-			&& !body.is_empty()
-		{
-			if comment_owned {
-				for line in body.lines() {
-					content.push_str(&format!("\t{}\n", line));
-				}
-			} else {
-				// Double indent for immutable comments
-				for line in body.lines() {
-					content.push_str(&format!("\t\t{}\n", line));
-				}
-			}
-		}
-	}
-
-	content
-}
-
-fn convert_markdown_to_typst(body: &str) -> String {
-	body.lines()
-		.map(|line| {
-			// Convert markdown headers to typst
-			if let Some(rest) = line.strip_prefix("### ") {
-				format!("=== {}", rest)
-			} else if let Some(rest) = line.strip_prefix("## ") {
-				format!("== {}", rest)
-			} else if let Some(rest) = line.strip_prefix("# ") {
-				format!("= {}", rest)
-			} else {
-				line.to_string()
-			}
-		})
-		.collect::<Vec<_>>()
-		.join("\n")
-}
-
-fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool) -> String {
-	let mut content = String::new();
-
-	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
-	let issue_owned = issue.user.login == current_user;
-	let issue_closed = issue.state == "closed";
-	let checked = if issue_closed { "x" } else { " " };
-
-	// Issue title as checkbox item with URL inline (using typst comment syntax)
-	if issue_owned {
-		content.push_str(&format!("- [{checked}] {} // {}\n", issue.title, issue_url));
-	} else {
-		content.push_str(&format!("- [{checked}] {} // immutable {}\n", issue.title, issue_url));
-	}
-
-	// If issue is closed and render_closed is false, omit contents
-	if issue_closed && !render_closed {
-		content.push_str("\t// omitted\n");
-		return content;
-	}
-
-	// Labels if any (indented under the issue)
-	if !issue.labels.is_empty() {
-		let labels: Vec<&str> = issue.labels.iter().map(|l| l.name.as_str()).collect();
-		content.push_str(&format!("\t*Labels:* {}\n", labels.join(", ")));
-	}
-
-	// Body - convert markdown to typst basics (indented under the issue)
-	// Skip checkbox lines that match sub-issue titles (they'll be shown via sub-issues list)
-	if let Some(body) = &issue.body
-		&& !body.is_empty()
-	{
-		let sub_issue_titles: Vec<&str> = sub_issues.iter().map(|s| s.title.as_str()).collect();
-		let mut skip_until_non_indented = false;
-
-		let converted = convert_markdown_to_typst(body);
-		for line in converted.lines() {
+		for line in body_text.lines() {
 			// Check if this line is a checkbox that matches a sub-issue
 			if let Some(title) = extract_checkbox_title(line) {
 				if sub_issue_titles.contains(&title.as_str()) {
@@ -1252,34 +1142,36 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 			}
 
 			if issue_owned {
-				content.push_str(&format!("\t{}\n", line));
+				content.push_str(&format!("\t{line}\n"));
 			} else {
 				// Double indent for immutable body
-				content.push_str(&format!("\t\t{}\n", line));
+				content.push_str(&format!("\t\t{line}\n"));
 			}
 		}
 	}
 
 	// Sub-issues (indented under the issue, after body) - embed their body content
 	// Prefer local file contents over GitHub body when available
-	if !sub_issues.is_empty() {
-		for sub in sub_issues {
-			let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
-			let sub_checked = if sub.state == "closed" { "x" } else { " " };
-			content.push_str(&format!("\t- [{sub_checked}] {} // sub {}\n", sub.title, sub_url));
+	for sub in sub_issues {
+		let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
+		let sub_checked = if sub.state == "closed" { "x" } else { " " };
+		let sub_marker = Marker::SubIssue { url: sub_url };
+		content.push_str(&format!("\t- [{sub_checked}] {} {}\n", sub.title, sub_marker.encode(ext)));
 
-			// Try to read local file contents for this sub-issue
-			let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
+		// Try to read local file contents for this sub-issue
+		let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
 
-			// Use local file contents if available, otherwise fall back to GitHub body
-			let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
+		// Use local file contents if available, otherwise fall back to GitHub body
+		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
 
-			if let Some(body) = body_to_embed {
-				if !body.is_empty() {
-					let converted = convert_markdown_to_typst(body);
-					for line in converted.lines() {
-						content.push_str(&format!("\t\t{}\n", line));
-					}
+		if let Some(body) = body_to_embed {
+			if !body.is_empty() {
+				let body_text = match ext {
+					Extension::Md => body.to_string(),
+					Extension::Typ => convert_markdown_to_typst(body),
+				};
+				for line in body_text.lines() {
+					content.push_str(&format!("\t\t{line}\n"));
 				}
 			}
 		}
@@ -1290,25 +1182,28 @@ fn format_issue_as_typst(issue: &GitHubIssue, comments: &[GitHubComment], sub_is
 		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
 		let comment_owned = comment.user.login == current_user;
 
-		content.push('\n');
-		if comment_owned {
-			content.push_str(&format!("\t// {}\n", comment_url));
-		} else {
-			content.push_str(&format!("\t// immutable {}\n", comment_url));
-		}
+		let comment_marker = Marker::Comment {
+			url: comment_url,
+			id: comment.id,
+			immutable: !comment_owned,
+		};
+		content.push_str(&format!("\t{}\n", comment_marker.encode(ext)));
 
 		if let Some(body) = &comment.body
 			&& !body.is_empty()
 		{
-			let converted = convert_markdown_to_typst(body);
+			let body_text = match ext {
+				Extension::Md => body.clone(),
+				Extension::Typ => convert_markdown_to_typst(body),
+			};
 			if comment_owned {
-				for line in converted.lines() {
-					content.push_str(&format!("\t{}\n", line));
+				for line in body_text.lines() {
+					content.push_str(&format!("\t{line}\n"));
 				}
 			} else {
 				// Double indent for immutable comments
-				for line in converted.lines() {
-					content.push_str(&format!("\t\t{}\n", line));
+				for line in body_text.lines() {
+					content.push_str(&format!("\t\t{line}\n"));
 				}
 			}
 		}
@@ -1334,7 +1229,7 @@ fn expand_blocker_shorthand(content: &str, extension: &Extension) -> String {
 			if trimmed.eq_ignore_ascii_case("!b") {
 				// Preserve the original indentation
 				let indent = &line[..line.len() - trimmed.len()];
-				format!("{}{}", indent, replacement)
+				format!("{indent}{replacement}")
 			} else {
 				line.to_string()
 			}
@@ -1436,7 +1331,7 @@ async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &
 	// Step 0: Check if issue state (open/closed) changed
 	if issue.meta.closed != meta.original_closed {
 		let new_state = if issue.meta.closed { "closed" } else { "open" };
-		println!("Updating issue state to {}...", new_state);
+		println!("Updating issue state to {new_state}...");
 		gh.update_issue_state(owner, repo, meta.issue_number, new_state).await?;
 		state_changed = true;
 		updates += 1;
@@ -1446,8 +1341,8 @@ async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &
 	let issue_body = issue.body();
 	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
 	tracing::debug!("[sync] issue.blockers.len() = {}", issue.blockers.len());
-	tracing::debug!("[sync] issue_body:\n{}", issue_body);
-	tracing::debug!("[sync] original_body:\n{}", original_body);
+	tracing::debug!("[sync] issue_body:\n{issue_body}");
+	tracing::debug!("[sync] original_body:\n{original_body}");
 	if issue_body != original_body {
 		println!("Updating issue body...");
 		gh.update_issue_body(owner, repo, meta.issue_number, &issue_body).await?;
@@ -1476,13 +1371,13 @@ async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &
 			Some(id) if original_ids.contains(&id) => {
 				let original = meta.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
 				if comment.body != original {
-					println!("Updating comment {}...", id);
+					println!("Updating comment {id}...");
 					gh.update_comment(owner, repo, id, &comment.body).await?;
 					updates += 1;
 				}
 			}
 			Some(id) => {
-				eprintln!("Warning: comment {} not found in original, skipping", id);
+				eprintln!("Warning: comment {id} not found in original, skipping");
 			}
 			None =>
 				if !comment.body.is_empty() {
@@ -1497,13 +1392,13 @@ async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &
 	if total > 0 {
 		let mut parts = Vec::new();
 		if updates > 0 {
-			parts.push(format!("{} updated", updates));
+			parts.push(format!("{updates} updated"));
 		}
 		if creates > 0 {
-			parts.push(format!("{} created", creates));
+			parts.push(format!("{creates} created"));
 		}
 		if deletes > 0 {
-			parts.push(format!("{} deleted", deletes));
+			parts.push(format!("{deletes} deleted"));
 		}
 		println!("Synced to GitHub: {}", parts.join(", "));
 	}
@@ -1541,10 +1436,7 @@ async fn fetch_and_store_issue(
 	}
 
 	// Format content
-	let content = match extension {
-		Extension::Md => format_issue_as_markdown(&issue, &comments, &sub_issues, owner, repo, &current_user, render_closed),
-		Extension::Typ => format_issue_as_typst(&issue, &comments, &sub_issues, owner, repo, &current_user, render_closed),
-	};
+	let content = format_issue(&issue, &comments, &sub_issues, owner, repo, &current_user, render_closed, *extension);
 
 	// Write issue file
 	std::fs::write(&issue_file_path, &content)?;
@@ -1591,7 +1483,7 @@ async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Res
 	// This ensures we show the latest state of all sub-issue files
 	// Also fetches any missing sub-issues from GitHub
 	if let Err(e) = reconstruct_issue_with_sub_issues(gh, issue_file_path, &owner, &repo).await {
-		eprintln!("Warning: could not reconstruct sub-issues: {}", e);
+		eprintln!("Warning: could not reconstruct sub-issues: {e}");
 	}
 
 	// Open in editor (blocks until editor closes)
@@ -1669,13 +1561,13 @@ async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Res
 			let old_sub_dir = old_path.with_extension("");
 			if old_sub_dir.is_dir() {
 				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
-					eprintln!("Warning: could not remove old sub-issues directory: {}", e);
+					eprintln!("Warning: could not remove old sub-issues directory: {e}");
 				}
 			}
 		}
 
 		if actions_executed > 0 {
-			println!("Synced {} actions to GitHub.", actions_executed);
+			println!("Synced {actions_executed} actions to GitHub.");
 		}
 	} else {
 		println!("No changes made.");
@@ -1755,7 +1647,7 @@ async fn create_issue_on_github(gh: &BoxedGitHubClient, touch_path: &TouchPath, 
 	let repo = &touch_path.repo;
 
 	// Step 1: Check collaborator access
-	println!("Checking collaborator access to {}/{}...", owner, repo);
+	println!("Checking collaborator access to {owner}/{repo}...");
 	let has_access = gh.check_collaborator_access(owner, repo).await?;
 	if !has_access {
 		return Err(eyre!("You don't have collaborator (write) access to {}/{}. Cannot create issues.", owner, repo));
@@ -1774,14 +1666,14 @@ async fn create_issue_on_github(gh: &BoxedGitHubClient, touch_path: &TouchPath, 
 
 			match issue_number {
 				Some(num) => {
-					println!("  Found parent issue #{}: {}", num, parent_title);
+					println!("  Found parent issue #{num}: {parent_title}");
 					parent_issues.push((num, parent_title.clone()));
 				}
 				None => {
 					// If not found by title, try parsing as issue number
 					if let Ok(num) = parent_title.parse::<u64>() {
 						if gh.issue_exists(owner, repo, num).await? {
-							println!("  Found parent issue #{}", num);
+							println!("  Found parent issue #{num}");
 							// Fetch the actual title from GitHub
 							let issue = gh.fetch_issue(owner, repo, num).await?;
 							parent_issues.push((num, issue.title));
@@ -1808,13 +1700,13 @@ async fn create_issue_on_github(gh: &BoxedGitHubClient, touch_path: &TouchPath, 
 	let new_issue_title = touch_path.issue_chain.last().unwrap();
 
 	// Step 4: Create the issue on GitHub (with empty body - user will edit after)
-	println!("Creating issue '{}'...", new_issue_title);
+	println!("Creating issue '{new_issue_title}'...");
 	let created = gh.create_issue(owner, repo, new_issue_title, "").await?;
 	println!("Created issue #{}: {}", created.number, created.html_url);
 
 	// Step 5: If there are parent issues, add as sub-issue to the immediate parent
 	if let Some((parent_number, _)) = parent_issues.last() {
-		println!("Adding as sub-issue to #{}...", parent_number);
+		println!("Adding as sub-issue to #{parent_number}...");
 		gh.add_sub_issue(owner, repo, *parent_number, created.id).await?;
 		println!("Sub-issue relationship created.");
 	}
@@ -1925,7 +1817,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		// GitHub URL mode: fetch issue and store in XDG_DATA
 		let (owner, repo, issue_number) = github::parse_github_issue_url(input)?;
 
-		println!("Fetching issue #{} from {}/{}...", issue_number, owner, repo);
+		println!("Fetching issue #{issue_number} from {owner}/{repo}...");
 
 		// Fetch and store issue (and sub-issues) in XDG_DATA
 		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, args.render_closed, None).await?;
@@ -1999,10 +1891,10 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_owned() {
+	fn test_format_issue_md_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec!["bug", "help wanted"], "me", "open");
 
-		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			**Labels:** bug, help wanted
@@ -2011,10 +1903,10 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_not_owned() {
+	fn test_format_issue_md_not_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 
-		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -2022,11 +1914,11 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_closed_omitted() {
+	fn test_format_issue_md_closed_omitted() {
 		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
 
 		// Default: closed issues have omitted contents
-		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", false);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
 		assert_snapshot!(md, @"
 		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			<!-- omitted -->
@@ -2034,11 +1926,11 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_closed_rendered() {
+	fn test_format_issue_md_closed_rendered() {
 		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
 
 		// With render_closed: full contents shown
-		let md = format_issue_as_markdown(&issue, &[], &[], "owner", "repo", "me", true);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", true, Extension::Md);
 		assert_snapshot!(md, @"
 		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -2046,14 +1938,14 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_with_sub_issues() {
+	fn test_format_issue_md_with_sub_issues() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "me", "open");
 		let sub_issues = vec![
 			make_issue(124, "Open sub-issue", Some("Sub-issue body content"), vec![], "me", "open"),
 			make_issue(125, "Closed sub-issue", None, vec![], "me", "closed"),
 		];
 
-		let md = format_issue_as_markdown(&issue, &[], &sub_issues, "owner", "repo", "me", false);
+		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", false, Extension::Md);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -2064,7 +1956,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_markdown_mixed_ownership() {
+	fn test_format_issue_md_mixed_ownership() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 		let comments = vec![
 			GitHubComment {
@@ -2079,24 +1971,22 @@ mod tests {
 			},
 		];
 
-		let md = format_issue_as_markdown(&issue, &comments, &[], "owner", "repo", "me", false);
+		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", false, Extension::Md);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
-
 			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
 			First comment
-
 			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
 				Second comment
 		");
 	}
 
 	#[test]
-	fn test_format_issue_as_typst_owned() {
+	fn test_format_issue_typ_owned() {
 		let issue = make_issue(123, "Test Issue", Some("## Subheading\nBody text"), vec!["enhancement"], "me", "open");
 
-		let typ = format_issue_as_typst(&issue, &[], &[], "owner", "repo", "me", false);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ);
 		assert_snapshot!(typ, @"
 		- [ ] Test Issue // https://github.com/owner/repo/issues/123
 			*Labels:* enhancement
@@ -2106,7 +1996,7 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_as_typst_not_owned() {
+	fn test_format_issue_typ_not_owned() {
 		let issue = make_issue(456, "Typst Issue", Some("Body"), vec![], "other", "open");
 		let comments = vec![GitHubComment {
 			id: 2001,
@@ -2114,21 +2004,20 @@ mod tests {
 			user: make_user("other"),
 		}];
 
-		let typ = format_issue_as_typst(&issue, &comments, &[], "testowner", "testrepo", "me", false);
+		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", false, Extension::Typ);
 		assert_snapshot!(typ, @"
 		- [ ] Typst Issue // immutable https://github.com/testowner/testrepo/issues/456
 				Body
-
 			// immutable https://github.com/testowner/testrepo/issues/456#issuecomment-2001
 				A comment
 		");
 	}
 
 	#[test]
-	fn test_format_issue_as_typst_closed_omitted() {
+	fn test_format_issue_typ_closed_omitted() {
 		let issue = make_issue(123, "Closed Issue", Some("Body text"), vec![], "me", "closed");
 
-		let typ = format_issue_as_typst(&issue, &[], &[], "owner", "repo", "me", false);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ);
 		assert_snapshot!(typ, @"
 		- [x] Closed Issue // https://github.com/owner/repo/issues/123
 			// omitted

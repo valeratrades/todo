@@ -185,7 +185,7 @@ pub async fn start_time_entry_with_defaults(workspace: Option<&str>, project: Op
 		Some(p) => p,
 		None => match &processed_project {
 			Some(processed) => {
-				println!("Using cached project (processed from filename): {}", processed);
+				println!("Using cached project (processed from filename): {processed}");
 				processed.as_str()
 			}
 			None => {
@@ -224,7 +224,7 @@ pub async fn start_time_entry_with_defaults(workspace: Option<&str>, project: Op
 		tag_ids,
 	};
 
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/time-entries");
 
 	let created: CreatedEntry = client
 		.post(url)
@@ -322,7 +322,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: ClockifyArgs) -
 				tag_ids,
 			};
 
-			let url = format!("https://api.clockify.me/api/v1/workspaces/{}/time-entries", workspace_id);
+			let url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/time-entries");
 
 			let created: CreatedEntry = client
 				.post(url)
@@ -415,7 +415,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 	}
 
 	// Project not found - ask user if they want to create it
-	println!("Project '{}' not found in Clockify workspace.", input);
+	println!("Project '{input}' not found in Clockify workspace.");
 	print!("Would you like to create a new Clockify project with this exact name? [y/N]: ");
 	Write::flush(&mut std::io::stdout())?;
 
@@ -424,7 +424,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 
 	if response.trim().to_lowercase() == "y" || response.trim().to_lowercase() == "yes" {
 		let project_id = create_project(client, ws, input).await?;
-		println!("Created new project '{}' with ID: {}", input, project_id);
+		println!("Created new project '{input}' with ID: {project_id}");
 		Ok(project_id)
 	} else {
 		Err(eyre!("Project not found and user declined to create: {}", input))
@@ -432,7 +432,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 }
 
 async fn fetch_project_by_id(client: &reqwest::Client, ws: &str, id: &str) -> Result<String> {
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects/{}", ws, id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects/{id}");
 	let _p: Project = client.get(url).send().await?.error_for_status()?.json().await?;
 	Ok(id.to_string())
 }
@@ -444,7 +444,7 @@ async fn resolve_task(client: &reqwest::Client, ws: &str, project_id: &str, inpu
 		return Ok(id);
 	}
 	// Clockify tasks listing is per project
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects/{}/tasks?page-size=200", ws, project_id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects/{project_id}/tasks?page-size=200");
 	let tasks: Vec<Task> = client.get(url).send().await?.error_for_status()?.json().await?;
 
 	if let Some(t) = tasks.iter().find(|t| t.name == input) {
@@ -457,7 +457,7 @@ async fn resolve_task(client: &reqwest::Client, ws: &str, project_id: &str, inpu
 }
 
 async fn fetch_task_by_id(client: &reqwest::Client, ws: &str, project_id: &str, id: &str) -> Result<String> {
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects/{}/tasks/{}", ws, project_id, id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects/{project_id}/tasks/{id}");
 	let _t: Task = client.get(url).send().await?.error_for_status()?.json().await?;
 	Ok(id.to_string())
 }
@@ -509,13 +509,13 @@ async fn resolve_tags(client: &reqwest::Client, ws: &str, input: &str) -> Result
 }
 
 async fn fetch_tags(client: &reqwest::Client, ws: &str) -> Result<Vec<Tag>> {
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/tags?page-size=200", ws);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/tags?page-size=200");
 	let tags: Vec<Tag> = client.get(url).send().await?.error_for_status()?.json().await?;
 	Ok(tags.into_iter().filter(|t| !t.archived).collect())
 }
 
 async fn create_project(client: &reqwest::Client, ws: &str, name: &str) -> Result<String> {
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects", ws);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{ws}/projects");
 
 	#[derive(Serialize)]
 	struct NewProject {
@@ -625,7 +625,7 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 
 	// Try the alternative endpoint: get recent time entries and filter for running ones
 	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?page-size=10", workspace_id, user.id);
-	println!("Checking for recent time entries at: {}", url);
+	println!("Checking for recent time entries at: {url}");
 
 	let entries: Vec<CreatedEntry> = client
 		.get(&url)
@@ -716,7 +716,7 @@ async fn list_projects(workspace_input: &str) -> Result<()> {
 	};
 
 	// Get all projects in the workspace
-	let url = format!("https://api.clockify.me/api/v1/workspaces/{}/projects?archived=false&page-size=200", workspace_id);
+	let url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/projects?archived=false&page-size=200");
 	let projects: Vec<Project> = client
 		.get(&url)
 		.send()
@@ -728,7 +728,7 @@ async fn list_projects(workspace_input: &str) -> Result<()> {
 		.await
 		.wrap_err("Failed to parse projects response")?;
 
-	println!("Projects in workspace {}:", workspace_id);
+	println!("Projects in workspace {workspace_id}:");
 	for project in projects {
 		println!("  {} - {} (archived: {})", project.id, project.name, project.archived);
 	}
