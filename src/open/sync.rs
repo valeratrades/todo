@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use v_utils::prelude::*;
 
 use super::{
@@ -296,7 +296,7 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	// Save conflict state
 	let conflict = ConflictState {
 		issue_number: meta.issue_number,
-		detected_at: Utc::now(),
+		detected_at: Timestamp::now(),
 		pr_url: pr_url.clone(),
 		reason: "Remote issue changed since last fetch".to_string(),
 	};

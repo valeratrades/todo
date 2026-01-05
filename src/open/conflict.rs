@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use miette::Diagnostic;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -30,7 +30,7 @@ pub struct ConflictState {
 	/// Issue number on GitHub
 	pub issue_number: u64,
 	/// When the conflict was detected
-	pub detected_at: DateTime<Utc>,
+	pub detected_at: Timestamp,
 	/// URL of the PR created to merge remote changes
 	pub pr_url: String,
 	/// Brief description of what diverged
@@ -47,7 +47,7 @@ pub struct ConflictState {
 pub struct ConflictError {
 	pub issue_number: u64,
 	pub pr_url: String,
-	pub detected_at: DateTime<Utc>,
+	pub detected_at: Timestamp,
 }
 
 impl From<ConflictState> for ConflictError {
@@ -104,7 +104,7 @@ mod tests {
 	fn test_conflict_state_roundtrip() {
 		let state = ConflictState {
 			issue_number: 42,
-			detected_at: Utc::now(),
+			detected_at: Timestamp::now(),
 			pr_url: "https://github.com/owner/repo/pull/123".to_string(),
 			reason: "Remote body changed".to_string(),
 		};

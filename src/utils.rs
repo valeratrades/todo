@@ -1,15 +1,15 @@
 use std::{path::Path, process::Command, str::FromStr};
 
-use chrono::Duration;
-#[cfg(not(test))]
-use chrono::Utc;
 use color_eyre::eyre::{Report, Result, bail};
+#[cfg(not(test))]
+use jiff::Timestamp as TimestampImpl;
+use jiff::{SignedDuration, civil};
 pub use tokio::sync::oneshot;
 pub use v_utils::io::file_open::{Client as OpenClient, OpenMode};
 
 use crate::config::LiveSettings;
 #[cfg(test)]
-use crate::mocks::Utc;
+use crate::mocks::MockTimestamp as TimestampImpl;
 
 /// Open a file in editor.
 ///
@@ -71,13 +71,13 @@ pub fn rg(args: &[&str], dir: &Path) -> Result<String> {
 }
 
 pub fn format_date(days_back: usize, settings: &LiveSettings) -> String {
-	let date = Utc::now() - Duration::days(days_back as i64);
+	let date = TimestampImpl::now() - SignedDuration::from_hours(days_back as i64 * 24);
 	let offset = same_day_buffer();
 
 	let config = settings.config().expect("failed to load config");
 	let format_str = config.manual_stats.as_ref().map(|m| m.date_format.as_str()).unwrap_or("%Y-%m-%d");
 	let format_str = if format_str.is_empty() { "%Y-%m-%d" } else { format_str };
-	(date - offset).format(format_str).to_string()
+	(date - offset).strftime(format_str).to_string()
 }
 
 /// Ends of each day-section as offset to wake-time
@@ -108,27 +108,29 @@ impl std::str::FromStr for DaySectionBorders {
 }
 
 /// Diff of sleep time from 00:00 utc
-pub fn same_day_buffer() -> chrono::TimeDelta {
+pub fn same_day_buffer() -> SignedDuration {
 	let waketime = std::env::var("WAKETIME").unwrap();
-	let waketime = chrono::NaiveTime::parse_from_str(waketime.as_str(), "%H:%M").unwrap();
+	let waketime = civil::Time::strptime("%H:%M", waketime.as_str()).unwrap();
 
 	let borders = DaySectionBorders::from_str(&std::env::var("DAY_SECTION_BORDERS").unwrap()).unwrap();
-	let sleep_offset = chrono::Duration::minutes((borders.evening_end * 60.0) as i64);
+	let sleep_offset_mins = (borders.evening_end * 60.0) as i64;
 
-	let bedtime = waketime + sleep_offset;
-	let new_day = bedtime + chrono::Duration::hours(6);
-	new_day - chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap()
+	// Calculate in total minutes from midnight, then wrap at 24h
+	let waketime_mins = waketime.hour() as i64 * 60 + waketime.minute() as i64;
+	let bedtime_mins = waketime_mins + sleep_offset_mins;
+	let new_day_mins = (bedtime_mins + 6 * 60) % (24 * 60); // wrap at 24h
+	SignedDuration::from_mins(new_day_mins)
 }
 
 #[cfg(test)]
 mod tests {
 	use std::time::Duration;
 
-	use chrono::TimeZone;
+	use jiff::civil::date;
 
 	use super::*;
 
-	fn init_test(t: Option<(i32, u32, u32, u32, u32, u32)>) -> LiveSettings {
+	fn init_test(t: Option<(i16, i8, i8, i8, i8, i8)>) -> LiveSettings {
 		// SAFETY: This is only used in tests and doesn't cause race conditions in single-threaded test execution
 		unsafe {
 			std::env::set_var("WAKETIME", "05:00");
@@ -136,8 +138,8 @@ mod tests {
 		}
 
 		if let Some(t) = t {
-			let mock_now = chrono::Utc.with_ymd_and_hms(t.0, t.1, t.2, t.3, t.4, t.5).unwrap();
-			crate::mocks::set_timestamp(mock_now.timestamp());
+			let mock_now = date(t.0, t.1, t.2).at(t.3, t.4, t.5, 0).to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp();
+			crate::mocks::set_timestamp(mock_now);
 		}
 
 		let flags = crate::config::SettingsFlags::default();
@@ -149,7 +151,7 @@ mod tests {
 		let _ = init_test(Some((2024, 5, 29, 12, 0, 0)));
 		let offset = same_day_buffer();
 
-		assert_eq!(offset, chrono::Duration::hours(3).checked_add(&chrono::Duration::minutes(0)).unwrap());
+		assert_eq!(offset, SignedDuration::from_hours(3));
 	}
 
 	#[test]

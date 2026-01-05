@@ -1,8 +1,8 @@
 use std::{fs::File, io::BufWriter, thread, time::Duration};
 
-use chrono::{Local, Utc};
 use clap::Args;
 use color_eyre::eyre::{Context, Result};
+use jiff::{Timestamp, ToSpan, Zoned, civil};
 use libwayshot::WayshotConnection;
 
 use crate::config::LiveSettings;
@@ -26,8 +26,7 @@ fn save_screenshot_png(image_buffer: &image::DynamicImage, path: &std::path::Pat
 }
 
 fn cleanup_old_screenshots(cache_dir: &std::path::Path) -> Result<()> {
-	let now = Utc::now();
-	let threshold = now - chrono::Duration::days(1);
+	let threshold = Timestamp::now() - 1.day();
 
 	for entry in std::fs::read_dir(cache_dir)? {
 		let entry = entry?;
@@ -36,12 +35,11 @@ fn cleanup_old_screenshots(cache_dir: &std::path::Path) -> Result<()> {
 		if path.is_dir() {
 			// Try to parse directory name as date (YYYY-MM-DD format)
 			if let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
-				&& let Ok(dir_date) = chrono::NaiveDate::parse_from_str(dir_name, "%Y-%m-%d")
+				&& let Ok(dir_date) = civil::Date::strptime("%Y-%m-%d", dir_name)
 			{
-				let dir_datetime = dir_date.and_hms_opt(0, 0, 0).unwrap();
-				let dir_datetime_utc = chrono::DateTime::<Utc>::from_naive_utc_and_offset(dir_datetime, Utc);
+				let dir_timestamp = dir_date.at(0, 0, 0, 0).to_zoned(jiff::tz::TimeZone::UTC)?.timestamp();
 
-				if dir_datetime_utc < threshold {
+				if dir_timestamp < threshold {
 					tracing::info!("Removing old screenshot directory: {}", path.display());
 					std::fs::remove_dir_all(&path)?;
 				}
@@ -59,8 +57,8 @@ pub fn main(_settings: &LiveSettings, _args: WatchMonitorsArgs) -> Result<()> {
 
 	//LOOP: it's a daemon
 	loop {
-		let now = Local::now();
-		let date_dir = cache_dir.join(now.format("%Y-%m-%d").to_string());
+		let now = Zoned::now();
+		let date_dir = cache_dir.join(now.strftime("%Y-%m-%d").to_string());
 
 		// Create the date directory if it doesn't exist
 		std::fs::create_dir_all(&date_dir).wrap_err(format!("Failed to create directory: {}", date_dir.display()))?;
@@ -84,7 +82,7 @@ pub fn main(_settings: &LiveSettings, _args: WatchMonitorsArgs) -> Result<()> {
 			continue;
 		}
 
-		let timestamp = now.format("%H-%M-%S").to_string();
+		let timestamp = now.strftime("%H-%M-%S").to_string();
 
 		// Capture all outputs
 		for (i, output) in outputs.iter().enumerate() {

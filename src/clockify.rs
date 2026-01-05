@@ -1,8 +1,8 @@
 use std::{env, io::Write};
 
-use chrono::{SecondsFormat, Utc};
 use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, WrapErr, eyre};
+use jiff::Timestamp;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
@@ -213,7 +213,7 @@ pub async fn start_time_entry_with_defaults(workspace: Option<&str>, project: Op
 
 	let tag_ids = if let Some(t) = tags { Some(resolve_tags(&client, &workspace_id, t).await?) } else { None };
 
-	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+	let now = Timestamp::now().to_string();
 
 	let payload = NewTimeEntry {
 		start: now,
@@ -311,7 +311,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: ClockifyArgs) -
 				None
 			};
 
-			let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+			let now = Timestamp::now().to_string();
 
 			let payload = NewTimeEntry {
 				start: now,
@@ -651,7 +651,7 @@ async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {
 	}
 
 	let entry = running_entry.unwrap();
-	let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+	let now = Timestamp::now().to_string();
 
 	// Stop the time entry using the correct endpoint
 	let stop_url = format!("https://api.clockify.me/api/v1/workspaces/{workspace_id}/time-entries/{}", entry.id);

@@ -11,7 +11,6 @@ is_integration_test = []
 ask_llm = { version = "^2.1.4" }
 async-trait = "^0.1.89"
 base64 = "0.22"
-chrono = { version = "^0.4.42", features = ["serde"] }
 clap = { version = "^4.5.54", features = ["derive"] }
 clap_complete = "4.5.64"
 color-eyre = "0.6.5"
@@ -19,6 +18,7 @@ config = "^0.15.19"
 derive-new = "^0"
 derive_more = { version = "2.1.1", features = ["from_str", "display", "from"] }
 image = "0.25.9"
+jiff = { version = "^0.2", features = ["serde"] }
 libwayshot = "0.6.0"
 miette = { version = "7", features = ["fancy"] }
 pandoc = "^0.8.11"
