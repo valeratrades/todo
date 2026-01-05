@@ -21,8 +21,3 @@ pub fn ensure_binary_compiled() {
 mod blocker_format;
 mod blocker_project_resolution;
 mod fixtures;
-mod open_sub_issues;
-#[macro_use]
-mod tracing_utils;
-mod tracing_verification;
-// mod config_warnings; //dbg: temporarily disabled, as we're failing to make directory for `STATE_DIR` while in nixos eval env

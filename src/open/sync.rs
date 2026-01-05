@@ -2,9 +2,11 @@
 
 use std::path::Path;
 
+use chrono::Utc;
 use v_utils::prelude::*;
 
 use super::{
+	conflict::{ConflictState, save_conflict},
 	fetch::fetch_and_store_issue,
 	issue::Issue,
 	meta::{IssueMetaEntry, get_issue_meta, load_issue_meta_from_path},
@@ -148,90 +150,176 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 	Ok(executed)
 }
 
-/// Reconstruct an issue file with current sub-issue contents.
-/// This reads local sub-issue files and embeds their content back into the parent.
-/// IMPORTANT: Preserves local sub-issues that don't have URLs yet (not created on GitHub).
-pub async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str) -> Result<()> {
-	use super::{
-		files::find_sub_issue_file,
-		format::format_issue,
-		meta::{IssueMetaEntry, save_issue_meta},
-	};
-	use crate::github::OriginalSubIssue;
+/// Check that required CLI tools are available
+fn check_required_tools() -> Result<()> {
+	use std::process::Command;
 
-	let meta = load_issue_meta_from_path(issue_file_path)?;
-	let extension = match meta.extension.as_str() {
-		"typ" => Extension::Typ,
-		_ => Extension::Md,
-	};
-
-	// First, parse the current local file to find any sub-issues without URLs
-	// These are new sub-issues that haven't been created on GitHub yet
-	let local_content = std::fs::read_to_string(issue_file_path)?;
-	let ctx = ParseContext::new(local_content.clone(), issue_file_path.display().to_string());
-	let local_issue = Issue::parse(&local_content, &ctx)?;
-	let local_only_children: Vec<_> = local_issue.children.iter().filter(|c| c.meta.url.is_none()).cloned().collect();
-
-	// Fetch fresh data from GitHub
-	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
-		gh.fetch_authenticated_user(),
-		gh.fetch_issue(owner, repo, meta.issue_number),
-		gh.fetch_comments(owner, repo, meta.issue_number),
-		gh.fetch_sub_issues(owner, repo, meta.issue_number),
-	)?;
-
-	// Check for sub-issues that exist on GitHub but not locally
-	for sub in &sub_issues {
-		let local_path = find_sub_issue_file(owner, repo, meta.issue_number, &meta.title, sub.number);
-		if local_path.is_none() {
-			// Sub-issue not found locally - fetch and store it
-			println!("Fetching sub-issue #{}: {}...", sub.number, sub.title);
-			let parent_info = Some((meta.issue_number, meta.title.clone()));
-			let sub_path = fetch_and_store_issue(gh, owner, repo, sub.number, &extension, false, parent_info).await?;
-			println!("Stored sub-issue at: {:?}", sub_path);
-		}
+	// Check git
+	let git_check = Command::new("git").arg("--version").output();
+	if git_check.is_err() {
+		return Err(eyre!("'git' is required but not found in PATH"));
 	}
 
-	// Re-format the parent issue with updated sub-issue contents
-	let content = format_issue(&issue, &comments, &sub_issues, owner, repo, &current_user, false, extension);
-
-	// If there are local-only sub-issues, we need to append them to the formatted content
-	let final_content = if local_only_children.is_empty() {
-		content
-	} else {
-		// Parse the formatted content and add the local children back
-		let formatted_ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
-		let mut formatted_issue = Issue::parse(&content, &formatted_ctx)?;
-		formatted_issue.children.extend(local_only_children);
-		formatted_issue.serialize()
-	};
-
-	// Write the updated content
-	std::fs::write(issue_file_path, &final_content)?;
-
-	// Update metadata with current sub-issue state
-	let meta_entry = IssueMetaEntry {
-		issue_number: meta.issue_number,
-		title: issue.title.clone(),
-		extension: meta.extension.clone(),
-		original_issue_body: issue.body.clone(),
-		original_comments: comments.iter().map(|c| c.into()).collect(),
-		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
-		parent_issue: meta.parent_issue,
-		original_close_state: if issue.state == "closed" {
-			super::issue::CloseState::Closed
-		} else {
-			super::issue::CloseState::Open
-		},
-	};
-	save_issue_meta(owner, repo, meta_entry)?;
+	// Check gh
+	let gh_check = Command::new("gh").arg("--version").output();
+	if gh_check.is_err() {
+		return Err(eyre!("'gh' (GitHub CLI) is required but not found in PATH"));
+	}
 
 	Ok(())
 }
 
+/// Handle divergence: remote changed since we last fetched.
+/// Creates a PR to merge remote changes into our local state.
+async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, meta: &IssueMetaEntry, _local_issue: &Issue, remote_issue: &Issue) -> Result<()> {
+	use std::process::Command;
+
+	use super::files::issues_dir;
+
+	check_required_tools()?;
+
+	let data_dir = issues_dir();
+	let data_dir_str = data_dir.to_str().ok_or_else(|| eyre!("Invalid data directory path"))?;
+
+	// Verify data dir is a git repo
+	if !data_dir.join(".git").exists() {
+		return Err(eyre!(
+			"Issue data directory is not a git repository.\n\
+			 To enable merge conflict handling, initialize git in: {}\n\
+			 Then configure a remote to push PRs to.",
+			data_dir.display()
+		));
+	}
+
+	// Check if remote exists
+	let remote_output = Command::new("git").args(["-C", data_dir_str, "remote", "-v"]).output()?;
+
+	if remote_output.stdout.is_empty() {
+		return Err(eyre!(
+			"No git remote configured for issue data directory.\n\
+			 Add a remote to enable PR creation:\n\
+			 cd {} && git remote add origin <your-repo-url>",
+			data_dir.display()
+		));
+	}
+
+	// Get current branch name
+	let current_branch = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--abbrev-ref", "HEAD"]).output()?;
+	let current_branch = String::from_utf8_lossy(&current_branch.stdout).trim().to_string();
+
+	// Auto-commit local changes
+	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
+
+	let commit_status = Command::new("git")
+		.args(["-C", data_dir_str, "commit", "-m", &format!("Local changes for issue #{}", meta.issue_number)])
+		.status()?;
+
+	if commit_status.success() {
+		println!("Committed local changes.");
+	}
+
+	// Push current branch to ensure local changes are on remote
+	let push_status = Command::new("git").args(["-C", data_dir_str, "push", "-u", "origin", &current_branch]).status()?;
+
+	if !push_status.success() {
+		return Err(eyre!("Failed to push local changes to remote"));
+	}
+
+	// Create branch for remote state
+	let branch_name = format!("remote-sync-{}-{}-{}", owner, repo, meta.issue_number);
+
+	// Delete branch if it exists (from previous failed attempt)
+	let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).output();
+
+	// Create and checkout new branch
+	let branch_status = Command::new("git").args(["-C", data_dir_str, "checkout", "-b", &branch_name]).status()?;
+
+	if !branch_status.success() {
+		return Err(eyre!("Failed to create branch for remote state"));
+	}
+
+	// Write remote state to the issue file
+	let remote_content = remote_issue.serialize();
+	std::fs::write(issue_file_path, &remote_content)?;
+
+	// Commit remote state
+	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
+
+	let commit_status = Command::new("git")
+		.args(["-C", data_dir_str, "commit", "-m", &format!("Remote state for issue #{} (to be merged)", meta.issue_number)])
+		.status()?;
+
+	if !commit_status.success() {
+		// Restore original branch
+		let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
+		return Err(eyre!("Failed to commit remote state"));
+	}
+
+	// Push branch
+	let push_status = Command::new("git").args(["-C", data_dir_str, "push", "-u", "origin", &branch_name, "--force"]).status()?;
+
+	if !push_status.success() {
+		// Restore original branch
+		let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
+		return Err(eyre!("Failed to push remote state branch"));
+	}
+
+	// Create PR using gh CLI
+	let pr_title = format!("Sync remote changes for issue #{}", meta.issue_number);
+	let pr_body = format!(
+		"Remote issue #{} on {}/{} changed since last fetch.\n\n\
+		 This PR contains the remote state that needs to be merged into your local changes.\n\n\
+		 Review the changes and merge to resolve the conflict.",
+		meta.issue_number, owner, repo
+	);
+
+	let pr_output = Command::new("gh")
+		.args(["pr", "create", "--title", &pr_title, "--body", &pr_body, "--base", &current_branch, "--head", &branch_name])
+		.current_dir(&data_dir)
+		.output()?;
+
+	// Restore original branch
+	let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
+
+	let pr_url = if pr_output.status.success() {
+		String::from_utf8_lossy(&pr_output.stdout).trim().to_string()
+	} else {
+		let stderr = String::from_utf8_lossy(&pr_output.stderr);
+		// PR might already exist
+		if stderr.contains("already exists") {
+			format!("(PR already exists for branch {})", branch_name)
+		} else {
+			return Err(eyre!("Failed to create PR: {}", stderr));
+		}
+	};
+
+	// Save conflict state
+	let conflict = ConflictState {
+		issue_number: meta.issue_number,
+		detected_at: Utc::now(),
+		pr_url: pr_url.clone(),
+		reason: "Remote issue changed since last fetch".to_string(),
+	};
+
+	save_conflict(owner, repo, &conflict)?;
+
+	Err(eyre!(
+		"Divergence detected: remote issue #{} changed since you last fetched.\n\
+		 \n\
+		 A PR has been created to merge the remote changes: {}\n\
+		 \n\
+		 To resolve:\n\
+		 1. Review and merge the PR\n\
+		 2. Pull the merged changes\n\
+		 3. The conflict marker will be cleared automatically on next successful sync",
+		meta.issue_number,
+		pr_url
+	))
+}
+
 /// Open a local issue file, let user edit, then sync changes back to GitHub.
-pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) -> Result<()> {
-	use super::files::extract_owner_repo_from_path;
+pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool) -> Result<()> {
+	use super::{conflict::check_conflict, files::extract_owner_repo_from_path};
 
 	// Extract owner and repo from path
 	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
@@ -239,12 +327,11 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) ->
 	// Load metadata
 	let meta = load_issue_meta_from_path(issue_file_path)?;
 
-	// Reconstruct the file with current sub-issue contents before opening
-	// This ensures we show the latest state of all sub-issue files
-	// Also fetches any missing sub-issues from GitHub
-	if let Err(e) = reconstruct_issue_with_sub_issues(gh, issue_file_path, &owner, &repo).await {
-		eprintln!("Warning: could not reconstruct sub-issues: {e}");
-	}
+	// Check for unresolved conflicts before allowing edits
+	check_conflict(&owner, &repo, meta.issue_number)?;
+
+	// NOTE: We intentionally do NOT fetch from GitHub before opening.
+	// This avoids the network roundtrip delay. Divergence is detected during sync.
 
 	// Open in editor (blocks until editor closes)
 	// If TODO_MOCK_PIPE env var is set, waits for pipe signal instead
@@ -299,6 +386,42 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) ->
 		return Ok(());
 	}
 
+	// Serialize the (potentially updated) Issue back to markdown
+	let serialized = issue.serialize();
+
+	// Write the normalized/updated content back
+	if serialized != edited_content {
+		std::fs::write(issue_file_path, &serialized)?;
+	}
+
+	// If offline mode, skip all network operations
+	if offline {
+		println!("Offline mode: changes saved locally only.");
+		return Ok(());
+	}
+
+	// Fetch current GitHub state to check for divergence
+	let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
+		gh.fetch_authenticated_user(),
+		gh.fetch_issue(&owner, &repo, meta.issue_number),
+		gh.fetch_comments(&owner, &repo, meta.issue_number),
+		gh.fetch_sub_issues(&owner, &repo, meta.issue_number),
+	)?;
+
+	// Build Issue from current GitHub state
+	let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, &owner, &repo, &current_user);
+
+	// Build Issue from what we originally saw (stored in meta)
+	let original_issue = Issue::from_meta(&meta, &owner, &repo);
+
+	// Check if remote diverged from what we originally saw
+	if remote_issue != original_issue {
+		// Remote changed since we last fetched - divergence detected!
+		return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
+	}
+
+	// No divergence - proceed with sync
+
 	// Collect required GitHub actions (e.g., new sub-issues without URLs)
 	let actions = issue.collect_actions(&meta.original_sub_issues);
 	let has_actions = actions.iter().any(|level| !level.is_empty());
@@ -310,11 +433,9 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) ->
 		0
 	};
 
-	// Serialize the (potentially updated) Issue back to markdown
-	let serialized = issue.serialize();
-
-	// Write the normalized/updated content back
-	if serialized != edited_content {
+	// Re-serialize if actions added URLs
+	if actions_executed > 0 {
+		let serialized = issue.serialize();
 		std::fs::write(issue_file_path, &serialized)?;
 	}
 
@@ -366,6 +487,9 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) ->
 	} else {
 		println!("No changes made.");
 	}
+
+	// Clear any conflict state on successful sync
+	let _ = super::conflict::clear_conflict(&owner, &repo, meta.issue_number);
 
 	Ok(())
 }

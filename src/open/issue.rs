@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use super::util::{is_blockers_marker, normalize_issue_indentation};
 use crate::{
 	error::{ParseContext, ParseError},
-	github::{self, IssueAction, OriginalSubIssue},
+	github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue},
 };
 
 /// Close state of an issue.
 /// Maps to GitHub's binary open/closed, but locally supports additional variants.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CloseState {
 	/// Issue is open: `- [ ]`
 	Open,
@@ -100,7 +100,7 @@ pub struct Blocker {
 }
 
 /// Complete representation of an issue file
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Issue {
 	pub meta: IssueMeta,
 	pub labels: Vec<String>,
@@ -614,6 +614,199 @@ impl Issue {
 		}
 		current.children.get_mut(*path.last()?)
 	}
+
+	//==========================================================================
+	// Construction from GitHub API data
+	//==========================================================================
+
+	/// Construct an Issue directly from GitHub API data.
+	/// This is the canonical way to create an Issue from remote state.
+	///
+	/// `current_user` is used to determine ownership (owned vs immutable).
+	pub fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Self {
+		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
+		let issue_owned = issue.user.login == current_user;
+		let close_state = if issue.state == "closed" { CloseState::Closed } else { CloseState::Open };
+
+		let meta = IssueMeta {
+			title: issue.title.clone(),
+			url: Some(issue_url.clone()),
+			close_state,
+			owned: issue_owned,
+		};
+
+		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
+
+		// Build comments: body is first comment
+		let mut issue_comments = Vec::new();
+
+		// Body as first comment
+		let body = issue.body.as_deref().unwrap_or("").to_string();
+		issue_comments.push(Comment { id: None, body, owned: issue_owned });
+
+		// Actual comments
+		for c in comments {
+			let comment_owned = c.user.login == current_user;
+			issue_comments.push(Comment {
+				id: Some(c.id),
+				body: c.body.as_deref().unwrap_or("").to_string(),
+				owned: comment_owned,
+			});
+		}
+
+		// Build children from sub-issues
+		let children: Vec<Issue> = sub_issues
+			.iter()
+			.map(|sub| {
+				let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
+				let sub_close_state = if sub.state == "closed" { CloseState::Closed } else { CloseState::Open };
+				let sub_owned = sub.user.login == current_user;
+
+				let sub_body = sub.body.as_deref().unwrap_or("").to_string();
+				let sub_comments = if sub_body.is_empty() {
+					vec![]
+				} else {
+					vec![Comment {
+						id: None,
+						body: sub_body,
+						owned: sub_owned,
+					}]
+				};
+
+				Issue {
+					meta: IssueMeta {
+						title: sub.title.clone(),
+						url: Some(sub_url),
+						close_state: sub_close_state,
+						owned: sub_owned,
+					},
+					labels: sub.labels.iter().map(|l| l.name.clone()).collect(),
+					comments: sub_comments,
+					children: vec![], // Sub-issues don't have nested children in this context
+					blockers: vec![], // Sub-issues don't have blockers
+				}
+			})
+			.collect();
+
+		Issue {
+			meta,
+			labels,
+			comments: issue_comments,
+			children,
+			blockers: vec![], // Blockers are local-only, not from GitHub
+		}
+	}
+
+	/// Reconstruct an Issue from stored metadata (original state at last fetch).
+	/// This is used for comparing against current remote state to detect divergence.
+	///
+	/// Note: This reconstructs a minimal Issue suitable for comparison.
+	/// It won't have blockers (local-only) or full sub-issue content.
+	pub fn from_meta(meta: &super::meta::IssueMetaEntry, owner: &str, repo: &str) -> Self {
+		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", meta.issue_number);
+
+		let issue_meta = IssueMeta {
+			title: meta.title.clone(),
+			url: Some(issue_url.clone()),
+			close_state: meta.original_close_state.clone(),
+			owned: true, // Doesn't matter for comparison
+		};
+
+		// Build comments from original_comments
+		let mut comments = Vec::new();
+
+		// Body as first comment
+		comments.push(Comment {
+			id: None,
+			body: meta.original_issue_body.clone().unwrap_or_default(),
+			owned: true,
+		});
+
+		// Original comments
+		for oc in &meta.original_comments {
+			comments.push(Comment {
+				id: Some(oc.id),
+				body: oc.body.clone().unwrap_or_default(),
+				owned: true,
+			});
+		}
+
+		// Build children from original_sub_issues (minimal - just state for comparison)
+		let children: Vec<Issue> = meta
+			.original_sub_issues
+			.iter()
+			.map(|sub| {
+				let sub_close_state = if sub.state == "closed" { CloseState::Closed } else { CloseState::Open };
+				Issue {
+					meta: IssueMeta {
+						title: String::new(), // Not stored in OriginalSubIssue
+						url: Some(format!("https://github.com/{owner}/{repo}/issues/{}", sub.number)),
+						close_state: sub_close_state,
+						owned: true,
+					},
+					labels: vec![],
+					comments: vec![],
+					children: vec![],
+					blockers: vec![],
+				}
+			})
+			.collect();
+
+		Issue {
+			meta: issue_meta,
+			labels: vec![], // Not stored in meta
+			comments,
+			children,
+			blockers: vec![],
+		}
+	}
+}
+
+/// Semantic equality for divergence detection.
+/// Compares the fields that matter for sync: close_state, body, comments, sub-issue states.
+/// Ignores local-only fields like blockers and ownership.
+impl PartialEq for Issue {
+	fn eq(&self, other: &Self) -> bool {
+		// Compare close state
+		if self.meta.close_state != other.meta.close_state {
+			return false;
+		}
+
+		// Compare body (first comment)
+		let self_body = self.comments.first().map(|c| c.body.as_str()).unwrap_or("");
+		let other_body = other.comments.first().map(|c| c.body.as_str()).unwrap_or("");
+		if self_body != other_body {
+			return false;
+		}
+
+		// Compare comments (skip first which is body)
+		let self_comments: Vec<_> = self.comments.iter().skip(1).collect();
+		let other_comments: Vec<_> = other.comments.iter().skip(1).collect();
+
+		if self_comments.len() != other_comments.len() {
+			return false;
+		}
+
+		for (sc, oc) in self_comments.iter().zip(other_comments.iter()) {
+			if sc.id != oc.id || sc.body != oc.body {
+				return false;
+			}
+		}
+
+		// Compare sub-issue states
+		if self.children.len() != other.children.len() {
+			return false;
+		}
+
+		for (sc, oc) in self.children.iter().zip(other.children.iter()) {
+			// Compare by URL (issue number) and state
+			if sc.meta.url != oc.meta.url || sc.meta.close_state != oc.meta.close_state {
+				return false;
+			}
+		}
+
+		true
+	}
 }
 
 #[cfg(test)]
@@ -730,5 +923,114 @@ mod tests {
 		assert_eq!(issue.children[0].meta.close_state, CloseState::Closed);
 		assert_eq!(issue.children[1].meta.close_state, CloseState::NotPlanned);
 		assert_eq!(issue.children[2].meta.close_state, CloseState::Duplicate(42));
+	}
+
+	#[test]
+	fn test_from_github() {
+		use crate::github::{GitHubLabel, GitHubUser};
+
+		let issue = GitHubIssue {
+			number: 123,
+			title: "Test Issue".to_string(),
+			body: Some("Issue body".to_string()),
+			labels: vec![GitHubLabel { name: "bug".to_string() }],
+			user: GitHubUser { login: "me".to_string() },
+			state: "open".to_string(),
+		};
+
+		let comments = vec![GitHubComment {
+			id: 456,
+			body: Some("A comment".to_string()),
+			user: GitHubUser { login: "other".to_string() },
+		}];
+
+		let sub_issues = vec![GitHubIssue {
+			number: 124,
+			title: "Sub Issue".to_string(),
+			body: Some("Sub body".to_string()),
+			labels: vec![],
+			user: GitHubUser { login: "me".to_string() },
+			state: "closed".to_string(),
+		}];
+
+		let result = Issue::from_github(&issue, &comments, &sub_issues, "owner", "repo", "me");
+
+		assert_eq!(result.meta.title, "Test Issue");
+		assert_eq!(result.meta.url, Some("https://github.com/owner/repo/issues/123".to_string()));
+		assert_eq!(result.meta.close_state, CloseState::Open);
+		assert!(result.meta.owned);
+		assert_eq!(result.labels, vec!["bug".to_string()]);
+
+		// Body + 1 comment
+		assert_eq!(result.comments.len(), 2);
+		assert_eq!(result.comments[0].body, "Issue body");
+		assert!(result.comments[0].owned);
+		assert_eq!(result.comments[1].id, Some(456));
+		assert_eq!(result.comments[1].body, "A comment");
+		assert!(!result.comments[1].owned); // different user
+
+		// Sub-issue
+		assert_eq!(result.children.len(), 1);
+		assert_eq!(result.children[0].meta.title, "Sub Issue");
+		assert_eq!(result.children[0].meta.close_state, CloseState::Closed);
+	}
+
+	#[test]
+	fn test_partial_eq() {
+		use crate::github::GitHubUser;
+
+		let make_issue = |body: &str, state: &str| -> Issue {
+			let gh_issue = GitHubIssue {
+				number: 1,
+				title: "Test".to_string(),
+				body: Some(body.to_string()),
+				labels: vec![],
+				user: GitHubUser { login: "me".to_string() },
+				state: state.to_string(),
+			};
+			Issue::from_github(&gh_issue, &[], &[], "o", "r", "me")
+		};
+
+		let issue1 = make_issue("body", "open");
+		let issue2 = make_issue("body", "open");
+		let issue3 = make_issue("different", "open");
+		let issue4 = make_issue("body", "closed");
+
+		assert_eq!(issue1, issue2);
+		assert_ne!(issue1, issue3); // different body
+		assert_ne!(issue1, issue4); // different state
+	}
+
+	#[test]
+	fn test_from_meta_roundtrip() {
+		use super::super::meta::IssueMetaEntry;
+		use crate::github::OriginalComment;
+
+		let meta = IssueMetaEntry {
+			issue_number: 42,
+			title: "Meta Issue".to_string(),
+			extension: "md".to_string(),
+			original_issue_body: Some("Original body".to_string()),
+			original_comments: vec![OriginalComment {
+				id: 100,
+				body: Some("Original comment".to_string()),
+			}],
+			original_sub_issues: vec![OriginalSubIssue {
+				number: 43,
+				state: "open".to_string(),
+			}],
+			parent_issue: None,
+			original_close_state: CloseState::Open,
+		};
+
+		let issue = Issue::from_meta(&meta, "owner", "repo");
+
+		assert_eq!(issue.meta.title, "Meta Issue");
+		assert_eq!(issue.meta.close_state, CloseState::Open);
+		assert_eq!(issue.comments.len(), 2); // body + 1 comment
+		assert_eq!(issue.comments[0].body, "Original body");
+		assert_eq!(issue.comments[1].id, Some(100));
+		assert_eq!(issue.children.len(), 1);
+		assert_eq!(issue.children[0].meta.close_state, CloseState::Open);
 	}
 }

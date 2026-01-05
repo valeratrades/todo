@@ -4,6 +4,7 @@
 //! editing them locally, and syncing changes back to GitHub.
 
 mod command;
+mod conflict;
 mod fetch;
 mod files;
 mod format;
