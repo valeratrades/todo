@@ -272,13 +272,6 @@ pub struct Day {
 	number_of_rejections: usize,
 	phone_locked_away: bool,
 }
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct Streak {
-	pb: usize,
-	current: usize,
-}
-
 impl Day {
 	pub fn path(date: &str) -> PathBuf {
 		let data_storage_dir = v_utils::xdg_data_dir!(MANUAL_PATH_APPENDIX);
@@ -445,4 +438,10 @@ impl Day {
 			.unwrap();
 		file.write_all(formatted_json.as_bytes()).unwrap();
 	}
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct Streak {
+	pb: usize,
+	current: usize,
 }

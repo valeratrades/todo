@@ -2,6 +2,8 @@
 //!
 //! Uses miette for rich diagnostics with source code spans.
 
+#![allow(unused_assignments)] // Fields are read by miette's derive macro via attributes
+
 use miette::{Diagnostic, NamedSource, SourceSpan};
 
 /// Error type for issue file parsing.
