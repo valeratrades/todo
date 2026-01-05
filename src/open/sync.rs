@@ -226,7 +226,7 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	}
 
 	// Create branch for remote state
-	let branch_name = format!("remote-sync-{}-{}-{}", owner, repo, meta.issue_number);
+	let branch_name = format!("remote-sync-{owner}-{repo}-{}", meta.issue_number);
 
 	// Delete branch if it exists (from previous failed attempt)
 	let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).output();
@@ -267,10 +267,10 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	// Create PR using gh CLI
 	let pr_title = format!("Sync remote changes for issue #{}", meta.issue_number);
 	let pr_body = format!(
-		"Remote issue #{} on {}/{} changed since last fetch.\n\n\
+		"Remote issue #{} on {owner}/{repo} changed since last fetch.\n\n\
 		 This PR contains the remote state that needs to be merged into your local changes.\n\n\
 		 Review the changes and merge to resolve the conflict.",
-		meta.issue_number, owner, repo
+		meta.issue_number
 	);
 
 	let pr_output = Command::new("gh")
@@ -287,7 +287,7 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 		let stderr = String::from_utf8_lossy(&pr_output.stderr);
 		// PR might already exist
 		if stderr.contains("already exists") {
-			format!("(PR already exists for branch {})", branch_name)
+			format!("(PR already exists for branch {branch_name})")
 		} else {
 			return Err(eyre!("Failed to create PR: {}", stderr));
 		}

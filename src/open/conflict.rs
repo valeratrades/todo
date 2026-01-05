@@ -38,7 +38,7 @@ pub struct ConflictState {
 }
 
 /// Error returned when trying to open an issue with unresolved conflicts
-#[derive(Debug, Error, Diagnostic)]
+#[derive(Debug, Diagnostic, Error)]
 #[error("Issue #{issue_number} has unresolved merge conflicts (detected {detected_at})")]
 #[diagnostic(
 	code(todo::conflict::unresolved),
