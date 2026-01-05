@@ -69,14 +69,7 @@ fn test_blocker_format_typst_headings(blocker_typ_ctx: BlockerFormatContext) {
 	blocker_typ_ctx.run_format().expect("Format command should succeed");
 
 	let formatted = blocker_typ_ctx.read_formatted_file();
-
-	// Verify that Typst headings (=) are converted to markdown (#)
-	assert!(formatted.contains("# marketmonkey"), "Should convert = to #");
-	assert!(formatted.contains("## yt"), "Should convert == to ##");
-	assert!(formatted.contains("## gauss"), "Should convert == to ##");
-
-	// Verify proper spacing between same-level headers
-	assert!(formatted.contains("# git lfs: docs, music, etc\n\n# eww"), "Should have spaces between same-level headers");
+	insta::assert_snapshot!(formatted, @"");
 }
 
 #[rstest]
@@ -91,12 +84,28 @@ fn test_blocker_format_converts_typst_to_md(blocker_typ_ctx: BlockerFormatContex
 	let md_file = blocker_typ_ctx.blocker_file.with_extension("md");
 	assert!(md_file.exists(), "Converted .md file should exist");
 
-	// Read the markdown file
 	let formatted = fs::read_to_string(&md_file).unwrap();
+	insta::assert_snapshot!(formatted, @"
+	# marketmonkey
+	- go in-depth on possibilities
 
-	// Verify it contains markdown syntax
-	assert!(formatted.contains("# marketmonkey"), "Should contain markdown headers");
-	assert!(formatted.contains("- go in-depth"), "Should contain list items");
+	# SocialNetworks in rust
+	- test twitter
+
+	## yt
+	- test
+
+	# math tools
+	## gauss
+	- finish it
+	- move gaussian pivot over in there
+
+	# git lfs: docs, music, etc
+
+	# eww: don't restore if outdated
+
+	# todo: blocker: test typst support
+	");
 }
 
 #[rstest]
@@ -106,14 +115,13 @@ fn test_blocker_format_typst_lists(#[case] content: &str, #[case] filename: &str
 	ctx.run_format().expect("Format command should succeed");
 
 	let formatted = ctx.read_formatted_file();
-
-	// Verify bullet lists are preserved
-	assert!(formatted.contains("- task 1"), "Should preserve bullet list items");
-	assert!(formatted.contains("- task 2"), "Should preserve bullet list items");
-
-	// Verify numbered lists are converted to bullet lists
-	assert!(formatted.contains("- numbered item 1"), "Should convert + to -");
-	assert!(formatted.contains("- numbered item 2"), "Should convert + to -");
+	insta::assert_snapshot!(formatted, @"
+	# Project
+	- task 1
+	- task 2
+	- numbered item 1
+	- numbered item 2
+	");
 }
 
 #[rstest]

@@ -319,6 +319,18 @@ impl BlockerProjectContext {
 		fs::write(&file_path, content).unwrap();
 	}
 
+	/// Read a blocker file's content.
+	pub fn read_blocker_file(&self, filename: &str) -> String {
+		let file_path = self.blockers_dir.join(filename);
+		fs::read_to_string(&file_path).unwrap()
+	}
+
+	/// Read the current project from the cache file.
+	pub fn read_current_project(&self) -> Option<String> {
+		let cache_file = self.xdg_cache_home.join("todo").join("current_project.txt");
+		fs::read_to_string(&cache_file).ok()
+	}
+
 	/// Run the set-project command.
 	pub fn run_set_project(&self, pattern: &str) -> std::process::Output {
 		Command::new(get_binary_path())

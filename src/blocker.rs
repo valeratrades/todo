@@ -891,15 +891,15 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	cleanup_urgent_file_if_empty(relative_path).await?;
 
 	// After formatting, check for urgent files and auto-switch if found
-	if let Some(urgent_path) = check_for_urgent_file() {
-		let current_project_path = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
-		let current_project = std::fs::read_to_string(&current_project_path).unwrap_or_else(|_| "blockers.txt".to_string());
+	// But only if the current project is not already an urgent file
+	let current_project_path = v_utils::xdg_cache_file!(CURRENT_PROJECT_CACHE_FILENAME);
+	let current_project = std::fs::read_to_string(&current_project_path).unwrap_or_else(|_| "blockers.txt".to_string());
 
-		// Only switch if we're not already on the urgent project
-		if current_project != urgent_path {
-			eprintln!("Detected urgent file, switching to: {urgent_path}");
-			set_current_project(&urgent_path).await?;
-		}
+	if !is_urgent_file(&current_project)
+		&& let Some(urgent_path) = check_for_urgent_file()
+	{
+		eprintln!("Detected urgent file, switching to: {urgent_path}");
+		set_current_project(&urgent_path).await?;
 	}
 
 	Ok(())

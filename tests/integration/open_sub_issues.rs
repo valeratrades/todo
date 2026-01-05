@@ -66,14 +66,18 @@ fn test_multiple_sub_issues_preserved(ctx: TestContext) {
 	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
 
 	let final_content = ctx.read_issue_file(&issue_file);
-
-	// All sub-issues should be present
-	assert!(final_content.contains("Open sub-issue 1"), "Open sub 1 missing");
-	assert!(final_content.contains("Content of open sub 1"), "Open sub 1 content missing");
-	assert!(final_content.contains("Closed sub-issue 1"), "Closed sub 1 missing");
-	assert!(final_content.contains("Open sub-issue 2"), "Open sub 2 missing");
-	assert!(final_content.contains("Content of open sub 2"), "Open sub 2 content missing");
-	assert!(final_content.contains("Closed sub-issue 2"), "Closed sub 2 missing");
+	insta::assert_snapshot!(final_content, @"
+	- [ ] Complex Parent <!-- https://github.com/owner/repo/issues/100 -->
+		The parent body.
+		- [ ] Open sub-issue 1 <!--sub https://github.com/owner/repo/issues/101 -->
+			Content of open sub 1
+		- [x] Closed sub-issue 1 <!--sub https://github.com/owner/repo/issues/102 -->
+			<!-- omitted -->
+		- [ ] Open sub-issue 2 <!--sub https://github.com/owner/repo/issues/103 -->
+			Content of open sub 2
+		- [x] Closed sub-issue 2 <!--sub https://github.com/owner/repo/issues/104 -->
+			<!-- omitted -->
+	");
 }
 
 /// Test that adding blockers during edit are preserved.
@@ -193,15 +197,13 @@ fn test_closed_sub_issues_content_folded(ctx: TestContext) {
 	assert!(success, "Open command failed. stdout: {}\nstderr: {}", stdout, stderr);
 
 	let final_content = ctx.read_issue_file(&issue_file);
-
-	// Closed sub-issue title is preserved but content is folded
-	assert!(final_content.contains("Completed task"), "Closed sub-issue title missing");
-	assert!(final_content.contains("<!-- omitted"), "Closed sub-issue should show omitted marker");
-	// Original body content is replaced with omitted marker for closed sub-issues
-	assert!(!final_content.contains("This task was done"), "Closed sub-issue body should be omitted");
-
-	// Open sub-issue body content should be preserved
-	assert!(final_content.contains("In-progress task"), "Open sub-issue title missing");
-	assert!(final_content.contains("Description of the current task"), "Open sub-issue body missing");
-	assert!(final_content.contains("With some implementation notes"), "Open sub-issue multi-line content missing");
+	insta::assert_snapshot!(final_content, @"
+	- [ ] v2_interface <!-- https://github.com/owner/repo/issues/46 -->
+		Main issue body here.
+		- [x] Completed task <!--sub https://github.com/owner/repo/issues/77 -->
+			<!-- omitted -->
+		- [ ] In-progress task <!--sub https://github.com/owner/repo/issues/78 -->
+			Description of the current task
+			With some implementation notes
+	");
 }
