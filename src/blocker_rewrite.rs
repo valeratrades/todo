@@ -204,7 +204,7 @@ fn extract_blockers_section(content: &str) -> Option<String> {
 		let stripped = line.strip_prefix('\t').unwrap_or(line);
 
 		// Check for blockers marker (must be in body, so indented)
-		if line.starts_with('\t') && blockers_start_idx.is_none() && matches!(Marker::decode(stripped, Extension::Md), Some(Marker::BlockersSection)) {
+		if line.starts_with('\t') && blockers_start_idx.is_none() && matches!(Marker::decode(stripped, Extension::Md), Some(Marker::BlockersSection(_))) {
 			blockers_start_idx = Some(idx + 1); // Start from line after marker
 			continue;
 		}
@@ -312,7 +312,7 @@ fn update_blockers_in_issue(full_content: &str, new_blockers_content: &str) -> O
 		let stripped = line.strip_prefix('\t').unwrap_or(line);
 
 		// Check for blockers marker (must be in body, so indented)
-		if line.starts_with('\t') && blockers_start_idx.is_none() && matches!(Marker::decode(stripped, Extension::Md), Some(Marker::BlockersSection)) {
+		if line.starts_with('\t') && blockers_start_idx.is_none() && matches!(Marker::decode(stripped, Extension::Md), Some(Marker::BlockersSection(_))) {
 			blockers_start_idx = Some(idx + 1); // Start from line after marker
 			continue;
 		}

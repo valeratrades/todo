@@ -1,19 +1,24 @@
 //! Small utility functions for issue processing.
 
-pub use todo::Extension;
+pub use todo::{Extension, Header};
 
 use crate::marker::Marker;
 
 /// Check if a line is a blockers section marker.
 /// Recognized formats (case-insensitive):
 /// - `# Blockers` (preferred for .md, what `!b` expands to)
+/// - `= Blockers` (preferred for .typ, what `!b` expands to)
 /// - `<!--blockers-->` (legacy, still supported)
 /// - `#{1,6} Blockers` (any header level)
+/// - `={1,6} Blockers` (any header level for typst)
 /// - `**Blockers**` (with optional trailing `:`)
-/// - `// blockers` (typst, what `!b` expands to for .typ)
+/// - `// blockers` (legacy typst, still supported)
 pub fn is_blockers_marker(line: &str) -> bool {
-	// Use Marker enum for standard formats
-	if matches!(Marker::decode(line, Extension::Md), Some(Marker::BlockersSection)) {
+	// Use Marker enum for standard formats - try both extensions
+	if matches!(Marker::decode(line, Extension::Md), Some(Marker::BlockersSection(_))) {
+		return true;
+	}
+	if matches!(Marker::decode(line, Extension::Typ), Some(Marker::BlockersSection(_))) {
 		return true;
 	}
 	// Also support **Blockers** format (not in Marker enum as it's non-standard)
@@ -106,12 +111,10 @@ pub fn extract_checkbox_title(line: &str) -> Option<String> {
 /// Expand `!b` shorthand to the full blockers marker.
 /// Matches lines that are just `!b` or `!B` (with any indentation).
 /// For .md files: expands to `# Blockers`
-/// For .typ files: expands to `// blockers`
+/// For .typ files: expands to `= Blockers`
 pub fn expand_blocker_shorthand(content: &str, extension: &Extension) -> String {
-	let replacement = match extension {
-		Extension::Md => "# Blockers",
-		Extension::Typ => "// blockers",
-	};
+	let blockers_header = Header::new(1, "Blockers");
+	let replacement = blockers_header.encode(*extension);
 
 	content
 		.lines()
@@ -133,13 +136,9 @@ pub fn expand_blocker_shorthand(content: &str, extension: &Extension) -> String 
 pub fn convert_markdown_to_typst(body: &str) -> String {
 	body.lines()
 		.map(|line| {
-			// Convert markdown headers to typst
-			if let Some(rest) = line.strip_prefix("### ") {
-				format!("=== {rest}")
-			} else if let Some(rest) = line.strip_prefix("## ") {
-				format!("== {rest}")
-			} else if let Some(rest) = line.strip_prefix("# ") {
-				format!("= {rest}")
+			// Try to decode as markdown header and re-encode as typst
+			if let Some(header) = Header::decode(line, Extension::Md) {
+				header.encode(Extension::Typ)
 			} else {
 				line.to_string()
 			}
