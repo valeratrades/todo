@@ -69,12 +69,16 @@ fn test_multiple_sub_issues_preserved(ctx: TestContext) {
 	insta::assert_snapshot!(final_content, @"
 	- [ ] Complex Parent <!-- https://github.com/owner/repo/issues/100 -->
 		The parent body.
+		
 		- [ ] Open sub-issue 1 <!--sub https://github.com/owner/repo/issues/101 -->
 			Content of open sub 1
+		
 		- [x] Closed sub-issue 1 <!--sub https://github.com/owner/repo/issues/102 -->
 			<!-- omitted -->
+		
 		- [ ] Open sub-issue 2 <!--sub https://github.com/owner/repo/issues/103 -->
 			Content of open sub 2
+		
 		- [x] Closed sub-issue 2 <!--sub https://github.com/owner/repo/issues/104 -->
 			<!-- omitted -->
 	");
@@ -145,6 +149,7 @@ fn test_adding_blockers_during_edit_are_preserved(ctx: TestContext) {
 	insta::assert_snapshot!(final_content, @"
 	- [ ] blocker rewrite <!-- https://github.com/owner/repo/issues/49 -->
 		get all the present functionality + legacy supported
+		
 		# Blockers
 		- support for virtual blockers
 		- move all primitives into new blocker.rs
@@ -200,8 +205,10 @@ fn test_closed_sub_issues_content_folded(ctx: TestContext) {
 	insta::assert_snapshot!(final_content, @"
 	- [ ] v2_interface <!-- https://github.com/owner/repo/issues/46 -->
 		Main issue body here.
+		
 		- [x] Completed task <!--sub https://github.com/owner/repo/issues/77 -->
 			<!-- omitted -->
+		
 		- [ ] In-progress task <!--sub https://github.com/owner/repo/issues/78 -->
 			Description of the current task
 			With some implementation notes

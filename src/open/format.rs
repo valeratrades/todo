@@ -80,6 +80,11 @@ pub fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues:
 		let comment_url = format!("https://github.com/{owner}/{repo}/issues/{}#issuecomment-{}", issue.number, comment.id);
 		let comment_owned = comment.user.login == current_user;
 
+		// Add empty line (with indent for LSP) before comment marker if previous line has content (markdown only)
+		if ext == Extension::Md && content.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+			content.push_str("\t\n");
+		}
+
 		let comment_marker = Marker::Comment {
 			url: comment_url,
 			id: comment.id,
@@ -111,6 +116,11 @@ pub fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues:
 	// Prefer local file contents over GitHub body when available
 	// Closed sub-issues show `<!-- omitted -->` instead of body content
 	for sub in sub_issues {
+		// Add empty line (with indent for LSP) before each sub-issue if previous line has content (markdown only)
+		if ext == Extension::Md && content.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+			content.push_str("\t\n");
+		}
+
 		let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
 		let sub_closed = sub.state == "closed";
 		let sub_checked = if sub_closed { "x" } else { " " };
@@ -225,8 +235,10 @@ mod tests {
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
+			
 			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124 -->
 				Sub-issue body content
+			
 			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125 -->
 				<!-- omitted -->
 		");
@@ -252,8 +264,10 @@ mod tests {
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
+			
 			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
 			First comment
+			
 			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
 				Second comment
 		");
@@ -336,12 +350,16 @@ mod tests {
 		- [ ] [bug, priority] Main Issue <!-- https://github.com/owner/repo/issues/123 -->
 			This is the body text.
 			With multiple lines.
+			
 			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
 			First comment from me
+			
 			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
 				Second comment from other
+			
 			- [ ] Sub Issue One <!--sub https://github.com/owner/repo/issues/124 -->
 				Sub issue body
+			
 			- [x] Sub Issue Two <!--sub https://github.com/owner/repo/issues/125 -->
 				<!-- omitted -->
 		");

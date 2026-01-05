@@ -403,6 +403,11 @@ impl Issue {
 		for comment in self.comments.iter().skip(1) {
 			let comment_indent = if comment.owned { &content_indent } else { &format!("{content_indent}\t") };
 
+			// Add empty line (with indent for LSP) before comment marker if previous line has content
+			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+				out.push_str(&format!("{content_indent}\n"));
+			}
+
 			// Comment with marker
 			if let Some(id) = comment.id {
 				let url = self.meta.url.as_deref().unwrap_or("");
@@ -423,6 +428,10 @@ impl Issue {
 
 		// Blockers (separate section at bottom, before sub-issues)
 		if !self.blockers.is_empty() {
+			// Add empty line (with indent for LSP) before blockers if previous line has content
+			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+				out.push_str(&format!("{content_indent}\n"));
+			}
 			out.push_str(&format!("{content_indent}# Blockers\n"));
 			for blocker in &self.blockers {
 				out.push_str(&format!("{content_indent}{}\n", blocker.raw));
@@ -434,6 +443,11 @@ impl Issue {
 		for child in &self.children {
 			let child_checked = if child.meta.closed { "x" } else { " " };
 			let child_content_indent = "\t".repeat(depth + 2);
+
+			// Add empty line (with indent for LSP) before each sub-issue if previous line has content
+			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+				out.push_str(&format!("{content_indent}\n"));
+			}
 
 			// Output child title line
 			if let Some(url) = &child.meta.url {
