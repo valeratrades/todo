@@ -21,7 +21,7 @@ impl Extension {
 ///
 /// Markdown format: `# Content`, `## Content`, etc.
 /// Typst format: `= Content`, `== Content`, etc.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Header {
 	pub level: usize,
 	pub content: String,
