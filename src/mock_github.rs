@@ -166,6 +166,24 @@ impl MockGitHubClient {
 			}
 		}
 
+		// Load sub-issue relationships
+		if let Some(sub_issue_arr) = state.get("sub_issues").and_then(|v| v.as_array()) {
+			let mut sub_issues = self.sub_issues.lock().unwrap();
+			for rel in sub_issue_arr {
+				let owner = rel.get("owner").and_then(|v| v.as_str()).ok_or("missing owner")?;
+				let repo = rel.get("repo").and_then(|v| v.as_str()).ok_or("missing repo")?;
+				let parent = rel.get("parent").and_then(|v| v.as_u64()).ok_or("missing parent")?;
+				let children: Vec<u64> = rel
+					.get("children")
+					.and_then(|v| v.as_array())
+					.map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+					.unwrap_or_default();
+
+				let key = RepoKey::new(owner, repo);
+				sub_issues.entry(key).or_default().insert(parent, children);
+			}
+		}
+
 		Ok(())
 	}
 

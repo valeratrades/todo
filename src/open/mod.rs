@@ -16,7 +16,3 @@ mod util;
 // Re-export the public API
 pub use command::{OpenArgs, open_command};
 // Re-export for tests that need access to internal types
-#[cfg(test)]
-pub use format::format_issue;
-#[cfg(test)]
-pub use issue::{Blocker, Comment, Issue, IssueMeta};

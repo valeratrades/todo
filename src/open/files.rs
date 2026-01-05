@@ -85,10 +85,9 @@ pub fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_t
 			let path = entry.path();
 			if path.is_file()
 				&& let Some(name) = path.file_name().and_then(|n| n.to_str())
+				&& name.starts_with(&prefix)
 			{
-				if name.starts_with(&prefix) {
-					return Some(path);
-				}
+				return Some(path);
 			}
 		}
 	}

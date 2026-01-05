@@ -147,6 +147,7 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 
 /// Reconstruct an issue file with current sub-issue contents.
 /// This reads local sub-issue files and embeds their content back into the parent.
+/// IMPORTANT: Preserves local sub-issues that don't have URLs yet (not created on GitHub).
 pub async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str) -> Result<()> {
 	use super::{
 		files::find_sub_issue_file,
@@ -160,6 +161,13 @@ pub async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_fil
 		"typ" => Extension::Typ,
 		_ => Extension::Md,
 	};
+
+	// First, parse the current local file to find any sub-issues without URLs
+	// These are new sub-issues that haven't been created on GitHub yet
+	let local_content = std::fs::read_to_string(issue_file_path)?;
+	let ctx = ParseContext::new(local_content.clone(), issue_file_path.display().to_string());
+	let local_issue = Issue::parse(&local_content, &ctx)?;
+	let local_only_children: Vec<_> = local_issue.children.iter().filter(|c| c.meta.url.is_none()).cloned().collect();
 
 	// Fetch fresh data from GitHub
 	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
@@ -184,8 +192,19 @@ pub async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_fil
 	// Re-format the parent issue with updated sub-issue contents
 	let content = format_issue(&issue, &comments, &sub_issues, owner, repo, &current_user, false, extension);
 
+	// If there are local-only sub-issues, we need to append them to the formatted content
+	let final_content = if local_only_children.is_empty() {
+		content
+	} else {
+		// Parse the formatted content and add the local children back
+		let formatted_ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
+		let mut formatted_issue = Issue::parse(&content, &formatted_ctx)?;
+		formatted_issue.children.extend(local_only_children);
+		formatted_issue.serialize()
+	};
+
 	// Write the updated content
-	std::fs::write(issue_file_path, &content)?;
+	std::fs::write(issue_file_path, &final_content)?;
 
 	// Update metadata with current sub-issue state
 	let meta_entry = IssueMetaEntry {
