@@ -21,8 +21,11 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 	let mut state_changed = false;
 
 	// Step 0: Check if issue state (open/closed) changed
-	if issue.meta.closed != meta.original_closed {
-		let new_state = if issue.meta.closed { "closed" } else { "open" };
+	// Note: GitHub only supports binary open/closed, so NotPlanned and Duplicate both map to closed
+	let current_closed = issue.meta.close_state.is_closed();
+	let original_closed = meta.original_close_state.is_closed();
+	if current_closed != original_closed {
+		let new_state = issue.meta.close_state.to_github_state();
 		println!("Updating issue state to {new_state}...");
 		gh.update_issue_state(owner, repo, meta.issue_number, new_state).await?;
 		state_changed = true;
@@ -215,7 +218,11 @@ pub async fn reconstruct_issue_with_sub_issues(gh: &BoxedGitHubClient, issue_fil
 		original_comments: comments.iter().map(|c| c.into()).collect(),
 		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
 		parent_issue: meta.parent_issue,
-		original_closed: issue.state == "closed",
+		original_close_state: if issue.state == "closed" {
+			super::issue::CloseState::Closed
+		} else {
+			super::issue::CloseState::Open
+		},
 	};
 	save_issue_meta(owner, repo, meta_entry)?;
 
@@ -258,6 +265,39 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path) ->
 
 	let ctx = ParseContext::new(edited_content.clone(), issue_file_path.display().to_string());
 	let mut issue = Issue::parse(&edited_content, &ctx)?;
+
+	// Handle duplicate close type: remove from local storage entirely
+	if issue.meta.close_state.should_remove() {
+		println!("Issue marked as duplicate, closing on GitHub and removing local file...");
+
+		// Close on GitHub (if not already closed)
+		if !meta.original_close_state.is_closed() {
+			gh.update_issue_state(&owner, &repo, meta.issue_number, "closed").await?;
+		}
+
+		// Remove local file
+		std::fs::remove_file(issue_file_path)?;
+
+		// Remove sub-issues directory if it exists
+		let sub_dir = issue_file_path.with_extension("");
+		let sub_dir = if sub_dir.extension().is_some() {
+			// Handle .md.bak case - strip .md too
+			sub_dir.with_extension("")
+		} else {
+			sub_dir
+		};
+		if sub_dir.is_dir() {
+			std::fs::remove_dir_all(&sub_dir)?;
+		}
+
+		// Remove from metadata
+		let mut project_meta = super::meta::load_project_meta(&owner, &repo);
+		project_meta.issues.remove(&meta.issue_number);
+		super::meta::save_project_meta(&project_meta)?;
+
+		println!("Duplicate issue removed from local storage.");
+		return Ok(());
+	}
 
 	// Collect required GitHub actions (e.g., new sub-issues without URLs)
 	let actions = issue.collect_actions(&meta.original_sub_issues);

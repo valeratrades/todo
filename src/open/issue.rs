@@ -1,10 +1,76 @@
 //! Core issue data structures and parsing/serialization.
 
+use serde::{Deserialize, Serialize};
+
 use super::util::{is_blockers_marker, normalize_issue_indentation};
 use crate::{
 	error::{ParseContext, ParseError},
 	github::{self, IssueAction, OriginalSubIssue},
 };
+
+/// Close state of an issue.
+/// Maps to GitHub's binary open/closed, but locally supports additional variants.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum CloseState {
+	/// Issue is open: `- [ ]`
+	Open,
+	/// Issue is closed normally: `- [x]`
+	Closed,
+	/// Issue was closed as not planned: `- [-]`
+	/// Treated same as Closed for storage (embedded with .bak)
+	NotPlanned,
+	/// Issue is a duplicate of another issue: `- [123]`
+	/// The number references another issue in the same repo.
+	/// These should be removed from local storage entirely.
+	Duplicate(u64),
+}
+
+impl CloseState {
+	/// Returns true if the issue is closed (any close variant)
+	pub fn is_closed(&self) -> bool {
+		!matches!(self, CloseState::Open)
+	}
+
+	/// Returns true if this close state means the issue should be removed from local storage
+	pub fn should_remove(&self) -> bool {
+		matches!(self, CloseState::Duplicate(_))
+	}
+
+	/// Convert to GitHub API state string
+	pub fn to_github_state(&self) -> &'static str {
+		match self {
+			CloseState::Open => "open",
+			_ => "closed",
+		}
+	}
+
+	/// Parse from checkbox content (the character(s) inside `[ ]`)
+	pub fn from_checkbox(content: &str) -> Option<Self> {
+		let content = content.trim();
+		match content {
+			"" | " " => Some(CloseState::Open),
+			"x" | "X" => Some(CloseState::Closed),
+			"-" => Some(CloseState::NotPlanned),
+			s => s.parse::<u64>().ok().map(CloseState::Duplicate),
+		}
+	}
+
+	/// Convert to checkbox character(s) for serialization
+	pub fn to_checkbox(&self) -> String {
+		match self {
+			CloseState::Open => " ".to_string(),
+			CloseState::Closed => "x".to_string(),
+			CloseState::NotPlanned => "-".to_string(),
+			CloseState::Duplicate(n) => n.to_string(),
+		}
+	}
+}
+
+impl Default for CloseState {
+	fn default() -> Self {
+		CloseState::Open
+	}
+}
 
 /// Metadata for an issue (title line info)
 #[derive(Clone, Debug, PartialEq)]
@@ -12,7 +78,7 @@ pub struct IssueMeta {
 	pub title: String,
 	/// GitHub URL, None for new issues
 	pub url: Option<String>,
-	pub closed: bool,
+	pub close_state: CloseState,
 	/// Whether owned by current user (false = immutable)
 	pub owned: bool,
 }
@@ -276,19 +342,15 @@ impl Issue {
 	}
 
 	/// Parse title line: `- [ ] [label1, label2] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
+	/// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
 	/// Returns (IssueMeta, labels)
 	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<(IssueMeta, Vec<String>), ParseError> {
-		let (closed, rest) = if let Some(rest) = line.strip_prefix("- [ ] ") {
-			(false, rest)
-		} else if let Some(rest) = line.strip_prefix("- [x] ").or_else(|| line.strip_prefix("- [X] ")) {
-			(true, rest)
-		} else {
-			return Err(ParseError::InvalidTitle {
-				src: ctx.named_source(),
-				span: ctx.line_span(line_num),
-				detail: format!("got: {:?}", line),
-			});
-		};
+		// Parse checkbox: `- [CONTENT] `
+		let (close_state, rest) = Self::parse_checkbox_prefix(line).ok_or_else(|| ParseError::InvalidTitle {
+			src: ctx.named_source(),
+			span: ctx.line_span(line_num),
+			detail: format!("got: {:?}", line),
+		})?;
 
 		// Check for labels: [label1, label2] at the start
 		let (labels, rest) = if rest.starts_with('[') {
@@ -327,18 +389,27 @@ impl Issue {
 			(true, Some(inner.to_string()))
 		};
 
-		Ok((IssueMeta { title, url, closed, owned }, labels))
+		Ok((IssueMeta { title, url, close_state, owned }, labels))
+	}
+
+	/// Parse checkbox prefix: `- [CONTENT] ` and return (CloseState, rest of line)
+	fn parse_checkbox_prefix(line: &str) -> Option<(CloseState, &str)> {
+		// Match `- [` prefix
+		let rest = line.strip_prefix("- [")?;
+
+		// Find closing `] `
+		let bracket_end = rest.find("] ")?;
+		let checkbox_content = &rest[..bracket_end];
+		let rest = &rest[bracket_end + 2..];
+
+		let close_state = CloseState::from_checkbox(checkbox_content)?;
+		Some((close_state, rest))
 	}
 
 	/// Parse child/sub-issue title line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
+	/// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
 	fn parse_child_title_line(line: &str) -> Option<IssueMeta> {
-		let (closed, rest) = if let Some(rest) = line.strip_prefix("- [ ] ") {
-			(false, rest)
-		} else if let Some(rest) = line.strip_prefix("- [x] ").or_else(|| line.strip_prefix("- [X] ")) {
-			(true, rest)
-		} else {
-			return None;
-		};
+		let (close_state, rest) = Self::parse_checkbox_prefix(line)?;
 
 		// Check for sub marker
 		if let Some(marker_start) = rest.find("<!--sub ") {
@@ -348,7 +419,7 @@ impl Issue {
 			Some(IssueMeta {
 				title,
 				url: Some(url),
-				closed,
+				close_state,
 				owned: true,
 			})
 		} else if !rest.contains("<!--") {
@@ -357,7 +428,7 @@ impl Issue {
 				Some(IssueMeta {
 					title,
 					url: None,
-					closed,
+					close_state,
 					owned: true,
 				})
 			} else {
@@ -379,8 +450,9 @@ impl Issue {
 		let content_indent = "\t".repeat(depth + 1);
 		let mut out = String::new();
 
-		// Title line: `- [ ] [label1, label2] Title <!-- url -->` or `- [ ] Title <!-- url -->` if no labels
-		let checked = if self.meta.closed { "x" } else { " " };
+		// Title line: `- [x] [label1, label2] Title <!-- url -->` or `- [ ] Title <!-- url -->` if no labels
+		// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
+		let checked = self.meta.close_state.to_checkbox();
 		let url_part = self.meta.url.as_deref().unwrap_or("");
 		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
 		if self.meta.owned {
@@ -441,7 +513,7 @@ impl Issue {
 		// Children (sub-issues) at the very end
 		// Closed sub-issues show `<!-- omitted -->` instead of body content
 		for child in &self.children {
-			let child_checked = if child.meta.closed { "x" } else { " " };
+			let child_checked = child.meta.close_state.to_checkbox();
 			let child_content_indent = "\t".repeat(depth + 2);
 
 			// Add empty line (with indent for LSP) before each sub-issue if previous line has content
@@ -457,7 +529,7 @@ impl Issue {
 			}
 
 			// Closed sub-issues: show omitted marker instead of content
-			if child.meta.closed {
+			if child.meta.close_state.is_closed() {
 				out.push_str(&format!("{child_content_indent}<!-- omitted -->\n"));
 				continue;
 			}
@@ -507,7 +579,7 @@ impl Issue {
 					levels[depth].push(IssueAction::CreateSubIssue {
 						child_path: child_path.clone(),
 						title: child.meta.title.clone(),
-						closed: child.meta.closed,
+						closed: child.meta.close_state.is_closed(),
 						parent_issue_number: parent_num,
 					});
 				}
@@ -517,10 +589,10 @@ impl Issue {
 					&& let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number)
 				{
 					let orig_closed = orig.state == "closed";
-					if child.meta.closed != orig_closed {
+					if child.meta.close_state.is_closed() != orig_closed {
 						levels[depth].push(IssueAction::UpdateSubIssueState {
 							issue_number: child_number,
-							closed: child.meta.closed,
+							closed: child.meta.close_state.is_closed(),
 						});
 					}
 				}
@@ -541,5 +613,122 @@ impl Issue {
 			current = current.children.get_mut(idx)?;
 		}
 		current.children.get_mut(*path.last()?)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_close_state_from_checkbox() {
+		assert_eq!(CloseState::from_checkbox(" "), Some(CloseState::Open));
+		assert_eq!(CloseState::from_checkbox(""), Some(CloseState::Open));
+		assert_eq!(CloseState::from_checkbox("x"), Some(CloseState::Closed));
+		assert_eq!(CloseState::from_checkbox("X"), Some(CloseState::Closed));
+		assert_eq!(CloseState::from_checkbox("-"), Some(CloseState::NotPlanned));
+		assert_eq!(CloseState::from_checkbox("123"), Some(CloseState::Duplicate(123)));
+		assert_eq!(CloseState::from_checkbox("42"), Some(CloseState::Duplicate(42)));
+		assert_eq!(CloseState::from_checkbox("invalid"), None);
+	}
+
+	#[test]
+	fn test_close_state_to_checkbox() {
+		assert_eq!(CloseState::Open.to_checkbox(), " ");
+		assert_eq!(CloseState::Closed.to_checkbox(), "x");
+		assert_eq!(CloseState::NotPlanned.to_checkbox(), "-");
+		assert_eq!(CloseState::Duplicate(123).to_checkbox(), "123");
+	}
+
+	#[test]
+	fn test_close_state_is_closed() {
+		assert!(!CloseState::Open.is_closed());
+		assert!(CloseState::Closed.is_closed());
+		assert!(CloseState::NotPlanned.is_closed());
+		assert!(CloseState::Duplicate(123).is_closed());
+	}
+
+	#[test]
+	fn test_close_state_should_remove() {
+		assert!(!CloseState::Open.should_remove());
+		assert!(!CloseState::Closed.should_remove());
+		assert!(!CloseState::NotPlanned.should_remove());
+		assert!(CloseState::Duplicate(123).should_remove());
+	}
+
+	#[test]
+	fn test_close_state_to_github_state() {
+		assert_eq!(CloseState::Open.to_github_state(), "open");
+		assert_eq!(CloseState::Closed.to_github_state(), "closed");
+		assert_eq!(CloseState::NotPlanned.to_github_state(), "closed");
+		assert_eq!(CloseState::Duplicate(123).to_github_state(), "closed");
+	}
+
+	#[test]
+	fn test_parse_checkbox_prefix() {
+		// Standard cases
+		assert_eq!(Issue::parse_checkbox_prefix("- [ ] rest"), Some((CloseState::Open, "rest")));
+		assert_eq!(Issue::parse_checkbox_prefix("- [x] rest"), Some((CloseState::Closed, "rest")));
+		assert_eq!(Issue::parse_checkbox_prefix("- [X] rest"), Some((CloseState::Closed, "rest")));
+
+		// New close types
+		assert_eq!(Issue::parse_checkbox_prefix("- [-] rest"), Some((CloseState::NotPlanned, "rest")));
+		assert_eq!(Issue::parse_checkbox_prefix("- [123] rest"), Some((CloseState::Duplicate(123), "rest")));
+		assert_eq!(Issue::parse_checkbox_prefix("- [42] Title here"), Some((CloseState::Duplicate(42), "Title here")));
+
+		// Invalid cases
+		assert_eq!(Issue::parse_checkbox_prefix("no checkbox"), None);
+		assert_eq!(Issue::parse_checkbox_prefix("- [invalid] rest"), None);
+	}
+
+	#[test]
+	fn test_parse_and_serialize_not_planned() {
+		let content = "- [-] Not planned issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
+		let ctx = crate::error::ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+
+		assert_eq!(issue.meta.close_state, CloseState::NotPlanned);
+		assert_eq!(issue.meta.title, "Not planned issue");
+
+		// Verify serialization preserves the state
+		let serialized = issue.serialize();
+		assert!(serialized.starts_with("- [-] Not planned issue"));
+	}
+
+	#[test]
+	fn test_parse_and_serialize_duplicate() {
+		let content = "- [456] Duplicate issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
+		let ctx = crate::error::ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+
+		assert_eq!(issue.meta.close_state, CloseState::Duplicate(456));
+		assert_eq!(issue.meta.title, "Duplicate issue");
+
+		// Verify serialization preserves the state
+		let serialized = issue.serialize();
+		assert!(serialized.starts_with("- [456] Duplicate issue"));
+	}
+
+	#[test]
+	fn test_parse_sub_issue_close_types() {
+		let content = r#"- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
+	Body
+
+	- [x] Closed sub <!--sub https://github.com/owner/repo/issues/2 -->
+		<!-- omitted -->
+
+	- [-] Not planned sub <!--sub https://github.com/owner/repo/issues/3 -->
+		<!-- omitted -->
+
+	- [42] Duplicate sub <!--sub https://github.com/owner/repo/issues/4 -->
+		<!-- omitted -->
+"#;
+		let ctx = crate::error::ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+
+		assert_eq!(issue.children.len(), 3);
+		assert_eq!(issue.children[0].meta.close_state, CloseState::Closed);
+		assert_eq!(issue.children[1].meta.close_state, CloseState::NotPlanned);
+		assert_eq!(issue.children[2].meta.close_state, CloseState::Duplicate(42));
 	}
 }

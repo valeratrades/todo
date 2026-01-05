@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use v_utils::prelude::*;
 
-use super::files::get_project_dir;
+use super::{files::get_project_dir, issue::CloseState};
 use crate::github::{OriginalComment, OriginalSubIssue};
 
 /// Stored metadata for a single issue
@@ -22,9 +22,9 @@ pub struct IssueMetaEntry {
 	pub original_sub_issues: Vec<OriginalSubIssue>,
 	/// Parent issue number if this is a sub-issue
 	pub parent_issue: Option<u64>,
-	/// Original issue state (for detecting close/reopen)
+	/// Original issue close state (for detecting close/reopen)
 	#[serde(default)]
-	pub original_closed: bool,
+	pub original_close_state: CloseState,
 }
 
 /// Project-level metadata file containing all issues

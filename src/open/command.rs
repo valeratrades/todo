@@ -44,6 +44,10 @@ pub struct OpenArgs {
 	/// If issue already exists locally, opens it. Otherwise creates on GitHub first.
 	#[arg(short, long)]
 	pub touch: bool,
+
+	/// Open the most recently modified issue file
+	#[arg(short, long)]
+	pub last: bool,
 }
 
 /// Get the effective extension from args, config, or default
@@ -68,6 +72,17 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs) -> Result<()> {
 	let input = args.url_or_pattern.as_deref().unwrap_or("").trim();
 	let extension = get_effective_extension(args.extension, settings);
+
+	// Handle --last mode: open the most recently modified issue file
+	if args.last {
+		let all_files = search_issue_files("")?;
+		if all_files.is_empty() {
+			return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
+		}
+		// Files are already sorted by modification time (most recent first)
+		open_local_issue(&gh, &all_files[0]).await?;
+		return Ok(());
+	}
 
 	// Handle --touch mode
 	if args.touch {

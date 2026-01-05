@@ -7,6 +7,7 @@ use v_utils::prelude::*;
 use super::{
 	files::get_issue_file_path,
 	format::format_issue,
+	issue::CloseState,
 	meta::{IssueMetaEntry, save_issue_meta},
 	util::Extension,
 };
@@ -56,7 +57,7 @@ pub async fn fetch_and_store_issue(
 		original_comments: comments.iter().map(OriginalComment::from).collect(),
 		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
 		parent_issue: parent_issue.as_ref().map(|(num, _)| *num),
-		original_closed: issue_closed,
+		original_close_state: if issue_closed { CloseState::Closed } else { CloseState::Open },
 	};
 	save_issue_meta(owner, repo, meta_entry)?;
 
