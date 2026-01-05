@@ -42,6 +42,7 @@ xdg = "3.0.0"
 insta = "1.46"
 nix = { version = "0.30", features = ["fs"] }
 rstest = "0.26"
+v_fixtures = "0.1"
 
 [[test]]
 name = "integration"
