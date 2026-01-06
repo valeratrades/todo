@@ -2,14 +2,12 @@
 //!
 //! Run with: cargo run --example typst_parse [path]
 
-use std::{env, fs};
+use std::{env, fs, path::Path};
 
 use typst_syntax::parse;
 
 fn main() {
-	let path = env::args()
-		.nth(1)
-		.unwrap_or_else(|| "/home/v/.local/share/todo/issues/valeratrades/todo/46_-_git_issues_editor.md".into());
+	let path = env::args().nth(1).unwrap_or_else(|| "examples/test_issue.typ".into());
 
 	let content = fs::read_to_string(&path).expect("Failed to read file");
 
@@ -31,7 +29,14 @@ fn main() {
 		std::process::exit(1);
 	}
 
-	println!("{root:#?}");
+	let ast_str = format!("{root:#?}");
+	println!("{ast_str}");
+
+	// Write AST to .rs file next to input
+	let input_path = Path::new(&path);
+	let ast_path = input_path.with_extension("ast.rs");
+	fs::write(&ast_path, &ast_str).expect("Failed to write AST file");
+	eprintln!("\nWrote AST to {}", ast_path.display());
 }
 
 /// Preprocess raw text into valid typst

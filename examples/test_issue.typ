@@ -27,6 +27,7 @@
 	- [ ] blocker rewrite
 		get all the present functionality + legacy supported, over into integration with issues
 
+		= Blockers
 		- support for virtual blockers (to keep legacy blocker files usable)
 		- move all primitives into new `blocker.rs`
 		- get clockify integration

@@ -234,86 +234,320 @@ mod tests {
 
 	#[test]
 	fn test_parse_empty_line() {
-		assert_debug_snapshot!(Line::parse("", Extension::Md), @"");
-		assert_debug_snapshot!(Line::parse("\t", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("", Extension::Md), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Empty,
+		    content: "",
+		    marker: None,
+		    raw: "",
+		}
+		"#);
+		assert_debug_snapshot!(Line::parse("\t", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: Empty,
+		    content: "",
+		    marker: None,
+		    raw: "\t",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_checkbox_unchecked() {
-		assert_debug_snapshot!(Line::parse("- [ ] Task to do", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("- [ ] Task to do", Extension::Md), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Checkbox {
+		        checked: false,
+		    },
+		    content: "Task to do",
+		    marker: None,
+		    raw: "- [ ] Task to do",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_checkbox_checked() {
-		assert_debug_snapshot!(Line::parse("- [x] Completed task", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("- [x] Completed task", Extension::Md), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Checkbox {
+		        checked: true,
+		    },
+		    content: "Completed task",
+		    marker: None,
+		    raw: "- [x] Completed task",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_checkbox_with_url_marker() {
-		assert_debug_snapshot!(Line::parse("- [ ] Issue title <!-- https://github.com/owner/repo/issues/123 -->", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("- [ ] Issue title <!-- https://github.com/owner/repo/issues/123 -->", Extension::Md), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Checkbox {
+		        checked: false,
+		    },
+		    content: "Issue title",
+		    marker: Some(
+		        IssueUrl {
+		            url: "https://github.com/owner/repo/issues/123",
+		            immutable: false,
+		        },
+		    ),
+		    raw: "- [ ] Issue title <!-- https://github.com/owner/repo/issues/123 -->",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_checkbox_with_sub_marker() {
-		assert_debug_snapshot!(Line::parse("\t- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/124 -->", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\t- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/124 -->", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: Checkbox {
+		        checked: false,
+		    },
+		    content: "Sub-issue",
+		    marker: Some(
+		        SubIssue {
+		            url: "https://github.com/owner/repo/issues/124",
+		        },
+		    ),
+		    raw: "\t- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/124 -->",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_list_item() {
-		assert_debug_snapshot!(Line::parse("- Simple list item", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("- Simple list item", Extension::Md), @r#"
+		Line {
+		    indent: 0,
+		    content_type: ListItem,
+		    content: "Simple list item",
+		    marker: None,
+		    raw: "- Simple list item",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_list_item_indented() {
-		assert_debug_snapshot!(Line::parse("\t- Indented blocker item", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\t- Indented blocker item", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: ListItem,
+		    content: "Indented blocker item",
+		    marker: None,
+		    raw: "\t- Indented blocker item",
+		}
+		"#);
 	}
 
 	#[test]
-	fn test_parse_header_md() {
-		assert_debug_snapshot!("md_h1", Line::parse("# Main Header", Extension::Md), @"");
-		assert_debug_snapshot!("md_h2", Line::parse("## Sub Header", Extension::Md), @"");
+	fn h1() {
+		assert_debug_snapshot!(Line::parse("# Main Header", Extension::Md), @r##"
+		Line {
+		    indent: 0,
+		    content_type: Header {
+		        level: 1,
+		    },
+		    content: "Main Header",
+		    marker: None,
+		    raw: "# Main Header",
+		}
+		"##);
 	}
 
 	#[test]
-	fn test_parse_header_typ() {
-		assert_debug_snapshot!("typ_h1", Line::parse("= Main Header", Extension::Typ), @"");
-		assert_debug_snapshot!("typ_h2", Line::parse("== Sub Header", Extension::Typ), @"");
+	fn md_h1() {
+		assert_debug_snapshot!(Line::parse("# Main Header", Extension::Md), @r##"
+		Line {
+		    indent: 0,
+		    content_type: Header {
+		        level: 1,
+		    },
+		    content: "Main Header",
+		    marker: None,
+		    raw: "# Main Header",
+		}
+		"##);
+	}
+
+	#[test]
+	fn md_h2() {
+		assert_debug_snapshot!(Line::parse("## Sub Header", Extension::Md), @r###"
+		Line {
+		    indent: 0,
+		    content_type: Header {
+		        level: 2,
+		    },
+		    content: "Sub Header",
+		    marker: None,
+		    raw: "## Sub Header",
+		}
+		"###);
+	}
+
+	#[test]
+	fn typ_h1() {
+		assert_debug_snapshot!(Line::parse("= Main Header", Extension::Typ), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Header {
+		        level: 1,
+		    },
+		    content: "Main Header",
+		    marker: None,
+		    raw: "= Main Header",
+		}
+		"#);
+	}
+
+	#[test]
+	fn typ_h2() {
+		assert_debug_snapshot!(Line::parse("== Sub Header", Extension::Typ), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Header {
+		        level: 2,
+		    },
+		    content: "Sub Header",
+		    marker: None,
+		    raw: "== Sub Header",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_header_indented() {
-		assert_debug_snapshot!(Line::parse("\t# Blockers", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\t# Blockers", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: MarkerLine,
+		    content: "",
+		    marker: Some(
+		        BlockersSection(
+		            Header {
+		                level: 1,
+		                content: "Blockers",
+		            },
+		        ),
+		    ),
+		    raw: "\t# Blockers",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_blockers_marker_legacy() {
-		assert_debug_snapshot!(Line::parse("<!--blockers-->", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("<!--blockers-->", Extension::Md), @r#"
+		Line {
+		    indent: 0,
+		    content_type: MarkerLine,
+		    content: "",
+		    marker: Some(
+		        BlockersSection(
+		            Header {
+		                level: 1,
+		                content: "Blockers",
+		            },
+		        ),
+		    ),
+		    raw: "<!--blockers-->",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_blockers_marker_indented() {
-		assert_debug_snapshot!(Line::parse("\t<!--blockers-->", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\t<!--blockers-->", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: MarkerLine,
+		    content: "",
+		    marker: Some(
+		        BlockersSection(
+		            Header {
+		                level: 1,
+		                content: "Blockers",
+		            },
+		        ),
+		    ),
+		    raw: "\t<!--blockers-->",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_comment_marker() {
-		assert_debug_snapshot!(Line::parse("\t<!-- https://github.com/owner/repo/issues/123#issuecomment-456 -->", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\t<!-- https://github.com/owner/repo/issues/123#issuecomment-456 -->", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: MarkerLine,
+		    content: "",
+		    marker: Some(
+		        Comment {
+		            url: "https://github.com/owner/repo/issues/123#issuecomment-456",
+		            id: 456,
+		            immutable: false,
+		        },
+		    ),
+		    raw: "\t<!-- https://github.com/owner/repo/issues/123#issuecomment-456 -->",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_text_content() {
-		assert_debug_snapshot!(Line::parse("\tThis is body text.", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\tThis is body text.", Extension::Md), @r#"
+		Line {
+		    indent: 1,
+		    content_type: Text,
+		    content: "This is body text.",
+		    marker: None,
+		    raw: "\tThis is body text.",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_comment_double_indent() {
 		// In blocker context, extra indentation indicates a comment
-		assert_debug_snapshot!(Line::parse("\t\tThis is a comment on the blocker above", Extension::Md), @"");
+		assert_debug_snapshot!(Line::parse("\t\tThis is a comment on the blocker above", Extension::Md), @r#"
+		Line {
+		    indent: 2,
+		    content_type: Text,
+		    content: "This is a comment on the blocker above",
+		    marker: None,
+		    raw: "\t\tThis is a comment on the blocker above",
+		}
+		"#);
 	}
 
 	#[test]
 	fn test_parse_typst_checkbox_with_url() {
-		assert_debug_snapshot!(Line::parse("- [ ] Issue title // https://github.com/owner/repo/issues/123", Extension::Typ), @"");
+		assert_debug_snapshot!(Line::parse("- [ ] Issue title // https://github.com/owner/repo/issues/123", Extension::Typ), @r#"
+		Line {
+		    indent: 0,
+		    content_type: Checkbox {
+		        checked: false,
+		    },
+		    content: "Issue title",
+		    marker: Some(
+		        IssueUrl {
+		            url: "https://github.com/owner/repo/issues/123",
+		            immutable: false,
+		        },
+		    ),
+		    raw: "- [ ] Issue title // https://github.com/owner/repo/issues/123",
+		}
+		"#);
 	}
 
 	#[test]
@@ -331,7 +565,105 @@ mod tests {
 \t- Third task
 ";
 		let lines = parse_lines(content, Extension::Md);
-		assert_debug_snapshot!(lines, @"");
+		assert_debug_snapshot!(lines, @r#"
+		[
+		    Line {
+		        indent: 0,
+		        content_type: Checkbox {
+		            checked: false,
+		        },
+		        content: "Issue title",
+		        marker: Some(
+		            IssueUrl {
+		                url: "https://github.com/owner/repo/issues/123",
+		                immutable: false,
+		            },
+		        ),
+		        raw: "- [ ] Issue title <!-- https://github.com/owner/repo/issues/123 -->",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: Text,
+		        content: "Body text here.",
+		        marker: None,
+		        raw: "\tBody text here.",
+		    },
+		    Line {
+		        indent: 0,
+		        content_type: Empty,
+		        content: "",
+		        marker: None,
+		        raw: "",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: MarkerLine,
+		        content: "",
+		        marker: Some(
+		            BlockersSection(
+		                Header {
+		                    level: 1,
+		                    content: "Blockers",
+		                },
+		            ),
+		        ),
+		        raw: "\t<!--blockers-->",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: Header {
+		            level: 1,
+		        },
+		        content: "Phase 1",
+		        marker: None,
+		        raw: "\t# Phase 1",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "First task",
+		        marker: None,
+		        raw: "\t- First task",
+		    },
+		    Line {
+		        indent: 2,
+		        content_type: Text,
+		        content: "comment on first task",
+		        marker: None,
+		        raw: "\t\tcomment on first task",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "Second task",
+		        marker: None,
+		        raw: "\t- Second task",
+		    },
+		    Line {
+		        indent: 0,
+		        content_type: Empty,
+		        content: "",
+		        marker: None,
+		        raw: "",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: Header {
+		            level: 1,
+		        },
+		        content: "Phase 2",
+		        marker: None,
+		        raw: "\t# Phase 2",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "Third task",
+		        marker: None,
+		        raw: "\t- Third task",
+		    },
+		]
+		"#);
 	}
 
 	#[test]
@@ -366,7 +698,87 @@ mod tests {
 \t- ensure existing are working
 ";
 		let lines = parse_lines(content, Extension::Md);
-		assert_debug_snapshot!(lines, @"");
+		assert_debug_snapshot!(lines, @r#"
+		[
+		    Line {
+		        indent: 0,
+		        content_type: Checkbox {
+		            checked: false,
+		        },
+		        content: "blocker rewrite",
+		        marker: Some(
+		            IssueUrl {
+		                url: "https://github.com/valeratrades/todo/issues/49",
+		                immutable: false,
+		            },
+		        ),
+		        raw: "- [ ] blocker rewrite <!-- https://github.com/valeratrades/todo/issues/49 -->",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: Text,
+		        content: "get all the present functionality + legacy supported, over into integration with issues",
+		        marker: None,
+		        raw: "\tget all the present functionality + legacy supported, over into integration with issues",
+		    },
+		    Line {
+		        indent: 0,
+		        content_type: Empty,
+		        content: "",
+		        marker: None,
+		        raw: "",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: MarkerLine,
+		        content: "",
+		        marker: Some(
+		            BlockersSection(
+		                Header {
+		                    level: 1,
+		                    content: "Blockers",
+		                },
+		            ),
+		        ),
+		        raw: "\t<!--blockers-->",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "support for virtual blockers (to keep legacy blocker files usable)",
+		        marker: None,
+		        raw: "\t- support for virtual blockers (to keep legacy blocker files usable)",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "move all primitives into new `blocker.rs`",
+		        marker: None,
+		        raw: "\t- move all primitives into new `blocker.rs`",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "get clockify integration",
+		        marker: None,
+		        raw: "\t- get clockify integration",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "rename rewrite to `blocker`, and `blocker` to `blocker-legacy`. See what breaks",
+		        marker: None,
+		        raw: "\t- rename rewrite to `blocker`, and `blocker` to `blocker-legacy`. See what breaks",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "ensure existing are working",
+		        marker: None,
+		        raw: "\t- ensure existing are working",
+		    },
+		]
+		"#);
 	}
 
 	#[test]
@@ -382,7 +794,82 @@ mod tests {
 \t- get logging working
 ";
 		let lines = parse_lines(content, Extension::Md);
-		assert_debug_snapshot!(lines, @"");
+		assert_debug_snapshot!(lines, @r#"
+		[
+		    Line {
+		        indent: 0,
+		        content_type: Checkbox {
+		            checked: false,
+		        },
+		        content: "todo: issue editor",
+		        marker: Some(
+		            IssueUrl {
+		                url: "virtual:valera/tooling#5",
+		                immutable: false,
+		            },
+		        ),
+		        raw: "- [ ] todo: issue editor <!--virtual:valera/tooling#5-->",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: MarkerLine,
+		        content: "",
+		        marker: Some(
+		            BlockersSection(
+		                Header {
+		                    level: 1,
+		                    content: "Blockers",
+		                },
+		            ),
+		        ),
+		        raw: "\t# Blockers",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: Header {
+		            level: 2,
+		        },
+		        content: "blockers not syncing",
+		        marker: None,
+		        raw: "\t## blockers not syncing",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "see where they disappear",
+		        marker: None,
+		        raw: "\t- see where they disappear",
+		    },
+		    Line {
+		        indent: 2,
+		        content_type: Text,
+		        content: "we know they don't get uploaded to the github. And then they get nuked from issue file.",
+		        marker: None,
+		        raw: "\t\twe know they don't get uploaded to the github. And then they get nuked from issue file.",
+		    },
+		    Line {
+		        indent: 2,
+		        content_type: Text,
+		        content: "Q: can a sync from github maybe be overwriting them? Check for that too",
+		        marker: None,
+		        raw: "\t\tQ: can a sync from github maybe be overwriting them? Check for that too",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "put logs on full lifecycle",
+		        marker: None,
+		        raw: "\t- put logs on full lifecycle",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "get logging working",
+		        marker: None,
+		        raw: "\t- get logging working",
+		    },
+		]
+		"#);
 	}
 
 	#[test]
@@ -397,6 +884,58 @@ mod tests {
 \t\t- emulate user opening/closing
 ";
 		let lines = parse_lines(content, Extension::Typ);
-		assert_debug_snapshot!(lines, @"");
+		assert_debug_snapshot!(lines, @r#"
+		[
+		    Line {
+		        indent: 0,
+		        content_type: Checkbox {
+		            checked: false,
+		        },
+		        content: "dataflow-based_integration_tests",
+		        marker: Some(
+		            IssueUrl {
+		                url: "https://github.com/valeratrades/todo/issues/68",
+		                immutable: false,
+		            },
+		        ),
+		        raw: "- [ ] dataflow-based_integration_tests // https://github.com/valeratrades/todo/issues/68",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: MarkerLine,
+		        content: "",
+		        marker: Some(
+		            BlockersSection(
+		                Header {
+		                    level: 1,
+		                    content: "Blockers",
+		                },
+		            ),
+		        ),
+		        raw: "\t= Blockers",
+		    },
+		    Line {
+		        indent: 1,
+		        content_type: ListItem,
+		        content: "reimplement all of integration tests here to only ever use basic actions at the boundary:",
+		        marker: None,
+		        raw: "\t- reimplement all of integration tests here to only ever use basic actions at the boundary:",
+		    },
+		    Line {
+		        indent: 2,
+		        content_type: ListItem,
+		        content: "define initial dir state (alongside exact file contents)",
+		        marker: None,
+		        raw: "\t\t- define initial dir state (alongside exact file contents)",
+		    },
+		    Line {
+		        indent: 2,
+		        content_type: ListItem,
+		        content: "emulate user opening/closing",
+		        marker: None,
+		        raw: "\t\t- emulate user opening/closing",
+		    },
+		]
+		"#);
 	}
 }
