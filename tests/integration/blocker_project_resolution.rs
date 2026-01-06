@@ -9,9 +9,9 @@ use crate::fixtures::TodoTestContext;
 fn test_exact_match_with_extension_skips_fzf() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/uni.md
+		//- /data/blockers/uni.md
 		- task for uni
-		//- /blockers/uni_headless.md
+		//- /data/blockers/uni_headless.md
 		- task for uni_headless
 	"#,
 	);
@@ -27,9 +27,9 @@ fn test_exact_match_with_extension_skips_fzf() {
 fn test_unique_pattern_without_extension_matches_directly() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/project_alpha.md
+		//- /data/blockers/project_alpha.md
 		- task for alpha
-		//- /blockers/project_beta.md
+		//- /data/blockers/project_beta.md
 		- task for beta
 	"#,
 	);
@@ -45,9 +45,9 @@ fn test_unique_pattern_without_extension_matches_directly() {
 fn test_exact_match_in_workspace() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/work/uni.md
+		//- /data/blockers/work/uni.md
 		- task for work uni
-		//- /blockers/work/uni_headless.md
+		//- /data/blockers/work/uni_headless.md
 		- task for work uni_headless
 	"#,
 	);
@@ -63,9 +63,9 @@ fn test_exact_match_in_workspace() {
 fn test_set_project_cannot_switch_away_from_urgent() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/work/urgent.md
+		//- /data/blockers/work/urgent.md
 		- urgent task
-		//- /blockers/work/normal.md
+		//- /data/blockers/work/normal.md
 		- normal task
 	"#,
 	);
@@ -87,9 +87,9 @@ fn test_set_project_cannot_switch_away_from_urgent() {
 fn test_set_project_can_switch_between_urgent_files() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/work/urgent.md
+		//- /data/blockers/work/urgent.md
 		- work urgent task
-		//- /blockers/personal/urgent.md
+		//- /data/blockers/personal/urgent.md
 		- personal urgent task
 	"#,
 	);
@@ -109,9 +109,9 @@ fn test_set_project_can_switch_between_urgent_files() {
 fn test_can_add_to_same_urgent_file() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/work/urgent.md
+		//- /data/blockers/work/urgent.md
 		- existing urgent task
-		//- /blockers/work/normal.md
+		//- /data/blockers/work/normal.md
 		- normal task
 	"#,
 	);

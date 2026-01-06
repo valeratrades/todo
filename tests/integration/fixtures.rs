@@ -1,12 +1,11 @@
 //! Shared test fixtures for integration tests.
 //!
-//! Uses v_fixtures for file parsing and provides helpers for running
-//! the todo binary with proper XDG environment variables.
+//! Uses v_fixtures for file parsing and the Xdg wrapper for proper
+//! XDG directory structure.
 
-use std::{fs, path::PathBuf, process::Command};
+use std::{path::PathBuf, process::Command};
 
-use tempfile::TempDir;
-use v_fixtures::Fixture;
+use v_fixtures::{Fixture, fs_standards::xdg::Xdg};
 
 fn get_binary_path() -> PathBuf {
 	crate::ensure_binary_compiled();
@@ -19,75 +18,42 @@ fn get_binary_path() -> PathBuf {
 }
 
 /// Test context for blocker operations.
-/// Sets up XDG directories and manages file operations.
+/// Sets up XDG directories using v_fixtures and manages file operations.
 pub struct TodoTestContext {
-	// Kept alive to preserve temp directory
-	_temp_dir: TempDir,
-	/// Root of the data/todo directory where blocker files live
-	pub data_root: PathBuf,
-	pub xdg_state_home: PathBuf,
-	pub xdg_data_home: PathBuf,
-	pub xdg_cache_home: PathBuf,
+	/// The Xdg wrapper managing temp directories
+	xdg: Xdg,
 }
 
 impl TodoTestContext {
 	/// Create a new test context from a fixture string.
 	///
-	/// Files in the fixture are placed relative to the XDG_DATA_HOME/todo directory.
-	/// Use paths like `/blockers/test.md` in the fixture.
+	/// Files in the fixture should use XDG category prefixes:
+	/// - `/data/blockers/test.md` → `XDG_DATA_HOME/todo/blockers/test.md`
+	/// - `/cache/current.txt` → `XDG_CACHE_HOME/todo/current.txt`
+	/// - `/state/db.json` → `XDG_STATE_HOME/todo/db.json`
 	///
 	/// Example:
 	/// ```ignore
 	/// let ctx = TodoTestContext::new(r#"
-	///     //- /blockers/test.md
+	///     //- /data/blockers/test.md
 	///     # Project
 	///     - task 1
 	/// "#);
 	/// ```
 	pub fn new(fixture_str: &str) -> Self {
-		// Create base temp directory
-		let temp_dir = tempfile::Builder::new().prefix("todo_test_").tempdir().unwrap();
-		let root = temp_dir.path();
-
-		// Create XDG directory structure
-		let xdg_state_home = root.join("state");
-		let xdg_data_home = root.join("data");
-		let xdg_cache_home = root.join("cache");
-
-		fs::create_dir_all(xdg_state_home.join("todo")).unwrap();
-		fs::create_dir_all(xdg_data_home.join("todo")).unwrap();
-		fs::create_dir_all(xdg_cache_home.join("todo")).unwrap();
-
-		let data_root = xdg_data_home.join("todo");
-
-		// Parse fixture and write files to data/todo/
 		let fixture = Fixture::parse(fixture_str);
-		for file in &fixture.files {
-			let path = data_root.join(file.path.trim_start_matches('/'));
-			if let Some(parent) = path.parent() {
-				fs::create_dir_all(parent).unwrap();
-			}
-			fs::write(&path, &file.text).unwrap();
-		}
-
-		Self {
-			_temp_dir: temp_dir,
-			data_root,
-			xdg_state_home,
-			xdg_data_home,
-			xdg_cache_home,
-		}
+		let xdg = Xdg::new(fixture.write_to_tempdir(), "todo");
+		Self { xdg }
 	}
 
 	/// Run a todo command with proper XDG environment.
 	pub fn run(&self, args: &[&str]) -> std::process::Output {
-		Command::new(get_binary_path())
-			.args(args)
-			.env("XDG_STATE_HOME", &self.xdg_state_home)
-			.env("XDG_DATA_HOME", &self.xdg_data_home)
-			.env("XDG_CACHE_HOME", &self.xdg_cache_home)
-			.output()
-			.unwrap()
+		let mut cmd = Command::new(get_binary_path());
+		cmd.args(args);
+		for (key, value) in self.xdg.env_vars() {
+			cmd.env(key, value);
+		}
+		cmd.output().unwrap()
 	}
 
 	/// Run blocker format command on a specific file.
@@ -102,47 +68,42 @@ impl TodoTestContext {
 
 	/// Read a blocker file (path relative to blockers directory).
 	pub fn read_blocker(&self, blocker_relative_path: &str) -> String {
-		let path = self.data_root.join("blockers").join(blocker_relative_path);
-		fs::read_to_string(&path).unwrap()
+		self.xdg.read_data(&format!("blockers/{blocker_relative_path}"))
 	}
 
 	/// Check if a blocker file exists.
 	pub fn blocker_exists(&self, blocker_relative_path: &str) -> bool {
-		let path = self.data_root.join("blockers").join(blocker_relative_path);
-		path.exists()
+		self.xdg.data_exists(&format!("blockers/{blocker_relative_path}"))
 	}
 
-	/// Read a file from the data/todo directory.
+	/// Read a file from the data directory.
 	pub fn read(&self, relative_path: &str) -> String {
-		let path = self.data_root.join(relative_path.trim_start_matches('/'));
-		fs::read_to_string(&path).unwrap()
+		self.xdg.read_data(relative_path.trim_start_matches('/'))
 	}
 
-	/// Check if a file exists.
+	/// Check if a file exists in the data directory.
 	pub fn exists(&self, relative_path: &str) -> bool {
-		let path = self.data_root.join(relative_path.trim_start_matches('/'));
-		path.exists()
+		self.xdg.data_exists(relative_path.trim_start_matches('/'))
 	}
 
-	/// Get full path to a file in data/todo.
+	/// Get full path to a file in data directory.
 	pub fn path(&self, relative_path: &str) -> PathBuf {
-		self.data_root.join(relative_path.trim_start_matches('/'))
+		self.xdg.data_dir().join(relative_path.trim_start_matches('/'))
 	}
 
 	/// Read the current project from cache.
 	pub fn read_current_project(&self) -> Option<String> {
-		let cache_file = self.xdg_cache_home.join("todo").join("current_project.txt");
-		fs::read_to_string(&cache_file).ok()
+		if self.xdg.cache_exists("current_project.txt") {
+			Some(self.xdg.read_cache("current_project.txt"))
+		} else {
+			None
+		}
 	}
 
-	/// Write a file to data/todo (useful for adding files after initial setup).
+	/// Write a file to data directory (useful for adding files after initial setup).
 	#[expect(dead_code)] // May be useful for future tests
 	pub fn write(&self, relative_path: &str, content: &str) {
-		let path = self.data_root.join(relative_path.trim_start_matches('/'));
-		if let Some(parent) = path.parent() {
-			fs::create_dir_all(parent).unwrap();
-		}
-		fs::write(&path, content).unwrap();
+		self.xdg.write_data(relative_path.trim_start_matches('/'), content);
 	}
 }
 

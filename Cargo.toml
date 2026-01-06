@@ -42,7 +42,7 @@ xdg = "3.0.0"
 insta = "1.46"
 nix = { version = "0.30", features = ["fs"] }
 rstest = "0.26"
-v_fixtures = "0.1"
+v_fixtures = { path = "/home/v/s/v_fixtures" } # ga: rm path
 
 [[test]]
 name = "integration"

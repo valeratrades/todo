@@ -8,7 +8,7 @@ use crate::fixtures::{DEFAULT_BLOCKER_MD, DEFAULT_BLOCKER_TYP, TodoTestContext};
 
 #[test]
 fn test_blocker_format_adds_spaces_md() {
-	let ctx = TodoTestContext::new(&format!("//- /blockers/test.md\n{DEFAULT_BLOCKER_MD}"));
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.md\n{DEFAULT_BLOCKER_MD}"));
 
 	ctx.run_format("test.md").expect("Format command should succeed");
 
@@ -46,7 +46,7 @@ fn test_blocker_format_adds_spaces_md() {
 
 #[test]
 fn test_blocker_format_idempotent_md() {
-	let ctx = TodoTestContext::new(&format!("//- /blockers/test.md\n{DEFAULT_BLOCKER_MD}"));
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.md\n{DEFAULT_BLOCKER_MD}"));
 
 	// Run format command first time
 	ctx.run_format("test.md").expect("First format command should succeed");
@@ -65,7 +65,7 @@ fn test_blocker_format_idempotent_md() {
 
 #[test]
 fn test_blocker_format_typst_headings() {
-	let ctx = TodoTestContext::new(&format!("//- /blockers/test.typ\n{DEFAULT_BLOCKER_TYP}"));
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.typ\n{DEFAULT_BLOCKER_TYP}"));
 
 	ctx.run_format("test.typ").expect("Format command should succeed");
 
@@ -96,7 +96,7 @@ fn test_blocker_format_typst_headings() {
 
 #[test]
 fn test_blocker_format_converts_typst_to_md() {
-	let ctx = TodoTestContext::new(&format!("//- /blockers/test.typ\n{DEFAULT_BLOCKER_TYP}"));
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.typ\n{DEFAULT_BLOCKER_TYP}"));
 
 	ctx.run_format("test.typ").expect("Format command should succeed");
 
@@ -134,7 +134,7 @@ fn test_blocker_format_converts_typst_to_md() {
 fn test_blocker_format_typst_lists() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/test.typ
+		//- /data/blockers/test.typ
 		= Project
 		- task 1
 		- task 2
@@ -159,7 +159,7 @@ fn test_blocker_format_typst_lists() {
 fn test_blocker_format_typst_mixed_content() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/test.typ
+		//- /data/blockers/test.typ
 		= Main Project
 		- first task
 
@@ -192,7 +192,7 @@ fn test_blocker_format_typst_mixed_content() {
 fn test_blocker_format_comment_with_code_block() {
 	let ctx = TodoTestContext::new(
 		r#"
-		//- /blockers/test.md
+		//- /data/blockers/test.md
 		- switch to `curswant` and `curspos` for setting the jump target, with preservation of `curswant`
 			```rs
 			 // getcurpos() returns [bufnum, lnum, col, off, curswant]
