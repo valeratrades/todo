@@ -54,6 +54,60 @@ impl Marker {
 			return Some(Marker::BlockersSection(Header::new(1, "Blockers")));
 		}
 
+		// Check for typst comment markers: `// url`, `// immutable url`, `// sub url`, etc.
+		if ext == Extension::Typ
+			&& let Some(inner) = trimmed.strip_prefix("// ")
+		{
+			let inner = inner.trim();
+			let lower = inner.to_ascii_lowercase();
+
+			// New comment
+			if lower == "new comment" {
+				return Some(Marker::NewComment);
+			}
+
+			// Omitted variants
+			if lower == "omitted" {
+				return Some(Marker::Omitted);
+			}
+			if lower.starts_with("omitted") && lower.contains("render-closed") {
+				return Some(Marker::OmittedWithHint);
+			}
+
+			// Check for immutable prefix
+			let (immutable, rest) = if let Some(rest) = inner.strip_prefix("immutable ").or_else(|| inner.strip_prefix("immutable\t")) {
+				(true, rest.trim())
+			} else {
+				(false, inner)
+			};
+
+			// Sub-issue marker
+			if let Some(url) = rest.strip_prefix("sub ").or_else(|| rest.strip_prefix("sub\t")) {
+				return Some(Marker::SubIssue { url: url.trim().to_string() });
+			}
+
+			// Comment marker (contains #issuecomment-)
+			if rest.contains("#issuecomment-") {
+				let id = rest.split("#issuecomment-").nth(1).and_then(|s| {
+					// Take only digits
+					let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+					digits.parse().ok()
+				});
+				if let Some(id) = id {
+					return Some(Marker::Comment {
+						url: rest.to_string(),
+						id,
+						immutable,
+					});
+				}
+			}
+
+			// Issue URL marker (anything else is treated as a URL)
+			if !rest.is_empty() {
+				return Some(Marker::IssueUrl { url: rest.to_string(), immutable });
+			}
+		}
+
 		// Check for HTML comment markers
 		if !trimmed.starts_with("<!--") || !trimmed.ends_with("-->") {
 			return None;

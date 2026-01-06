@@ -9,6 +9,7 @@ mod fetch;
 mod files;
 mod format;
 mod issue;
+pub mod line;
 mod meta;
 mod sync;
 mod touch;
