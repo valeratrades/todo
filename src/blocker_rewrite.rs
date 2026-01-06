@@ -34,7 +34,11 @@ pub enum Command {
 	/// List all blockers from the linked issue file
 	List,
 	/// Show the current blocker (last item in the blockers list)
-	Current,
+	Current {
+		/// Show fully-qualified path with project prepended
+		#[arg(short = 'f', long)]
+		fully_qualified: bool,
+	},
 	/// Open the current blocker issue file with $EDITOR
 	Open {
 		/// Optional pattern to open a different issue file (uses same matching as `set`)
@@ -252,16 +256,33 @@ fn get_current_blocker_from_content(blockers_content: &str) -> Option<String> {
 
 /// Get the current blocker with parent headers prepended.
 /// Uses blocker.rs logic for parsing headers.
-fn get_current_blocker_with_headers(blockers_content: &str) -> Option<String> {
+/// If `fully_qualified` is true and `issue_path` is provided, prepends the issue title.
+fn get_current_blocker_with_headers(blockers_content: &str, fully_qualified: bool, issue_path: Option<&Path>) -> Option<String> {
 	let current = get_current_blocker_from_content(blockers_content)?;
 	let stripped = blocker::strip_blocker_prefix(&current);
 
 	let parent_headers = blocker::parse_parent_headers(blockers_content, &current);
 
-	if parent_headers.is_empty() {
+	// Build final output with parent headers
+	let mut parts = Vec::new();
+
+	// Add project name if fully_qualified is true
+	if fully_qualified && let Some(path) = issue_path {
+		// Extract project name from issue file path (filename without extension)
+		let project_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+		if !project_name.is_empty() {
+			parts.push(project_name.to_string());
+		}
+	}
+
+	// Add parent headers
+	parts.extend(parent_headers);
+
+	// Add the stripped task
+	if parts.is_empty() {
 		Some(stripped.to_string())
 	} else {
-		Some(format!("{}: {stripped}", parent_headers.join(": ")))
+		Some(format!("{}: {stripped}", parts.join(": ")))
 	}
 }
 
@@ -495,7 +516,7 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			// Show current blocker if any
 			let content = std::fs::read_to_string(&issue_path)?;
 			if let Some(blockers_section) = extract_blockers_section(&content) {
-				if let Some(current) = get_current_blocker_with_headers(&blockers_section) {
+				if let Some(current) = get_current_blocker_with_headers(&blockers_section, false, Some(&issue_path)) {
 					println!("Current blocker: {current}");
 				} else {
 					println!("Blockers section is empty.");
@@ -530,13 +551,13 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 			}
 		}
 
-		Command::Current => {
+		Command::Current { fully_qualified } => {
 			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-rewrite set <pattern>` first."))?;
 
 			let content = std::fs::read_to_string(&issue_path)?;
 
 			if let Some(blockers_section) = extract_blockers_section(&content)
-				&& let Some(current) = get_current_blocker_with_headers(&blockers_section)
+				&& let Some(current) = get_current_blocker_with_headers(&blockers_section, fully_qualified, Some(&issue_path))
 			{
 				const MAX_LEN: usize = 70;
 				match current.len() {
@@ -620,7 +641,7 @@ pub async fn main(_settings: &LiveSettings, args: BlockerRewriteArgs) -> Result<
 					}
 
 					// Show new current blocker
-					if let Some(new_current) = get_current_blocker_with_headers(&new_blockers) {
+					if let Some(new_current) = get_current_blocker_with_headers(&new_blockers, false, Some(&issue_path)) {
 						println!("Current: {new_current}");
 					} else {
 						println!("Blockers section is now empty.");
@@ -756,7 +777,14 @@ mod tests {
 	#[test]
 	fn test_get_current_blocker_with_headers() {
 		let blockers_content = "# Phase 1\n- First task\n# Phase 2\n- Third task";
-		assert_snapshot!(get_current_blocker_with_headers(blockers_content).unwrap(), @"Phase 2: Third task");
+		assert_snapshot!(get_current_blocker_with_headers(blockers_content, false, None).unwrap(), @"Phase 2: Third task");
+	}
+
+	#[test]
+	fn test_get_current_blocker_with_headers_fully_qualified() {
+		let blockers_content = "# Phase 1\n- First task\n# Phase 2\n- Third task";
+		let issue_path = Path::new("/home/user/issues/my_project.md");
+		assert_snapshot!(get_current_blocker_with_headers(blockers_content, true, Some(issue_path)).unwrap(), @"my_project: Phase 2: Third task");
 	}
 
 	#[test]
