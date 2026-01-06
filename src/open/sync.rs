@@ -103,57 +103,52 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 	Ok(state_changed)
 }
 
-/// Execute issue actions (create sub-issues, etc.) and update the Issue struct with new URLs.
+/// Execute issue actions and update the Issue struct with new URLs.
 /// Returns (executed_count, Option<created_issue_number>) - the issue number is set if a root issue was created.
 pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue: &mut Issue, actions: Vec<Vec<crate::github::IssueAction>>) -> Result<(usize, Option<u64>)> {
 	use crate::github::IssueAction;
 
 	let mut executed = 0;
-	let mut created_issue_number = None;
+	let mut created_root_number = None;
 
 	for level_actions in actions {
 		for action in level_actions {
 			match action {
-				IssueAction::CreateIssue { title, body } => {
-					// Create the root issue on GitHub
-					println!("Creating issue: {title}");
+				IssueAction::CreateIssue { path, title, body, closed, parent } => {
+					let is_root = path.is_empty();
+					if is_root {
+						println!("Creating issue: {title}");
+					} else {
+						println!("Creating sub-issue: {title}");
+					}
+
 					let created = gh.create_issue(owner, repo, &title, &body).await?;
 					println!("Created issue #{}: {}", created.number, created.html_url);
 
-					// Update the Issue struct with the new URL
-					issue.meta.url = Some(format!("https://github.com/{owner}/{repo}/issues/{}", created.number));
-					created_issue_number = Some(created.number);
+					// Link to parent if this is a sub-issue
+					if let Some(parent_num) = parent {
+						gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
+					}
 
-					executed += 1;
-				}
-				IssueAction::CreateSubIssue {
-					child_path,
-					title,
-					closed,
-					parent_issue_number,
-				} => {
-					// Create the issue on GitHub
-					println!("Creating sub-issue: {title}");
-					let created = gh.create_issue(owner, repo, &title, "").await?;
-
-					// Add as sub-issue to parent
-					gh.add_sub_issue(owner, repo, parent_issue_number, created.id).await?;
-
-					// If created as closed, close it
+					// Close if needed
 					if closed {
 						gh.update_issue_state(owner, repo, created.number, "closed").await?;
 					}
 
 					// Update the Issue struct with the new URL
-					if let Some(child) = issue.get_child_mut(&child_path) {
-						child.meta.url = Some(format!("https://github.com/{owner}/{repo}/issues/{}", created.number));
+					let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
+					if is_root {
+						issue.meta.url = Some(url);
+						created_root_number = Some(created.number);
+					} else if let Some(child) = issue.get_child_mut(&path) {
+						child.meta.url = Some(url);
 					}
 
 					executed += 1;
 				}
-				IssueAction::UpdateSubIssueState { issue_number, closed } => {
+				IssueAction::UpdateIssueState { issue_number, closed } => {
 					let new_state = if closed { "closed" } else { "open" };
-					println!("Updating sub-issue #{issue_number} state to {new_state}...");
+					println!("Updating issue #{issue_number} state to {new_state}...");
 					gh.update_issue_state(owner, repo, issue_number, new_state).await?;
 					executed += 1;
 				}
@@ -161,7 +156,7 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 		}
 	}
 
-	Ok((executed, created_issue_number))
+	Ok((executed, created_root_number))
 }
 
 /// Handle divergence: remote changed since we last fetched.

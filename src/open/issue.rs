@@ -556,8 +556,11 @@ impl Issue {
 		// Check if root issue needs to be created (no URL = pending creation from --touch)
 		if self.meta.url.is_none() {
 			levels.push(vec![IssueAction::CreateIssue {
+				path: vec![],
 				title: self.meta.title.clone(),
 				body: self.body(),
+				closed: self.meta.close_state.is_closed(),
+				parent: None,
 			}]);
 			// Don't collect sub-issue actions yet - they'll be handled after root is created
 			return levels;
@@ -585,23 +588,24 @@ impl Issue {
 			child_path.push(i);
 
 			if child.meta.url.is_none() {
-				// New sub-issue - needs to be created
+				// New issue - needs to be created
 				if let Some(parent_num) = parent_number {
-					levels[depth].push(IssueAction::CreateSubIssue {
-						child_path: child_path.clone(),
+					levels[depth].push(IssueAction::CreateIssue {
+						path: child_path.clone(),
 						title: child.meta.title.clone(),
+						body: String::new(),
 						closed: child.meta.close_state.is_closed(),
-						parent_issue_number: parent_num,
+						parent: Some(parent_num),
 					});
 				}
 			} else if let Some(child_url) = &child.meta.url {
-				// Existing sub-issue - check if state changed
+				// Existing issue - check if state changed
 				if let Some(child_number) = github::extract_issue_number_from_url(child_url)
 					&& let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number)
 				{
 					let orig_closed = orig.state == "closed";
 					if child.meta.close_state.is_closed() != orig_closed {
-						levels[depth].push(IssueAction::UpdateSubIssueState {
+						levels[depth].push(IssueAction::UpdateIssueState {
 							issue_number: child_number,
 							closed: child.meta.close_state.is_closed(),
 						});
