@@ -552,6 +552,17 @@ impl Issue {
 	/// Each level's actions can be executed in parallel, but levels must be sequential.
 	pub fn collect_actions(&self, original_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>> {
 		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
+
+		// Check if root issue needs to be created (no URL = pending creation from --touch)
+		if self.meta.url.is_none() {
+			levels.push(vec![IssueAction::CreateIssue {
+				title: self.meta.title.clone(),
+				body: self.body(),
+			}]);
+			// Don't collect sub-issue actions yet - they'll be handled after root is created
+			return levels;
+		}
+
 		self.collect_actions_recursive(&[], original_sub_issues, &mut levels);
 		levels
 	}

@@ -33,21 +33,23 @@ pub fn sanitize_title_for_filename(title: &str) -> String {
 }
 
 /// Format an issue filename from number and title.
-/// Format: {number}_-_{sanitized_title}.{ext} or {number}_-_{sanitized_title}.{ext}.bak for closed issues
-pub fn format_issue_filename(issue_number: u64, title: &str, extension: &Extension, closed: bool) -> String {
+/// Format: {number}_-_{sanitized_title}.{ext} or just {sanitized_title}.{ext} if no number
+/// Adds .bak suffix for closed issues.
+pub fn format_issue_filename(issue_number: Option<u64>, title: &str, extension: &Extension, closed: bool) -> String {
 	let sanitized = sanitize_title_for_filename(title);
-	let base = if sanitized.is_empty() {
-		format!("{issue_number}.{}", extension.as_str())
-	} else {
-		format!("{issue_number}_-_{sanitized}.{}", extension.as_str())
+	let base = match issue_number {
+		Some(num) if sanitized.is_empty() => format!("{num}.{}", extension.as_str()),
+		Some(num) => format!("{num}_-_{sanitized}.{}", extension.as_str()),
+		None if sanitized.is_empty() => format!("untitled.{}", extension.as_str()),
+		None => format!("{sanitized}.{}", extension.as_str()),
 	};
 	if closed { format!("{base}.bak") } else { base }
 }
 
 /// Get the path for an issue file in XDG_DATA.
-/// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}[.bak]
+/// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}[.bak] (or just {title}.{ext} for pending/virtual)
 /// For sub-issues: issues/{owner}/{repo}/{parent_number}_-_{parent_title}/{number}_-_{title}.{ext}[.bak]
-pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: u64, title: &str, extension: &Extension, closed: bool, parent_issue: Option<(u64, &str)>) -> PathBuf {
+pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, extension: &Extension, closed: bool, parent_issue: Option<(u64, &str)>) -> PathBuf {
 	let base = issues_dir().join(owner).join(repo);
 	let filename = format_issue_filename(issue_number, title, extension, closed);
 	match parent_issue {

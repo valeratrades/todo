@@ -10,7 +10,7 @@ use super::{
 	files::{choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
 	sync::open_local_issue,
-	touch::{create_issue_on_github, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
+	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 	util::Extension,
 };
 use crate::{
@@ -103,35 +103,29 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		// Determine the extension to use
 		let effective_ext = touch_path.extension.unwrap_or(extension);
 
-		// Check if the project is virtual (or if we're in offline mode for a new project)
+		// Check if the project is virtual
 		let project_is_virtual = is_virtual_project(&touch_path.owner, &touch_path.repo);
 
 		// First, try to find an existing local issue file
 		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {:?}", existing_path);
-			// For virtual projects, always use offline mode
 			let effective_offline = offline || project_is_virtual;
 			open_local_issue(&gh, &existing_path, effective_offline).await?;
 			return Ok(());
 		}
 
-		// Not found locally - create the issue
-		let issue_file_path = if offline || project_is_virtual {
-			// Create virtual issue (local only, no GitHub)
-			if project_is_virtual {
-				println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
-			} else {
-				println!("Creating virtual issue in offline mode...");
-			}
+		// Not found locally - create a local file
+		let issue_file_path = if project_is_virtual {
+			// Virtual project: stays local forever
+			println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
 			create_virtual_issue(&touch_path, &effective_ext)?
 		} else {
-			// Create on GitHub (normal flow)
-			create_issue_on_github(&gh, &touch_path, &effective_ext).await?
+			// Real project: create pending issue (will be created on GitHub when editor closes)
+			create_pending_issue(&touch_path, &effective_ext)?
 		};
 
-		// Open the local issue file for editing
-		// For virtual projects, always use offline mode
-		let effective_offline = offline || project_is_virtual || is_virtual_project(&touch_path.owner, &touch_path.repo);
+		// Open for editing - sync will create on GitHub if pending
+		let effective_offline = offline || project_is_virtual;
 		open_local_issue(&gh, &issue_file_path, effective_offline).await?;
 		return Ok(());
 	}

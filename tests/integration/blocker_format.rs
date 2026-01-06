@@ -1,52 +1,113 @@
 //! Integration tests for blocker file formatting.
 
-use crate::fixtures::{DEFAULT_BLOCKER_MD, DEFAULT_BLOCKER_TYP, TodoTestContext};
+use rstest::{fixture, rstest};
+
+use crate::fixtures::TodoTestContext;
+
+/// Markdown fixture content that covers all formatting edge cases:
+/// - Tasks at root level (before any header)
+/// - Comments under tasks (tab-indented)
+/// - H1 and H2 headers with tasks
+/// - Space-indented comments (preserved as-is)
+/// - Empty headers (no tasks, need spacing)
+#[fixture]
+fn blocker_md() -> &'static str {
+	"\
+- a
+	comment under a
+- b
+- c
+	comment under c
+
+# d
+- e
+
+# f
+- g
+
+## h
+- i
+
+# j
+## k
+- l
+		space-indented comment
+- m
+	   another space-indented comment
+
+# n: empty header
+# o: another empty header
+# p: test spacing between same-level headers"
+}
+
+/// Typst fixture content for testing typst-to-markdown conversion.
+#[fixture]
+fn blocker_typ() -> &'static str {
+	"\
+= a
+- b
+
+= c
+- d
+
+== e
+- f
+
+= g
+== h
+- i
+- j
+
+= k: empty header
+= l: another empty header
+= m: test typst support"
+}
 
 // ============================================================================
 // Markdown (.md) file tests
 // ============================================================================
 
-#[test]
-fn test_blocker_format_adds_spaces_md() {
-	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.md\n{DEFAULT_BLOCKER_MD}"));
+#[rstest]
+fn test_blocker_format_adds_spaces_md(blocker_md: &str) {
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.md\n{blocker_md}"));
 
 	ctx.run_format("test.md").expect("Format command should succeed");
 
 	let formatted = ctx.read_blocker("test.md");
 	insta::assert_snapshot!(formatted, @"
-	- move these todos over into a persisted directory
-		comment
-	- move all typst projects
-	- rewrite custom.sh
-		comment
+	- a
+		comment under a
+	- b
+	- c
+		comment under c
 
-	# marketmonkey
-	- go in-depth on possibilities
+	# d
+	- e
 
-	# SocialNetworks in rust
-	- test twitter
+	# f
+	- g
 
-	## yt
-	- test
+	## h
+	- i
 
-	# math tools
-	## gauss
-	- finish it
-			a space-indented comment comment
-	- move gaussian pivot over in there
+	# j
+	## k
+	- l
+			space-indented comment
+	- m
 		   another space-indented comment
 
-	# git lfs: docs, music, etc
+	# n: empty header
 
-	# eww: don't restore if outdated
+	# o: another empty header
 
-	# todo: blocker: doesn't add spaces between same level headers
+	# p: test spacing between same-level headers
 	");
 }
 
-#[test]
-fn test_blocker_format_idempotent_md() {
-	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.md\n{DEFAULT_BLOCKER_MD}"));
+#[rstest]
+fn test_blocker_format_idempotent_md(blocker_md: &str) {
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.md\n{blocker_md}"));
 
 	// Run format command first time
 	ctx.run_format("test.md").expect("First format command should succeed");
@@ -63,40 +124,40 @@ fn test_blocker_format_idempotent_md() {
 // Typst (.typ) file tests
 // ============================================================================
 
-#[test]
-fn test_blocker_format_typst_headings() {
-	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.typ\n{DEFAULT_BLOCKER_TYP}"));
+#[rstest]
+fn test_blocker_format_typst_headings(blocker_typ: &str) {
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.typ\n{blocker_typ}"));
 
 	ctx.run_format("test.typ").expect("Format command should succeed");
 
 	// Typst files get converted to .md
 	let formatted = ctx.read_blocker("test.md");
 	insta::assert_snapshot!(formatted, @"
-	# marketmonkey
-	- go in-depth on possibilities
+	# a
+	- b
 
-	# SocialNetworks in rust
-	- test twitter
+	# c
+	- d
 
-	## yt
-	- test
+	## e
+	- f
 
-	# math tools
-	## gauss
-	- finish it
-	- move gaussian pivot over in there
+	# g
+	## h
+	- i
+	- j
 
-	# git lfs: docs, music, etc
+	# k: empty header
 
-	# eww: don't restore if outdated
+	# l: another empty header
 
-	# todo: blocker: test typst support
+	# m: test typst support
 	");
 }
 
-#[test]
-fn test_blocker_format_converts_typst_to_md() {
-	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.typ\n{DEFAULT_BLOCKER_TYP}"));
+#[rstest]
+fn test_blocker_format_converts_typst_to_md(blocker_typ: &str) {
+	let ctx = TodoTestContext::new(&format!("//- /data/blockers/test.typ\n{blocker_typ}"));
 
 	ctx.run_format("test.typ").expect("Format command should succeed");
 
@@ -108,25 +169,25 @@ fn test_blocker_format_converts_typst_to_md() {
 
 	let formatted = ctx.read_blocker("test.md");
 	insta::assert_snapshot!(formatted, @"
-	# marketmonkey
-	- go in-depth on possibilities
+	# a
+	- b
 
-	# SocialNetworks in rust
-	- test twitter
+	# c
+	- d
 
-	## yt
-	- test
+	## e
+	- f
 
-	# math tools
-	## gauss
-	- finish it
-	- move gaussian pivot over in there
+	# g
+	## h
+	- i
+	- j
 
-	# git lfs: docs, music, etc
+	# k: empty header
 
-	# eww: don't restore if outdated
+	# l: another empty header
 
-	# todo: blocker: test typst support
+	# m: test typst support
 	");
 }
 

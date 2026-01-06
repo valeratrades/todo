@@ -75,6 +75,13 @@ pub type IssuePath = Vec<usize>;
 /// An action that needs to be performed on GitHub
 #[derive(Debug)]
 pub enum IssueAction {
+	/// Create a new root issue (no parent)
+	CreateIssue {
+		/// Title for the new issue
+		title: String,
+		/// Body for the new issue
+		body: String,
+	},
 	/// Create a new sub-issue and link it to parent
 	CreateSubIssue {
 		/// Path to the child issue that needs to be created

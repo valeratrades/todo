@@ -214,12 +214,14 @@ pub enum LineType {
 
 impl LineType {
 	/// Check if this line type is a header
+	#[cfg(not(feature = "is_integration_test"))]
 	#[allow(dead_code)]
 	fn is_header(&self) -> bool {
 		matches!(self, LineType::Header { .. })
 	}
 
 	/// Get the header level, or None if not a header
+	#[cfg(not(feature = "is_integration_test"))]
 	#[allow(dead_code)]
 	fn header_level(&self) -> Option<HeaderLevel> {
 		match self {
@@ -229,6 +231,7 @@ impl LineType {
 	}
 
 	/// Get the header text, or None if not a header
+	#[cfg(not(feature = "is_integration_test"))]
 	#[allow(dead_code)]
 	fn header_text(&self) -> Option<&str> {
 		match self {

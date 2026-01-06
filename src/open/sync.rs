@@ -104,14 +104,28 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 }
 
 /// Execute issue actions (create sub-issues, etc.) and update the Issue struct with new URLs.
-pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue: &mut Issue, actions: Vec<Vec<crate::github::IssueAction>>) -> Result<usize> {
+/// Returns (executed_count, Option<created_issue_number>) - the issue number is set if a root issue was created.
+pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue: &mut Issue, actions: Vec<Vec<crate::github::IssueAction>>) -> Result<(usize, Option<u64>)> {
 	use crate::github::IssueAction;
 
 	let mut executed = 0;
+	let mut created_issue_number = None;
 
 	for level_actions in actions {
 		for action in level_actions {
 			match action {
+				IssueAction::CreateIssue { title, body } => {
+					// Create the root issue on GitHub
+					println!("Creating issue: {title}");
+					let created = gh.create_issue(owner, repo, &title, &body).await?;
+					println!("Created issue #{}: {}", created.number, created.html_url);
+
+					// Update the Issue struct with the new URL
+					issue.meta.url = Some(format!("https://github.com/{owner}/{repo}/issues/{}", created.number));
+					created_issue_number = Some(created.number);
+
+					executed += 1;
+				}
 				IssueAction::CreateSubIssue {
 					child_path,
 					title,
@@ -147,26 +161,7 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 		}
 	}
 
-	Ok(executed)
-}
-
-/// Check that required CLI tools are available
-fn check_required_tools() -> Result<()> {
-	use std::process::Command;
-
-	// Check git
-	let git_check = Command::new("git").arg("--version").output();
-	if git_check.is_err() {
-		return Err(eyre!("'git' is required but not found in PATH"));
-	}
-
-	// Check gh
-	let gh_check = Command::new("gh").arg("--version").output();
-	if gh_check.is_err() {
-		return Err(eyre!("'gh' (GitHub CLI) is required but not found in PATH"));
-	}
-
-	Ok(())
+	Ok((executed, created_issue_number))
 }
 
 /// Handle divergence: remote changed since we last fetched.
@@ -176,36 +171,26 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 
 	use super::files::issues_dir;
 
-	check_required_tools()?;
+	// gh CLI is required for PR creation
+	let gh_check = Command::new("gh").arg("--version").output();
+	if gh_check.is_err() {
+		return Err(eyre!("'gh' (GitHub CLI) is required but not found in PATH"));
+	}
 
 	let data_dir = issues_dir();
 	let data_dir_str = data_dir.to_str().ok_or_else(|| eyre!("Invalid data directory path"))?;
 
-	// Verify data dir is a git repo
-	if !data_dir.join(".git").exists() {
-		return Err(eyre!(
-			"Issue data directory is not a git repository.\n\
-			 To enable merge conflict handling, initialize git in: {}\n\
-			 Then configure a remote to push PRs to.",
-			data_dir.display()
-		));
-	}
-
-	// Check if remote exists
-	let remote_output = Command::new("git").args(["-C", data_dir_str, "remote", "-v"]).output()?;
-
-	if remote_output.stdout.is_empty() {
-		return Err(eyre!(
-			"No git remote configured for issue data directory.\n\
-			 Add a remote to enable PR creation:\n\
-			 cd {} && git remote add origin <your-repo-url>",
-			data_dir.display()
-		));
-	}
-
 	// Get current branch name
-	let current_branch = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--abbrev-ref", "HEAD"]).output()?;
-	let current_branch = String::from_utf8_lossy(&current_branch.stdout).trim().to_string();
+	let branch_output = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--abbrev-ref", "HEAD"]).output()?;
+	if !branch_output.status.success() {
+		return Err(eyre!(
+			"Remote issue changed and merge workflow requires git.\n\
+			 Initialize git in your issues directory:\n\
+			   cd {} && git init && git remote add origin <your-repo-url>",
+			data_dir.display()
+		));
+	}
+	let current_branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
 
 	// Auto-commit local changes
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
@@ -219,10 +204,18 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	}
 
 	// Push current branch to ensure local changes are on remote
-	let push_status = Command::new("git").args(["-C", data_dir_str, "push", "-u", "origin", &current_branch]).status()?;
+	let push_output = Command::new("git").args(["-C", data_dir_str, "push", "-u", "origin", &current_branch]).output()?;
 
-	if !push_status.success() {
-		return Err(eyre!("Failed to push local changes to remote"));
+	if !push_output.status.success() {
+		let stderr = String::from_utf8_lossy(&push_output.stderr);
+		return Err(eyre!(
+			"Remote issue changed but failed to push local changes for merge workflow.\n\
+			 Error: {}\n\n\
+			 Ensure your issues directory has a git remote configured:\n\
+			   cd {} && git remote add origin <your-repo-url>",
+			stderr.trim(),
+			data_dir.display()
+		));
 	}
 
 	// Create branch for remote state
@@ -405,37 +398,50 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		return Ok(());
 	}
 
-	// Fetch current GitHub state to check for divergence
-	let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
-		gh.fetch_authenticated_user(),
-		gh.fetch_issue(&owner, &repo, meta.issue_number),
-		gh.fetch_comments(&owner, &repo, meta.issue_number),
-		gh.fetch_sub_issues(&owner, &repo, meta.issue_number),
-	)?;
+	// Check if this is a pending issue (created via --touch, not yet on GitHub)
+	let is_pending = issue.meta.url.is_none();
 
-	// Build Issue from current GitHub state
-	let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, &owner, &repo, &current_user);
+	// For pending issues, skip divergence check and create on GitHub first
+	let (actions_executed, created_issue_number) = if is_pending {
+		// Collect actions (will include CreateIssue for the root)
+		let actions = issue.collect_actions(&meta.original_sub_issues);
+		let has_actions = actions.iter().any(|level| !level.is_empty());
 
-	// Build Issue from what we originally saw (stored in meta)
-	let original_issue = Issue::from_meta(&meta, &owner, &repo);
-
-	// Check if remote diverged from what we originally saw
-	if remote_issue != original_issue {
-		// Remote changed since we last fetched - divergence detected!
-		return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
-	}
-
-	// No divergence - proceed with sync
-
-	// Collect required GitHub actions (e.g., new sub-issues without URLs)
-	let actions = issue.collect_actions(&meta.original_sub_issues);
-	let has_actions = actions.iter().any(|level| !level.is_empty());
-
-	// Execute actions and update Issue struct with new URLs
-	let actions_executed = if has_actions {
-		execute_issue_actions(gh, &owner, &repo, &mut issue, actions).await?
+		if has_actions {
+			execute_issue_actions(gh, &owner, &repo, &mut issue, actions).await?
+		} else {
+			(0, None)
+		}
 	} else {
-		0
+		// Normal flow: check divergence first
+		let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
+			gh.fetch_authenticated_user(),
+			gh.fetch_issue(&owner, &repo, meta.issue_number),
+			gh.fetch_comments(&owner, &repo, meta.issue_number),
+			gh.fetch_sub_issues(&owner, &repo, meta.issue_number),
+		)?;
+
+		// Build Issue from current GitHub state
+		let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, &owner, &repo, &current_user);
+
+		// Build Issue from what we originally saw (stored in meta)
+		let original_issue = Issue::from_meta(&meta, &owner, &repo);
+
+		// Check if remote diverged from what we originally saw
+		if remote_issue != original_issue {
+			// Remote changed since we last fetched - divergence detected!
+			return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
+		}
+
+		// No divergence - collect and execute actions
+		let actions = issue.collect_actions(&meta.original_sub_issues);
+		let has_actions = actions.iter().any(|level| !level.is_empty());
+
+		if has_actions {
+			execute_issue_actions(gh, &owner, &repo, &mut issue, actions).await?
+		} else {
+			(0, None)
+		}
 	};
 
 	// Re-serialize if actions added URLs
@@ -444,8 +450,15 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		std::fs::write(issue_file_path, &serialized)?;
 	}
 
-	// Sync body/comment/state changes to GitHub
-	let state_changed = sync_local_issue_to_github(gh, &owner, &repo, &meta, &issue).await?;
+	// Determine the issue number to use for sync/refresh (may have just been created)
+	let issue_number = created_issue_number.unwrap_or(meta.issue_number);
+
+	// Sync body/comment/state changes to GitHub (skip for newly created issues - body already set)
+	let state_changed = if created_issue_number.is_none() {
+		sync_local_issue_to_github(gh, &owner, &repo, &meta, &issue).await?
+	} else {
+		false
+	};
 
 	// If we executed actions or state changed, refresh from GitHub
 	if actions_executed > 0 || state_changed {
@@ -465,11 +478,13 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
-		let new_path = fetch_and_store_issue(gh, &owner, &repo, meta.issue_number, &extension, false, parent_issue).await?;
+		let new_path = fetch_and_store_issue(gh, &owner, &repo, issue_number, &extension, false, parent_issue).await?;
 
 		// If the path changed (title/state changed), delete the old file
 		if old_path != new_path && old_path.exists() {
-			if state_changed {
+			if created_issue_number.is_some() {
+				println!("Issue created on GitHub, updating local file...");
+			} else if state_changed {
 				println!("Issue state changed, renaming file...");
 			} else {
 				println!("Issue renamed, removing old file: {:?}", old_path);

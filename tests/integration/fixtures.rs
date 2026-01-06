@@ -81,16 +81,6 @@ impl TodoTestContext {
 		self.xdg.read_data(relative_path.trim_start_matches('/'))
 	}
 
-	/// Check if a file exists in the data directory.
-	pub fn exists(&self, relative_path: &str) -> bool {
-		self.xdg.data_exists(relative_path.trim_start_matches('/'))
-	}
-
-	/// Get full path to a file in data directory.
-	pub fn path(&self, relative_path: &str) -> PathBuf {
-		self.xdg.data_dir().join(relative_path.trim_start_matches('/'))
-	}
-
 	/// Read the current project from cache.
 	pub fn read_current_project(&self) -> Option<String> {
 		if self.xdg.cache_exists("current_project.txt") {
@@ -99,58 +89,4 @@ impl TodoTestContext {
 			None
 		}
 	}
-
-	/// Write a file to data directory (useful for adding files after initial setup).
-	#[expect(dead_code)] // May be useful for future tests
-	pub fn write(&self, relative_path: &str, content: &str) {
-		self.xdg.write_data(relative_path.trim_start_matches('/'), content);
-	}
 }
-
-/// Default content for markdown blocker tests.
-pub const DEFAULT_BLOCKER_MD: &str = "\
-- move these todos over into a persisted directory
-	comment
-- move all typst projects
-- rewrite custom.sh
-	comment
-
-# marketmonkey
-- go in-depth on possibilities
-
-# SocialNetworks in rust
-- test twitter
-
-## yt
-- test
-
-# math tools
-## gauss
-- finish it
-		a space-indented comment comment
-- move gaussian pivot over in there
-	   another space-indented comment
-
-# git lfs: docs, music, etc
-# eww: don't restore if outdated
-# todo: blocker: doesn't add spaces between same level headers";
-
-/// Default content for typst blocker tests.
-pub const DEFAULT_BLOCKER_TYP: &str = "\
-= marketmonkey
-- go in-depth on possibilities
-
-= SocialNetworks in rust
-- test twitter
-
-== yt
-- test
-
-= math tools
-== gauss
-- finish it
-- move gaussian pivot over in there
-
-= git lfs: docs, music, etc
-= eww: don't restore if outdated
-= todo: blocker: test typst support";
