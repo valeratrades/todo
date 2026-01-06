@@ -56,16 +56,6 @@ impl TodoTestContext {
 		cmd.output().unwrap()
 	}
 
-	/// Run blocker format command on a specific file.
-	/// The path should be relative to the blockers directory (e.g., "test.md" or "work/test.md")
-	pub fn run_format(&self, blocker_relative_path: &str) -> Result<(), String> {
-		let output = self.run(&["blocker", "--relative-path", blocker_relative_path, "format"]);
-		if !output.status.success() {
-			return Err(String::from_utf8_lossy(&output.stderr).to_string());
-		}
-		Ok(())
-	}
-
 	/// Read a blocker file (path relative to blockers directory).
 	pub fn read_blocker(&self, blocker_relative_path: &str) -> String {
 		self.xdg.read_data(&format!("blockers/{blocker_relative_path}"))

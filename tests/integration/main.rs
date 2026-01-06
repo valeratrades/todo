@@ -15,6 +15,5 @@ pub fn ensure_binary_compiled() {
 	});
 }
 
-mod blocker_format;
 mod blocker_project_resolution;
 mod fixtures;

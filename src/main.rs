@@ -47,10 +47,8 @@ enum Commands {
 	Milestones(milestones::MilestonesArgs),
 	/// Shell aliases and hooks. Usage: `todos init <shell> | source`
 	Init(shell_init::ShellInitArgs),
-	/// Blockers tree (standalone files)
+	/// Blockers tree (use --integrated flag for issue files)
 	Blocker(blocker::BlockerArgs),
-	/// Blocker management integrated with issue files
-	BlockerIntegrated(blocker::IntegrationArgs),
 	/// Clockify time tracking
 	Clockify(blocker::clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
@@ -123,7 +121,6 @@ async fn main() {
 			Ok(())
 		}
 		Commands::Blocker(args) => blocker::main(&settings, args).await,
-		Commands::BlockerIntegrated(args) => blocker::main_integrated(&settings, args).await,
 		Commands::Clockify(args) => blocker::clockify::clockify_main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),

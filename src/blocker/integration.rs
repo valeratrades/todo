@@ -1,25 +1,20 @@
 //! Integration with issue files and the `open` module.
 //!
-//! This module provides bridges for working with blockers embedded in issue files:
-//! - `set`: Set the current blocker source (issue file or standalone file)
-//! - `open`: Open the blocker source for editing
-//! - Extract/update blockers sections within issue files
-//!
+//! This module provides helpers for working with blockers embedded in issue files.
 //! The `--integrated` flag on `set` and `open` commands enables use of issue files
 //! as the blocker source, using the `open/` module's file management and sync mechanics.
 
 use std::path::{Path, PathBuf};
 
-use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
 use todo::Extension;
 
 use super::{
 	LineType,
 	operations::BlockerSequence,
-	standard::{classify_line, parse_parent_headers, strip_blocker_prefix},
+	standard::{classify_line, strip_blocker_prefix},
 };
-use crate::{config::LiveSettings, marker::Marker};
+use crate::marker::Marker;
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
 fn issues_dir() -> PathBuf {
@@ -28,39 +23,6 @@ fn issues_dir() -> PathBuf {
 
 /// Cache file for current blocker selection
 static CURRENT_BLOCKER_ISSUE_CACHE: &str = "current_blocker_issue.txt";
-
-#[derive(Args, Clone, Debug)]
-pub struct IntegrationArgs {
-	#[command(subcommand)]
-	pub command: IntegrationCommand,
-}
-
-#[derive(Clone, Debug, Subcommand)]
-pub enum IntegrationCommand {
-	/// Set the current blocker file (uses same matching as `open`)
-	Set {
-		/// Pattern to match issue file (number, title, owner/repo pattern)
-		pattern: String,
-	},
-	/// List all blockers from the linked issue file
-	List,
-	/// Show the current blocker (last item in the blockers list)
-	Current {
-		/// Show fully-qualified path with project prepended
-		#[arg(short = 'f', long)]
-		fully_qualified: bool,
-	},
-	/// Open the current blocker issue file with $EDITOR
-	Open {
-		/// Optional pattern to open a different issue file (uses same matching as `set`)
-		pattern: Option<String>,
-		/// Set the opened file as current blocker file after exiting the editor
-		#[arg(short = 's', long)]
-		set_after: bool,
-	},
-	/// Pop the last blocker from the blockers section
-	Pop,
-}
 
 /// Get the path to the current blocker issue cache file
 fn get_current_blocker_cache_path() -> PathBuf {
@@ -309,36 +271,26 @@ fn extract_blockers_section(content: &str) -> Option<BlockerSequence> {
 	Some(BlockerSequence::new(blockers_lines.join("\n")))
 }
 
-/// Get the current blocker with parent headers prepended.
-/// Uses blocker.rs logic for parsing headers.
-/// If `fully_qualified` is true and `issue_path` is provided, prepends the issue title.
-fn get_current_blocker_with_headers(blockers: &BlockerSequence, fully_qualified: bool, issue_path: Option<&Path>) -> Option<String> {
-	let current = blockers.current()?;
-	let stripped = strip_blocker_prefix(&current);
-
-	let parent_headers = parse_parent_headers(blockers.content(), &current);
-
-	// Build final output with parent headers
-	let mut parts = Vec::new();
-
-	// Add project name if fully_qualified is true
-	if fully_qualified && let Some(path) = issue_path {
-		// Extract project name from issue file path (filename without extension)
-		let project_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-		if !project_name.is_empty() {
-			parts.push(project_name.to_string());
+/// Build the ownership hierarchy for an issue file.
+/// If fully_qualified is true, includes the issue name extracted from file path.
+fn build_ownership_hierarchy(issue_path: Option<&Path>, fully_qualified: bool) -> Vec<String> {
+	if fully_qualified {
+		if let Some(path) = issue_path {
+			if let Some(project_name) = path.file_stem().and_then(|s| s.to_str()) {
+				if !project_name.is_empty() {
+					return vec![project_name.to_string()];
+				}
+			}
 		}
 	}
+	Vec::new()
+}
 
-	// Add parent headers
-	parts.extend(parent_headers);
-
-	// Add the stripped task
-	if parts.is_empty() {
-		Some(stripped.to_string())
-	} else {
-		Some(format!("{}: {stripped}", parts.join(": ")))
-	}
+/// Get the current blocker with parent headers prepended.
+/// If `fully_qualified` is true and `issue_path` is provided, prepends the issue title.
+fn get_current_blocker_with_headers(blockers: &BlockerSequence, fully_qualified: bool, issue_path: Option<&Path>) -> Option<String> {
+	let hierarchy = build_ownership_hierarchy(issue_path, fully_qualified);
+	blockers.current_with_context(&hierarchy)
 }
 
 /// List all content lines (headers and items), returning tuples of (text, is_header, is_completed)
@@ -446,186 +398,91 @@ fn update_blockers_in_issue(full_content: &str, new_blockers: &BlockerSequence) 
 	Some(result_lines.join("\n"))
 }
 
-pub async fn main(_settings: &LiveSettings, args: IntegrationArgs) -> Result<()> {
-	match args.command {
-		IntegrationCommand::Set { pattern } => {
-			// Use same matching logic as open command
-			let matches = search_issue_files(&pattern)?;
+/// Resolve an issue file from a pattern, using fzf if multiple matches.
+fn resolve_issue_file(pattern: &str) -> Result<PathBuf> {
+	let matches = search_issue_files(pattern)?;
 
-			let issue_path = match matches.len() {
-				0 => {
-					// No matches - open fzf with all files
-					let all_files = search_issue_files("")?;
-					if all_files.is_empty() {
-						bail!("No issue files found. Use `todo open <url>` to fetch an issue first.");
-					}
-					match choose_issue_with_fzf(&all_files, &pattern)? {
-						Some(path) => path,
-						None => bail!("No issue selected"),
-					}
-				}
-				1 => matches[0].clone(),
-				_ => {
-					// Multiple matches - open fzf to choose
-					match choose_issue_with_fzf(&matches, &pattern)? {
-						Some(path) => path,
-						None => bail!("No issue selected"),
-					}
-				}
-			};
-
-			// Set as current blocker issue
-			set_current_blocker_issue(&issue_path)?;
-
-			// Get relative path for display
-			let issues_dir = issues_dir();
-			let rel_path = issue_path
-				.strip_prefix(&issues_dir)
-				.map(|p| p.to_string_lossy().to_string())
-				.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
-
-			println!("Set blocker file: {rel_path}");
-
-			// Show current blocker if any
-			let content = std::fs::read_to_string(&issue_path)?;
-			if let Some(blockers) = extract_blockers_section(&content) {
-				if let Some(current) = get_current_blocker_with_headers(&blockers, false, Some(&issue_path)) {
-					println!("Current blocker: {current}");
-				} else {
-					println!("Blockers section is empty.");
-				}
-			} else {
-				println!("No <!--blockers--> marker found in issue body.");
+	match matches.len() {
+		0 => {
+			// No matches - open fzf with all files
+			let all_files = search_issue_files("")?;
+			if all_files.is_empty() {
+				bail!("No issue files found. Use `todo open <url>` to fetch an issue first.");
+			}
+			match choose_issue_with_fzf(&all_files, pattern)? {
+				Some(path) => Ok(path),
+				None => bail!("No issue selected"),
 			}
 		}
-
-		IntegrationCommand::List => {
-			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-integrated set <pattern>` first."))?;
-
-			let content = std::fs::read_to_string(&issue_path)?;
-
-			if let Some(blockers) = extract_blockers_section(&content) {
-				let items = list_blockers_from_content(&blockers);
-
-				if items.is_empty() {
-					println!("Blockers section is empty.");
-				} else {
-					for (text, is_header, completed) in &items {
-						if *is_header {
-							println!("# {text}");
-						} else {
-							let marker = if *completed { "[x]" } else { "[ ]" };
-							println!("{marker} {text}");
-						}
-					}
-				}
-			} else {
-				println!("No <!--blockers--> marker found in issue body.");
+		1 => Ok(matches[0].clone()),
+		_ => {
+			// Multiple matches - open fzf to choose
+			match choose_issue_with_fzf(&matches, pattern)? {
+				Some(path) => Ok(path),
+				None => bail!("No issue selected"),
 			}
 		}
+	}
+}
 
-		IntegrationCommand::Current { fully_qualified } => {
-			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-integrated set <pattern>` first."))?;
+/// Handle `blocker set-project --integrated <pattern>`
+/// Sets the current blocker issue file.
+pub async fn handle_set(pattern: &str) -> Result<()> {
+	let issue_path = resolve_issue_file(pattern)?;
 
-			let content = std::fs::read_to_string(&issue_path)?;
+	// Set as current blocker issue
+	set_current_blocker_issue(&issue_path)?;
 
-			if let Some(blockers) = extract_blockers_section(&content)
-				&& let Some(current) = get_current_blocker_with_headers(&blockers, fully_qualified, Some(&issue_path))
-			{
-				const MAX_LEN: usize = 70;
-				match current.len() {
-					0..=MAX_LEN => println!("{current}"),
-					_ => println!("{}...", &current[..(MAX_LEN - 3)]),
-				}
-				// No current blocker - silently exit (for status line integration)
-			}
-			// No blockers section - silently exit
+	// Get relative path for display
+	let issues_dir = issues_dir();
+	let rel_path = issue_path
+		.strip_prefix(&issues_dir)
+		.map(|p| p.to_string_lossy().to_string())
+		.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
+
+	println!("Set blocker file: {rel_path}");
+
+	// Show current blocker if any
+	let content = std::fs::read_to_string(&issue_path)?;
+	if let Some(blockers) = extract_blockers_section(&content) {
+		if let Some(current) = get_current_blocker_with_headers(&blockers, false, Some(&issue_path)) {
+			println!("Current blocker: {current}");
+		} else {
+			println!("Blockers section is empty.");
 		}
+	} else {
+		println!("No <!--blockers--> marker found in issue body.");
+	}
 
-		IntegrationCommand::Open { pattern, set_after } => {
-			// Determine which file to open
-			let issue_path = if let Some(pat) = pattern {
-				// Use pattern matching to find issue file
-				let matches = search_issue_files(&pat)?;
+	Ok(())
+}
 
-				match matches.len() {
-					0 => {
-						// No matches - open fzf with all files
-						let all_files = search_issue_files("")?;
-						if all_files.is_empty() {
-							bail!("No issue files found. Use `todo open <url>` to fetch an issue first.");
-						}
-						match choose_issue_with_fzf(&all_files, &pat)? {
-							Some(path) => path,
-							None => bail!("No issue selected"),
-						}
-					}
-					1 => matches[0].clone(),
-					_ => {
-						// Multiple matches - open fzf to choose
-						match choose_issue_with_fzf(&matches, &pat)? {
-							Some(path) => path,
-							None => bail!("No issue selected"),
-						}
-					}
-				}
-			} else {
-				// Use current blocker issue
-				get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-integrated set <pattern>` first."))?
-			};
+/// Handle `blocker open --integrated [pattern]`
+/// Opens an issue file for editing.
+pub async fn handle_open(pattern: Option<String>, set_after: bool) -> Result<()> {
+	// Determine which file to open
+	let issue_path = if let Some(pat) = pattern {
+		resolve_issue_file(&pat)?
+	} else {
+		// Use current blocker issue
+		get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker set-project --integrated <pattern>` first."))?
+	};
 
-			// Open the file with $EDITOR
-			v_utils::io::file_open::open(&issue_path).await?;
+	// Open the file with $EDITOR
+	v_utils::io::file_open::open(&issue_path).await?;
 
-			// If set_after flag is set, update the current blocker issue
-			if set_after {
-				set_current_blocker_issue(&issue_path)?;
+	// If set_after flag is set, update the current blocker issue
+	if set_after {
+		set_current_blocker_issue(&issue_path)?;
 
-				// Get relative path for display
-				let issues_dir = issues_dir();
-				let rel_path = issue_path
-					.strip_prefix(&issues_dir)
-					.map(|p| p.to_string_lossy().to_string())
-					.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
+		// Get relative path for display
+		let issues_dir = issues_dir();
+		let rel_path = issue_path
+			.strip_prefix(&issues_dir)
+			.map(|p| p.to_string_lossy().to_string())
+			.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
 
-				println!("Set blocker file: {rel_path}");
-			}
-		}
-
-		IntegrationCommand::Pop => {
-			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker-integrated set <pattern>` first."))?;
-
-			let content = std::fs::read_to_string(&issue_path)?;
-
-			if let Some(mut blockers) = extract_blockers_section(&content) {
-				// Get the current blocker before popping (for display)
-				let current_before = blockers.current();
-
-				// Pop the last blocker
-				blockers.pop()?;
-
-				// Update the issue file with new blockers section
-				if let Some(updated_content) = update_blockers_in_issue(&content, &blockers) {
-					std::fs::write(&issue_path, updated_content)?;
-
-					if let Some(popped) = current_before {
-						let stripped = strip_blocker_prefix(&popped);
-						println!("Popped: {stripped}");
-					}
-
-					// Show new current blocker
-					if let Some(new_current) = get_current_blocker_with_headers(&blockers, false, Some(&issue_path)) {
-						println!("Current: {new_current}");
-					} else {
-						println!("Blockers section is now empty.");
-					}
-				} else {
-					bail!("Failed to update blockers section in issue file.");
-				}
-			} else {
-				bail!("No <!--blockers--> marker found in issue body.");
-			}
-		}
+		println!("Set blocker file: {rel_path}");
 	}
 
 	Ok(())

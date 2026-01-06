@@ -49,28 +49,21 @@ impl BlockerSequence {
 			.map(|s| s.to_owned())
 	}
 
-	/// Get the current blocker with parent headers prepended (joined by ": ")
-	/// If `fully_qualified` is true, prepend the project name from the relative_path
-	pub fn current_with_headers(&self, fully_qualified: bool, project_name: Option<&str>) -> Option<String> {
+	/// Get the current blocker with context prepended (joined by ": ").
+	///
+	/// `ownership_hierarchy` is a list of parent context items to prepend before the
+	/// blocker's own headers. This could be workspace, project, issue title, etc.
+	/// The caller is responsible for building this hierarchy based on their context.
+	pub fn current_with_context(&self, ownership_hierarchy: &[String]) -> Option<String> {
 		let current = self.current()?;
 		let stripped = strip_blocker_prefix(&current);
 
 		let parent_headers = parse_parent_headers(&self.content, &current);
 
-		// Build final output with parent headers
-		let mut parts = Vec::new();
+		// Build final output: ownership hierarchy + blocker headers + task
+		let mut parts: Vec<&str> = ownership_hierarchy.iter().map(|s| s.as_str()).collect();
+		parts.extend(parent_headers.iter().map(|s| s.as_str()));
 
-		// Add project name if fully_qualified is true
-		if fully_qualified {
-			if let Some(name) = project_name {
-				parts.push(name.to_string());
-			}
-		}
-
-		// Add parent headers
-		parts.extend(parent_headers);
-
-		// Add the stripped task
 		if parts.is_empty() {
 			Some(stripped.to_string())
 		} else {
@@ -172,15 +165,23 @@ mod tests {
 	}
 
 	#[test]
-	fn test_current_with_headers() {
+	fn test_current_with_context_no_hierarchy() {
 		let seq = BlockerSequence::new("# Phase 1\n- task 1\n# Phase 2\n- task 2".to_string());
-		assert_eq!(seq.current_with_headers(false, None), Some("Phase 2: task 2".to_string()));
+		assert_eq!(seq.current_with_context(&[]), Some("Phase 2: task 2".to_string()));
 	}
 
 	#[test]
-	fn test_current_with_headers_fully_qualified() {
+	fn test_current_with_context_with_hierarchy() {
 		let seq = BlockerSequence::new("# Phase 1\n- task 1".to_string());
-		assert_eq!(seq.current_with_headers(true, Some("project")), Some("project: Phase 1: task 1".to_string()));
+		let hierarchy = vec!["project".to_string()];
+		assert_eq!(seq.current_with_context(&hierarchy), Some("project: Phase 1: task 1".to_string()));
+	}
+
+	#[test]
+	fn test_current_with_context_multi_level_hierarchy() {
+		let seq = BlockerSequence::new("# Section\n- task".to_string());
+		let hierarchy = vec!["workspace".to_string(), "project".to_string()];
+		assert_eq!(seq.current_with_context(&hierarchy), Some("workspace: project: Section: task".to_string()));
 	}
 
 	#[test]

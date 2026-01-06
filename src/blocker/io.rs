@@ -76,21 +76,25 @@ pub enum Command {
 		/// Mark as urgent (equivalent to --file-path urgent, opens urgent.md)
 		#[arg(short = 'u', long)]
 		urgent: bool,
+		/// Use issue files instead of standalone blocker files
+		#[arg(short = 'i', long)]
+		integrated: bool,
 	},
 	/// Set the default `--relative_path`, for the project you're working on currently.
 	SetProject {
-		relative_path: String,
+		/// Pattern to match (standalone: relative path, integrated: issue pattern)
+		pattern: String,
 		/// Create the file if it doesn't exist (touch)
 		#[arg(short = 't', long)]
 		touch: bool,
+		/// Use issue files instead of standalone blocker files
+		#[arg(short = 'i', long)]
+		integrated: bool,
 	},
 	/// Resume tracking time on the current blocker task via Clockify
 	Resume(ResumeArgs),
 	/// Pause tracking time via Clockify
 	Halt(HaltArgs),
-	/// Apply formatting to the blocker file.
-	/// Here mostly for completeness, as formatting is automatically applied on all the provided methods for natively modifying the file.
-	Format,
 }
 
 fn get_current_blocker_cache_path(relative_path: &str) -> std::path::PathBuf {
@@ -128,12 +132,23 @@ fn save_blocker_sequence(relative_path: &str, seq: &BlockerSequence) -> Result<(
 	Ok(())
 }
 
+/// Build the ownership hierarchy for a blocker file.
+/// If fully_qualified is true, includes the project name extracted from relative_path.
+fn build_ownership_hierarchy(relative_path: &str, fully_qualified: bool) -> Vec<String> {
+	if fully_qualified {
+		if let Some(project_name) = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str()) {
+			return vec![project_name.to_string()];
+		}
+	}
+	Vec::new()
+}
+
 /// Get the current blocker with parent headers prepended (joined by ": ")
 /// If fully_qualified is true, prepend the project name from the relative_path
 fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) -> Option<String> {
 	let seq = load_blocker_sequence(relative_path);
-	let project_name = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str());
-	seq.current_with_headers(fully_qualified, project_name)
+	let hierarchy = build_ownership_hierarchy(relative_path, fully_qualified);
+	seq.current_with_context(&hierarchy)
 }
 
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
@@ -421,7 +436,13 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			touch,
 			set_project_after,
 			urgent,
+			integrated,
 		} => {
+			if integrated {
+				// Delegate to integration module for issue file handling
+				return super::integration::handle_open(file_path, set_project_after).await;
+			}
+
 			// Save current blocker state to cache before opening
 			let seq = load_blocker_sequence(&relative_path);
 			save_current_blocker_cache(&relative_path, seq.current())?;
@@ -472,9 +493,14 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				spawn_blocker_comparison_process(resolved_path.clone())?;
 			}
 		}
-		Command::SetProject { relative_path, touch } => {
+		Command::SetProject { pattern, touch, integrated } => {
+			if integrated {
+				// Delegate to integration module for issue file handling
+				return super::integration::handle_set(&pattern).await;
+			}
+
 			// Resolve the project path using pattern matching
-			let resolved_path = resolve_project_path(&relative_path, touch)?;
+			let resolved_path = resolve_project_path(&pattern, touch)?;
 
 			// Create the file if it doesn't exist and touch flag is set
 			if touch {
@@ -515,44 +541,6 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 
 			let workspace = workspace_from_path.as_deref().or(halt_args.workspace.as_deref());
 			clockify::stop_current_tracking(workspace).await?;
-		}
-		Command::Format => {
-			// Read, format, and write back the blocker file
-			if blocker_path.exists() {
-				let content = std::fs::read_to_string(&blocker_path)?;
-				// Normalize content based on file extension (e.g., convert .typ to markdown)
-				let normalized = normalize_content_by_extension(&content, &blocker_path)?;
-				let formatted = format_blocker_content(&normalized)?;
-
-				// Check if this is a Typst file that needs to be converted to markdown
-				let extension = blocker_path.extension().and_then(|e| e.to_str());
-				let (write_path, new_relative_path) = if extension == Some("typ") {
-					// Convert .typ to .md
-					let new_path = blocker_path.with_extension("md");
-					let new_rel = relative_path.strip_suffix(".typ").unwrap_or(&relative_path).to_string() + ".md";
-					(new_path, new_rel)
-				} else {
-					(blocker_path.clone(), relative_path.clone())
-				};
-
-				if content != formatted {
-					std::fs::write(&write_path, formatted)?;
-					// If we converted from .typ to .md, remove the old .typ file
-					if extension == Some("typ") {
-						std::fs::remove_file(&blocker_path)?;
-						println!("Converted and formatted blocker file: {relative_path} -> {new_relative_path}");
-					} else {
-						println!("Formatted blocker file: {relative_path}");
-					}
-				} else {
-					println!("Blocker file already formatted: {relative_path}");
-				}
-
-				// Cleanup urgent file if it's now empty
-				cleanup_urgent_file_if_empty(&relative_path).await?;
-			} else {
-				return Err(eyre!("Blocker file does not exist: {}", relative_path));
-			}
 		}
 	};
 	Ok(())
