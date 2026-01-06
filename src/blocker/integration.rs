@@ -450,7 +450,7 @@ pub async fn main_integrated(command: super::io::Command) -> Result<()> {
 			let content = source.load()?;
 			if content.is_empty() {
 				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
-				println!("No `{}` marker found in issue body.", marker);
+				println!("No `{marker}` marker found in issue body.");
 			} else {
 				let seq = BlockerSequence::new(content);
 				if let Some(current) = seq.current_with_context(&[]) {
@@ -491,7 +491,7 @@ pub async fn main_integrated(command: super::io::Command) -> Result<()> {
 
 			if content.is_empty() {
 				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
-				println!("No `{}` marker found in issue body.", marker);
+				println!("No `{marker}` marker found in issue body.");
 			} else {
 				let seq = BlockerSequence::new(content);
 				let items = seq.list();
