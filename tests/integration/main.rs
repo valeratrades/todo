@@ -4,16 +4,13 @@ use std::sync::OnceLock;
 
 static BINARY_COMPILED: OnceLock<()> = OnceLock::new();
 
-/// Compile the binary with is_integration_test feature before running any tests
+/// Compile the binary before running any tests
 pub fn ensure_binary_compiled() {
 	BINARY_COMPILED.get_or_init(|| {
-		let status = std::process::Command::new("cargo")
-			.args(["build", "--features", "is_integration_test"])
-			.status()
-			.expect("Failed to execute cargo build");
+		let status = std::process::Command::new("cargo").args(["build"]).status().expect("Failed to execute cargo build");
 
 		if !status.success() {
-			panic!("Failed to build binary with is_integration_test feature");
+			panic!("Failed to build binary");
 		}
 	});
 }
@@ -21,8 +18,3 @@ pub fn ensure_binary_compiled() {
 mod blocker_format;
 mod blocker_project_resolution;
 mod fixtures;
-mod open_sub_issues;
-#[macro_use]
-mod tracing_utils;
-mod tracing_verification;
-// mod config_warnings; //dbg: temporarily disabled, as we're failing to make directory for `STATE_DIR` while in nixos eval env

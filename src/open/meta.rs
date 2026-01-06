@@ -35,6 +35,13 @@ pub struct ProjectMeta {
 	pub repo: String,
 	/// Map from issue number to its metadata
 	pub issues: HashMap<u64, IssueMetaEntry>,
+	/// Virtual project: has no GitHub remote, all operations are offline-only.
+	/// Issue numbers are locally generated (starting from 1).
+	#[serde(default)]
+	pub virtual_project: bool,
+	/// Next issue number for virtual projects (auto-incremented)
+	#[serde(default)]
+	pub next_virtual_issue_number: u64,
 }
 
 /// Get the metadata file path for a project
@@ -50,11 +57,15 @@ pub fn load_project_meta(owner: &str, repo: &str) -> ProjectMeta {
 			owner: owner.to_string(),
 			repo: repo.to_string(),
 			issues: HashMap::new(),
+			virtual_project: false,
+			next_virtual_issue_number: 0,
 		}),
 		Err(_) => ProjectMeta {
 			owner: owner.to_string(),
 			repo: repo.to_string(),
 			issues: HashMap::new(),
+			virtual_project: false,
+			next_virtual_issue_number: 0,
 		},
 	}
 }
@@ -104,4 +115,53 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 		.parse()?;
 
 	get_issue_meta(&owner, &repo, issue_number).ok_or_else(|| eyre!("No metadata found for issue #{issue_number}"))
+}
+
+/// Check if a project is virtual (has no GitHub remote)
+pub fn is_virtual_project(owner: &str, repo: &str) -> bool {
+	load_project_meta(owner, repo).virtual_project
+}
+
+/// Allocate the next issue number for a virtual project.
+/// Returns the allocated number and saves the updated meta.
+pub fn allocate_virtual_issue_number(owner: &str, repo: &str) -> Result<u64> {
+	let mut project_meta = load_project_meta(owner, repo);
+	if !project_meta.virtual_project {
+		return Err(eyre!("Cannot allocate virtual issue number for non-virtual project {owner}/{repo}"));
+	}
+
+	// Ensure we start from 1
+	if project_meta.next_virtual_issue_number == 0 {
+		project_meta.next_virtual_issue_number = 1;
+	}
+
+	let issue_number = project_meta.next_virtual_issue_number;
+	project_meta.next_virtual_issue_number += 1;
+	save_project_meta(&project_meta)?;
+
+	Ok(issue_number)
+}
+
+/// Create or load a virtual project meta. If project doesn't exist, creates it as virtual.
+/// If it exists and is not virtual, returns an error.
+pub fn ensure_virtual_project(owner: &str, repo: &str) -> Result<ProjectMeta> {
+	let meta_path = get_project_meta_path(owner, repo);
+	if meta_path.exists() {
+		let project_meta = load_project_meta(owner, repo);
+		if !project_meta.virtual_project {
+			return Err(eyre!("Project {owner}/{repo} exists but is not a virtual project"));
+		}
+		Ok(project_meta)
+	} else {
+		// Create new virtual project
+		let project_meta = ProjectMeta {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+			issues: HashMap::new(),
+			virtual_project: true,
+			next_virtual_issue_number: 1,
+		};
+		save_project_meta(&project_meta)?;
+		Ok(project_meta)
+	}
 }

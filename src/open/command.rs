@@ -8,8 +8,9 @@ use v_utils::prelude::*;
 use super::{
 	fetch::fetch_and_store_issue,
 	files::{choose_issue_with_fzf, search_issue_files},
+	meta::is_virtual_project,
 	sync::open_local_issue,
-	touch::{create_issue_on_github, find_local_issue_for_touch, parse_touch_path},
+	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 	util::Extension,
 };
 use crate::{
@@ -48,6 +49,15 @@ pub struct OpenArgs {
 	/// Open the most recently modified issue file
 	#[arg(short, long)]
 	pub last: bool,
+
+	/// Skip all network operations - edit locally only, don't sync to GitHub
+	#[arg(long)]
+	pub offline: bool,
+
+	/// Fetch latest from GitHub before opening. If remote differs from local,
+	/// prompts: [s]kip (use local), [o]verwrite (use remote), [m]erge (attempt merge)
+	#[arg(short, long)]
+	pub pull: bool,
 }
 
 /// Get the effective extension from args, config, or default
@@ -69,9 +79,11 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 	Extension::Md
 }
 
-pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs) -> Result<()> {
+pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, global_offline: bool) -> Result<()> {
 	let input = args.url_or_pattern.as_deref().unwrap_or("").trim();
 	let extension = get_effective_extension(args.extension, settings);
+	// Combine global --offline with subcommand --offline
+	let offline = global_offline || args.offline;
 
 	// Handle --last mode: open the most recently modified issue file
 	if args.last {
@@ -80,7 +92,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
 		}
 		// Files are already sorted by modification time (most recent first)
-		open_local_issue(&gh, &all_files[0]).await?;
+		open_local_issue(&gh, &all_files[0], offline).await?;
 		return Ok(());
 	}
 
@@ -91,24 +103,40 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		// Determine the extension to use
 		let effective_ext = touch_path.extension.unwrap_or(extension);
 
+		// Check if the project is virtual
+		let project_is_virtual = is_virtual_project(&touch_path.owner, &touch_path.repo);
+
 		// First, try to find an existing local issue file
 		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {:?}", existing_path);
-			open_local_issue(&gh, &existing_path).await?;
+			let effective_offline = offline || project_is_virtual;
+			open_local_issue(&gh, &existing_path, effective_offline).await?;
 			return Ok(());
 		}
 
-		// Not found locally - create on GitHub
-		let issue_file_path = create_issue_on_github(&gh, &touch_path, &effective_ext).await?;
+		// Not found locally - create a local file
+		let issue_file_path = if project_is_virtual {
+			// Virtual project: stays local forever
+			println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
+			create_virtual_issue(&touch_path, &effective_ext)?
+		} else {
+			// Real project: create pending issue (will be created on GitHub when editor closes)
+			create_pending_issue(&touch_path, &effective_ext)?
+		};
 
-		// Open the local issue file for editing
-		open_local_issue(&gh, &issue_file_path).await?;
+		// Open for editing - sync will create on GitHub if pending
+		let effective_offline = offline || project_is_virtual;
+		open_local_issue(&gh, &issue_file_path, effective_offline).await?;
 		return Ok(());
 	}
 
 	// Check if input is a GitHub issue URL specifically (not just any GitHub URL)
 	if github::is_github_issue_url(input) {
-		// GitHub URL mode: fetch issue and store in XDG_DATA
+		// GitHub URL mode: fetch issue and store in XDG_DATA (can't be offline)
+		if offline {
+			return Err(eyre!("Cannot fetch issue from URL in offline mode"));
+		}
+
 		let (owner, repo, issue_number) = github::parse_github_issue_url(input)?;
 
 		println!("Fetching issue #{issue_number} from {owner}/{repo}...");
@@ -119,7 +147,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		println!("Stored issue at: {:?}", issue_file_path);
 
 		// Open the local issue file for editing
-		open_local_issue(&gh, &issue_file_path).await?;
+		open_local_issue(&gh, &issue_file_path, offline).await?;
 		return Ok(());
 	}
 
@@ -127,7 +155,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	let input_path = Path::new(input);
 	if input_path.exists() && input_path.is_file() {
 		// Direct file path - open it
-		open_local_issue(&gh, input_path).await?;
+		open_local_issue(&gh, input_path, offline).await?;
 		return Ok(());
 	}
 
@@ -157,7 +185,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	};
 
 	// Open the local issue file for editing
-	open_local_issue(&gh, &issue_file_path).await?;
+	open_local_issue(&gh, &issue_file_path, offline).await?;
 
 	Ok(())
 }

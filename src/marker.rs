@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use todo::Extension;
+use todo::{Extension, Header};
 
 /// A marker that can appear in issue files.
 /// All markers normalize whitespace on decode and encode with consistent spacing.
@@ -20,9 +20,10 @@ pub enum Marker {
 	Comment { url: String, id: u64, immutable: bool },
 	/// New comment marker: `<!-- new comment -->`
 	NewComment,
-	/// Blockers section marker: `# Blockers` (md) or `// blockers` (typst)
-	/// Must be the entire line content (after stripping leading whitespace).
-	BlockersSection,
+	/// Blockers section marker: `# Blockers` (md) or `= Blockers` (typst)
+	/// Uses the Header type for format-aware encoding/decoding.
+	/// Legacy formats (`// blockers`, `<!-- blockers -->`) are still decoded but encode to Header format.
+	BlockersSection(Header),
 	/// Omitted content marker: `<!-- omitted -->`
 	Omitted,
 	/// Omitted with hint: `<!-- omitted (use --render-closed to unfold) -->`
@@ -34,21 +35,77 @@ impl Marker {
 	/// For BlockersSection, the entire line (after trimming) must match.
 	/// For other markers, decodes the HTML comment content.
 	/// Returns None if the string doesn't contain a recognized marker.
-	pub fn decode(s: &str, _ext: Extension) -> Option<Self> {
+	pub fn decode(s: &str, ext: Extension) -> Option<Self> {
 		let trimmed = s.trim();
 
-		// Check for markdown header blockers marker: # Blockers, ## Blockers, etc.
-		// Must be the entire line content
-		if let Some(rest) = trimmed.to_ascii_lowercase().strip_prefix('#') {
-			let rest = rest.trim_start_matches('#');
-			if rest.trim().trim_end_matches(':') == "blockers" {
-				return Some(Marker::BlockersSection);
+		// Check for header-based blockers marker using the Header type
+		// This handles both `# Blockers` (md) and `= Blockers` (typ)
+		if let Some(header) = Header::decode(trimmed, ext) {
+			let content_lower = header.content.to_ascii_lowercase();
+			let content_trimmed = content_lower.trim_end_matches(':');
+			if content_trimmed == "blockers" || content_trimmed == "blocker" {
+				return Some(Marker::BlockersSection(header));
 			}
 		}
 
-		// Check for typst blockers marker - must be exact match
+		// Legacy: Check for typst comment-style blockers marker `// blockers`
+		// Decodes to Header format for consistency
 		if trimmed.eq_ignore_ascii_case("// blockers") || trimmed.eq_ignore_ascii_case("// blocker") {
-			return Some(Marker::BlockersSection);
+			return Some(Marker::BlockersSection(Header::new(1, "Blockers")));
+		}
+
+		// Check for typst comment markers: `// url`, `// immutable url`, `// sub url`, etc.
+		if ext == Extension::Typ
+			&& let Some(inner) = trimmed.strip_prefix("// ")
+		{
+			let inner = inner.trim();
+			let lower = inner.to_ascii_lowercase();
+
+			// New comment
+			if lower == "new comment" {
+				return Some(Marker::NewComment);
+			}
+
+			// Omitted variants
+			if lower == "omitted" {
+				return Some(Marker::Omitted);
+			}
+			if lower.starts_with("omitted") && lower.contains("render-closed") {
+				return Some(Marker::OmittedWithHint);
+			}
+
+			// Check for immutable prefix
+			let (immutable, rest) = if let Some(rest) = inner.strip_prefix("immutable ").or_else(|| inner.strip_prefix("immutable\t")) {
+				(true, rest.trim())
+			} else {
+				(false, inner)
+			};
+
+			// Sub-issue marker
+			if let Some(url) = rest.strip_prefix("sub ").or_else(|| rest.strip_prefix("sub\t")) {
+				return Some(Marker::SubIssue { url: url.trim().to_string() });
+			}
+
+			// Comment marker (contains #issuecomment-)
+			if rest.contains("#issuecomment-") {
+				let id = rest.split("#issuecomment-").nth(1).and_then(|s| {
+					// Take only digits
+					let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+					digits.parse().ok()
+				});
+				if let Some(id) = id {
+					return Some(Marker::Comment {
+						url: rest.to_string(),
+						id,
+						immutable,
+					});
+				}
+			}
+
+			// Issue URL marker (anything else is treated as a URL)
+			if !rest.is_empty() {
+				return Some(Marker::IssueUrl { url: rest.to_string(), immutable });
+			}
 		}
 
 		// Check for HTML comment markers
@@ -60,9 +117,10 @@ impl Marker {
 		let inner = trimmed.strip_prefix("<!--")?.strip_suffix("-->")?.trim();
 		let lower = inner.to_ascii_lowercase();
 
-		// Blockers (legacy) - entire comment must be just "blockers"
+		// Blockers (legacy HTML comment) - entire comment must be just "blockers"
+		// Decodes to Header format for consistency
 		if lower == "blockers" || lower == "blocker" {
-			return Some(Marker::BlockersSection);
+			return Some(Marker::BlockersSection(Header::new(1, "Blockers")));
 		}
 
 		// New comment
@@ -131,7 +189,7 @@ impl Marker {
 						format!("<!-- {url} -->")
 					},
 				Marker::NewComment => "<!-- new comment -->".to_string(),
-				Marker::BlockersSection => "# Blockers".to_string(),
+				Marker::BlockersSection(header) => header.encode(Extension::Md),
 				Marker::Omitted => "<!-- omitted -->".to_string(),
 				Marker::OmittedWithHint => "<!-- omitted (use --render-closed to unfold) -->".to_string(),
 			},
@@ -150,7 +208,7 @@ impl Marker {
 						format!("// {url}")
 					},
 				Marker::NewComment => "// new comment".to_string(),
-				Marker::BlockersSection => "// blockers".to_string(),
+				Marker::BlockersSection(header) => header.encode(Extension::Typ),
 				Marker::Omitted => "// omitted".to_string(),
 				Marker::OmittedWithHint => "// omitted (use --render-closed to unfold)".to_string(),
 			},
@@ -242,23 +300,47 @@ mod tests {
 
 	#[test]
 	fn test_decode_blockers_section() {
+		// Helper to check if a marker is a BlockersSection
+		fn is_blockers_section(marker: Option<Marker>) -> bool {
+			matches!(marker, Some(Marker::BlockersSection(_)))
+		}
+
 		// Markdown header (preferred)
-		assert_eq!(Marker::decode("# Blockers", Extension::Md), Some(Marker::BlockersSection));
-		assert_eq!(Marker::decode("## Blockers", Extension::Md), Some(Marker::BlockersSection));
-		assert_eq!(Marker::decode("### Blockers:", Extension::Md), Some(Marker::BlockersSection));
+		assert!(is_blockers_section(Marker::decode("# Blockers", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("## Blockers", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("### Blockers:", Extension::Md)));
 		// With leading/trailing whitespace
-		assert_eq!(Marker::decode("  # Blockers  ", Extension::Md), Some(Marker::BlockersSection));
-		// Legacy HTML comment
-		assert_eq!(Marker::decode("<!--blockers-->", Extension::Md), Some(Marker::BlockersSection));
-		assert_eq!(Marker::decode("<!-- blockers -->", Extension::Md), Some(Marker::BlockersSection));
-		assert_eq!(Marker::decode("<!--blocker-->", Extension::Md), Some(Marker::BlockersSection));
-		// Typst
-		assert_eq!(Marker::decode("// blockers", Extension::Typ), Some(Marker::BlockersSection));
-		assert_eq!(Marker::decode("// blocker", Extension::Typ), Some(Marker::BlockersSection));
+		assert!(is_blockers_section(Marker::decode("  # Blockers  ", Extension::Md)));
+		// Legacy HTML comment (converts to Header)
+		assert!(is_blockers_section(Marker::decode("<!--blockers-->", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("<!-- blockers -->", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("<!--blocker-->", Extension::Md)));
+		// Typst header format (preferred)
+		assert!(is_blockers_section(Marker::decode("= Blockers", Extension::Typ)));
+		assert!(is_blockers_section(Marker::decode("== Blockers", Extension::Typ)));
+		// Legacy typst comment format (converts to Header)
+		assert!(is_blockers_section(Marker::decode("// blockers", Extension::Typ)));
+		assert!(is_blockers_section(Marker::decode("// blocker", Extension::Typ)));
 
 		// Should NOT match if there's other content on the line
-		assert_ne!(Marker::decode("# Blockers and more", Extension::Md), Some(Marker::BlockersSection));
-		assert_ne!(Marker::decode("Some text # Blockers", Extension::Md), Some(Marker::BlockersSection));
+		assert!(!is_blockers_section(Marker::decode("# Blockers and more", Extension::Md)));
+		assert!(!is_blockers_section(Marker::decode("Some text # Blockers", Extension::Md)));
+
+		// Test that Header content and level are preserved
+		if let Some(Marker::BlockersSection(header)) = Marker::decode("## Blockers", Extension::Md) {
+			assert_eq!(header.level, 2);
+			assert_eq!(header.content, "Blockers");
+		} else {
+			panic!("Expected BlockersSection with Header");
+		}
+
+		// Test typst header format preserves level
+		if let Some(Marker::BlockersSection(header)) = Marker::decode("== Blockers", Extension::Typ) {
+			assert_eq!(header.level, 2);
+			assert_eq!(header.content, "Blockers");
+		} else {
+			panic!("Expected BlockersSection with Header");
+		}
 	}
 
 	#[test]
@@ -299,8 +381,10 @@ mod tests {
 			.encode(Extension::Md),
 			"<!--sub https://github.com/owner/repo/issues/124 -->"
 		);
-		assert_eq!(Marker::BlockersSection.encode(Extension::Md), "# Blockers");
-		assert_eq!(Marker::BlockersSection.encode(Extension::Typ), "// blockers");
+		assert_eq!(Marker::BlockersSection(Header::new(1, "Blockers")).encode(Extension::Md), "# Blockers");
+		assert_eq!(Marker::BlockersSection(Header::new(1, "Blockers")).encode(Extension::Typ), "= Blockers");
+		assert_eq!(Marker::BlockersSection(Header::new(2, "Blockers")).encode(Extension::Md), "## Blockers");
+		assert_eq!(Marker::BlockersSection(Header::new(2, "Blockers")).encode(Extension::Typ), "== Blockers");
 		assert_eq!(Marker::NewComment.encode(Extension::Md), "<!-- new comment -->");
 		assert_eq!(Marker::Omitted.encode(Extension::Md), "<!-- omitted -->");
 	}

@@ -35,7 +35,7 @@ pub async fn fetch_and_store_issue(
 	// Determine file path
 	let parent_info = parent_issue.as_ref().map(|(num, title)| (*num, title.as_str()));
 	let issue_closed = issue.state == "closed";
-	let issue_file_path = get_issue_file_path(owner, repo, issue_number, &issue.title, extension, issue_closed, parent_info);
+	let issue_file_path = get_issue_file_path(owner, repo, Some(issue_number), &issue.title, extension, issue_closed, parent_info);
 
 	// Create parent directories
 	if let Some(parent) = issue_file_path.parent() {

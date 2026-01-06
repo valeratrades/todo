@@ -1,6 +1,5 @@
 #![allow(clippy::len_zero)]
 mod blocker;
-mod blocker_rewrite;
 mod clockify;
 pub mod config;
 pub mod error;
@@ -31,6 +30,10 @@ struct Cli {
 	/// Use mock GitHub client instead of real API (for testing)
 	#[arg(long, global = true)]
 	dbg: bool,
+	/// Skip all network operations - edit locally only, don't sync to GitHub.
+	/// Automatically enabled for virtual projects (projects without GitHub remote).
+	#[arg(long, global = true)]
+	offline: bool,
 }
 
 #[derive(Subcommand)]
@@ -45,10 +48,10 @@ enum Commands {
 	Milestones(milestones::MilestonesArgs),
 	/// Shell aliases and hooks. Usage: `todos init <shell> | source`
 	Init(shell_init::ShellInitArgs),
-	/// Blockers tree
+	/// Blockers tree (standalone files)
 	Blocker(blocker::BlockerArgs),
-	/// Blocker management linked to issue files
-	BlockerRewrite(blocker_rewrite::BlockerRewriteArgs),
+	/// Blocker management integrated with issue files
+	BlockerIntegrated(blocker::IntegrationArgs),
 	/// Clockify time tracking
 	Clockify(clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
@@ -121,11 +124,11 @@ async fn main() {
 			Ok(())
 		}
 		Commands::Blocker(args) => blocker::main(&settings, args).await,
-		Commands::BlockerRewrite(args) => blocker_rewrite::main(&settings, args).await,
+		Commands::BlockerIntegrated(args) => blocker::main_integrated(&settings, args).await,
 		Commands::Clockify(args) => clockify::main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
-		Commands::Open(args) => open::open_command(&settings, github_client, args).await,
+		Commands::Open(args) => open::open_command(&settings, github_client, args, cli.offline).await,
 	};
 
 	match success {

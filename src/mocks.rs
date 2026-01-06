@@ -1,24 +1,24 @@
 use std::cell::Cell;
 
-use chrono::DateTime;
+use jiff::Timestamp;
 use tracing::instrument;
 
 thread_local! {
-	static TIMESTAMP: Cell<i64> = const { Cell::new(0) };
+	static MOCK_TIMESTAMP: Cell<Option<Timestamp>> = const { Cell::new(None) };
 }
 
-pub struct Utc;
+pub struct MockTimestamp;
 
-impl Utc {
-	#[instrument(name = "MockUtc::now")]
-	pub fn now() -> DateTime<chrono::Utc> {
-		let ts = TIMESTAMP.with(|ts| ts.get());
-		tracing::debug!(timestamp = ts, "returning mock timestamp");
-		DateTime::from_timestamp(ts, 0).unwrap()
+impl MockTimestamp {
+	#[instrument(name = "MockTimestamp::now")]
+	pub fn now() -> Timestamp {
+		let ts = MOCK_TIMESTAMP.with(|ts| ts.get());
+		tracing::debug!(?ts, "returning mock timestamp");
+		ts.unwrap_or_else(Timestamp::now)
 	}
 }
 
 #[instrument]
-pub fn set_timestamp(timestamp: i64) {
-	TIMESTAMP.with(|ts| ts.set(timestamp));
+pub fn set_timestamp(timestamp: Timestamp) {
+	MOCK_TIMESTAMP.with(|ts| ts.set(Some(timestamp)));
 }

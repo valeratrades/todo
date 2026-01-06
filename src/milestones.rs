@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
+use jiff::Timestamp;
 use reqwest::Client;
 use v_utils::prelude::*;
 
@@ -34,7 +34,7 @@ struct Milestone {
 	title: String,
 	#[serde(rename = "state")]
 	_state: String,
-	due_on: Option<DateTime<Utc>>,
+	due_on: Option<Timestamp>,
 	description: Option<String>,
 }
 
@@ -119,7 +119,7 @@ enum MilestoneError {
 	MissingDueOn,
 
 	#[error("Milestone is outdated (due_on: {due_on}). Try moving it to a later date.")]
-	MilestoneOutdated { due_on: DateTime<Utc> },
+	MilestoneOutdated { due_on: Timestamp },
 
 	#[error("Requested milestone on minute-designated timeframe (`m`). You likely meant to request Monthly (`M`).")]
 	MinuteMilestone,
@@ -146,8 +146,7 @@ fn get_milestone(tf: Timeframe, retrieved_milestones: &[Milestone]) -> Result<St
 				source: MilestoneError::MissingDueOn,
 			})?;
 
-			let diff = due_on.signed_duration_since(Utc::now());
-			if diff.num_hours() < 0 {
+			if *due_on < Timestamp::now() {
 				return Err(GetMilestoneError {
 					requested_tf: tf,
 					source: MilestoneError::MilestoneOutdated { due_on: *due_on },
@@ -246,7 +245,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 	let milestone_number = milestone.number;
 
 	// Check if milestone is outdated (due_on in the past)
-	let is_outdated = milestone.due_on.map(|d| d.signed_duration_since(Utc::now()).num_hours() < 0).unwrap_or(true);
+	let is_outdated = milestone.due_on.map(|d| d < Timestamp::now()).unwrap_or(true);
 
 	// Write to temp file
 	let tmp_path = format!("/tmp/milestone_{tf}.md");
@@ -269,11 +268,11 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 
 	// If outdated, archive old contents and update date
 	if is_outdated {
-		let new_date = Utc::now() + tf.duration();
-		println!("Milestone was outdated, updating due date to {}", new_date.format("%Y-%m-%d"));
+		let new_date = Timestamp::now() + tf.signed_duration();
+		println!("Milestone was outdated, updating due date to {}", new_date.strftime("%Y-%m-%d"));
 
 		// Archive title: "2025/12/17_1d"
-		let archive_title = format!("{}_{tf}", Utc::now().format("%Y/%m/%d"));
+		let archive_title = format!("{}_{tf}", Timestamp::now().strftime("%Y/%m/%d"));
 
 		// Run both API calls in parallel: update current milestone and create archived one
 		let (update_result, archive_result) = tokio::join!(
@@ -298,7 +297,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 	Ok(())
 }
 
-async fn update_milestone(settings: &LiveSettings, milestone_number: u64, description: &str, due_on: Option<DateTime<Utc>>) -> Result<()> {
+async fn update_milestone(settings: &LiveSettings, milestone_number: u64, description: &str, due_on: Option<Timestamp>) -> Result<()> {
 	let config = settings.config()?;
 	let milestones_config = config.milestones.as_ref().ok_or_else(|| eyre!("milestones config section is required"))?;
 
@@ -310,7 +309,7 @@ async fn update_milestone(settings: &LiveSettings, milestone_number: u64, descri
 	});
 
 	if let Some(date) = due_on {
-		body["due_on"] = serde_json::Value::String(date.to_rfc3339());
+		body["due_on"] = serde_json::Value::String(date.to_string());
 	}
 
 	let client = Client::new();

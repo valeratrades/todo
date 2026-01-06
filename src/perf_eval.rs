@@ -1,9 +1,9 @@
 use std::process::Command;
 
 use ask_llm::{ImageContent, Message, Model, Role};
-use chrono::Local;
 use clap::Args;
 use color_eyre::eyre::{Context, Result, bail};
+use jiff::Zoned;
 
 use crate::config::LiveSettings;
 
@@ -25,8 +25,8 @@ pub async fn main(_settings: &LiveSettings, args: PerfEvalArgs) -> Result<()> {
 
 	let cache_dir = v_utils::xdg_cache_dir!("perf_eval");
 
-	let now = Local::now();
-	let date_dir = cache_dir.join(now.format("%Y-%m-%d").to_string());
+	let now = Zoned::now();
+	let date_dir = cache_dir.join(now.strftime("%Y-%m-%d").to_string());
 
 	// Check for recent screenshots from watch-monitors daemon
 	if date_dir.exists() {

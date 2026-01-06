@@ -1,9 +1,21 @@
-use std::{collections::HashMap, io::Write, path::Path};
+//! File and project I/O for standalone blocker files.
+//!
+//! This module handles:
+//! - File path resolution and project management
+//! - Clockify integration (halt/resume time tracking)
+//! - Workspace settings and caching
+//! - Urgent file handling
+
+use std::{collections::HashMap, io::Write as IoWrite, path::Path};
 
 use clap::{Args, Parser, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
 use serde::{Deserialize, Serialize};
 
+use super::{
+	operations::BlockerSequence,
+	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension, strip_blocker_prefix},
+};
 use crate::{clockify, milestones::SPRINT_HEADER_REL_PATH};
 
 fn blockers_dir() -> std::path::PathBuf {
@@ -29,10 +41,10 @@ struct WorkspaceCache {
 #[derive(Args, Clone, Debug)]
 pub struct BlockerArgs {
 	#[command(subcommand)]
-	command: Command,
+	pub command: Command,
 	#[arg(short, long)]
 	/// The relative path of the blocker file. Will be appended to the state directory. If contains one slash, the folder name will be used as workspace filter. Can have any text-based format
-	relative_path: Option<String>,
+	pub relative_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -167,489 +179,26 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 	std::fs::read_to_string(&cache_path).ok()
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum HeaderLevel {
-	One,
-	Two,
-	Three,
-	Four,
-	Five,
-}
-
-impl HeaderLevel {
-	/// Get the numeric level (1-5)
-	fn to_usize(self) -> usize {
-		match self {
-			HeaderLevel::One => 1,
-			HeaderLevel::Two => 2,
-			HeaderLevel::Three => 3,
-			HeaderLevel::Four => 4,
-			HeaderLevel::Five => 5,
-		}
-	}
-
-	/// Create from numeric level (1-5)
-	fn from_usize(level: usize) -> Option<Self> {
-		match level {
-			1 => Some(HeaderLevel::One),
-			2 => Some(HeaderLevel::Two),
-			3 => Some(HeaderLevel::Three),
-			4 => Some(HeaderLevel::Four),
-			5 => Some(HeaderLevel::Five),
-			_ => None,
-		}
-	}
-}
-
-/// Line classification for blocker files
-#[derive(Clone, Debug, PartialEq)]
-pub enum LineType {
-	/// Header with level and text (without # prefix)
-	Header { level: HeaderLevel, text: String },
-	/// List item or other content line (contributes to blocker list)
-	Item,
-	/// Comment line - tab-indented explanatory text (does not contribute to blocker list)
-	Comment,
-}
-
-impl LineType {
-	/// Check if this line type is a header
-	#[allow(dead_code)]
-	fn is_header(&self) -> bool {
-		matches!(self, LineType::Header { .. })
-	}
-
-	/// Get the header level, or None if not a header
-	#[allow(dead_code)]
-	fn header_level(&self) -> Option<HeaderLevel> {
-		match self {
-			LineType::Header { level, .. } => Some(*level),
-			_ => None,
-		}
-	}
-
-	/// Get the header text, or None if not a header
-	#[allow(dead_code)]
-	fn header_text(&self) -> Option<&str> {
-		match self {
-			LineType::Header { text, .. } => Some(text),
-			_ => None,
-		}
-	}
-
-	/// Check if this line type contributes to the blocker list (headers and items)
-	pub fn is_content(&self) -> bool {
-		!matches!(self, LineType::Comment)
-	}
-}
-
-/// Normalize content based on file extension
-/// Converts file-specific syntax to a canonical markdown-like format:
-/// - .md: pass through as-is
-/// - .typ: convert Typst syntax to markdown (= to #, etc.)
-/// - other: pass through as-is
-fn normalize_content_by_extension(content: &str, file_path: &Path) -> Result<String> {
-	let extension = file_path.extension().and_then(|e| e.to_str());
-
-	match extension {
-		Some("md") => Ok(content.to_string()),
-		Some("typ") => typst_to_markdown(content),
-		_ => Ok(content.to_string()),
-	}
-}
-
-/// Convert Typst syntax to markdown format
-/// Typst uses = for headings (more = means deeper), we convert to # (more # means deeper)
-/// Typst list syntax is similar to markdown (- for bullets)
-fn typst_to_markdown(content: &str) -> Result<String> {
-	use typst::syntax::{SyntaxKind, ast::AstNode, parse};
-
-	// Parse the Typst source into a syntax tree
-	let syntax_node = parse(content);
-
-	// Walk the syntax tree and convert to markdown
-	let mut markdown_lines: Vec<String> = Vec::new();
-
-	// Traverse the syntax tree
-	for child in syntax_node.children() {
-		// Skip pure whitespace nodes (space, parbreak)
-		if matches!(child.kind(), SyntaxKind::Space | SyntaxKind::Parbreak) {
-			// Check if this is a significant parbreak (actual empty line in source)
-			let text = child.text();
-			if text.matches('\n').count() > 1 {
-				// Multiple newlines = intentional empty line
-				markdown_lines.push(String::new());
-			}
-			continue;
-		}
-
-		// Get the text content of this node
-		let node_text = child.clone().into_text();
-
-		// Try to interpret as Heading
-		if let Some(heading) = typst::syntax::ast::Heading::from_untyped(child) {
-			let level_num = heading.depth().get();
-			// Extract just the body text (without the = prefix)
-			let body_text = heading.body().to_untyped().clone().into_text();
-			let trimmed_body = body_text.trim();
-			// Convert Typst heading (= foo) to markdown heading (# foo)
-			markdown_lines.push(format!("{} {trimmed_body}", "#".repeat(level_num)));
-			continue;
-		}
-
-		// Try to interpret as ListItem (bullet list)
-		// Typst uses "- item" which is identical to markdown, so just keep it
-		if let Some(_list_item) = typst::syntax::ast::ListItem::from_untyped(child) {
-			let trimmed = node_text.trim();
-			if !trimmed.is_empty() {
-				markdown_lines.push(trimmed.to_string());
-			}
-			continue;
-		}
-
-		// Try to interpret as EnumItem (numbered list)
-		// Convert numbered lists to markdown-style items with "- " prefix
-		if let Some(_enum_item) = typst::syntax::ast::EnumItem::from_untyped(child) {
-			let trimmed = node_text.trim();
-			if !trimmed.is_empty() {
-				// For numbered items, just treat as regular items
-				// Strip the number/+ prefix and convert to -
-				let item_text = if let Some(stripped) = trimmed.strip_prefix('+') {
-					stripped.trim()
-				} else {
-					// Handle numbered format like "1. item"
-					if let Some(pos) = trimmed.find('.') { trimmed[pos + 1..].trim() } else { trimmed }
-				};
-				markdown_lines.push(format!("- {item_text}"));
-			}
-			continue;
-		}
-
-		// For other content (paragraphs, text), keep as-is if non-empty
-		let trimmed = node_text.trim();
-		if !trimmed.is_empty() {
-			markdown_lines.push(trimmed.to_string());
-		}
-	}
-
-	Ok(markdown_lines.join("\n"))
-}
-
-/// Classify a line based on markdown syntax
-/// - Lines starting with tab are Comments
-/// - Lines starting with 2+ spaces (likely editor-converted tabs) are Comments
-/// - Lines starting with # are Headers (levels 1-5)
-/// - All other non-empty lines are Items
-/// - Returns None for empty lines
-fn classify_line_markdown(line: &str) -> Option<LineType> {
-	if line.is_empty() {
-		return None;
-	}
-
-	if line.starts_with('\t') {
-		return Some(LineType::Comment);
-	}
-
-	// Treat lines starting with 2+ spaces as comments (likely from editor tab-to-space conversion)
-	// We check for at least 2 spaces to avoid misclassifying accidentally indented content
-	if line.starts_with("  ") && !line.trim_start().starts_with('-') {
-		return Some(LineType::Comment);
-	}
-
-	let trimmed = line.trim();
-
-	// Check for headers (# with space after)
-	if trimmed.starts_with('#') {
-		let mut count = 0;
-		for ch in trimmed.chars() {
-			if ch == '#' {
-				count += 1;
-			} else {
-				break;
-			}
-		}
-
-		// Valid header must have space after the # characters
-		if count > 0 && trimmed.len() > count {
-			let next_char = trimmed.chars().nth(count);
-			if next_char == Some(' ') {
-				let text = trimmed[count + 1..].to_string();
-
-				// Warn if header is nested too deeply (level > 5)
-				if count > 5 {
-					eprintln!("Warning: Header level {count} is too deep (max 5 supported). Treating as regular item: {trimmed}");
-					return Some(LineType::Item);
-				}
-
-				if let Some(level) = HeaderLevel::from_usize(count) {
-					return Some(LineType::Header { level, text });
-				}
-			}
-		}
-	}
-
-	Some(LineType::Item)
-}
-
-/// Classify a line based on its content (backwards compatibility wrapper)
-/// Uses markdown classification by default
-pub fn classify_line(line: &str) -> Option<LineType> {
-	classify_line_markdown(line)
-}
-
-/// Check if the content is semantically empty (only comments or whitespace, no actual content)
-fn is_semantically_empty(content: &str) -> bool {
-	content.lines().filter_map(classify_line).all(|line_type| !line_type.is_content())
-}
-
-/// Format blocker list content according to standardization rules:
-/// 1. Lines not starting with `^#* ` get prefixed with `- ` (markdown list format)
-/// 2. Always have 1 empty line above `^#* ` lines (unless the line above also starts with `#`)
-/// 3. Remove all other empty lines for standardization
-/// 4. Comment lines (tab-indented) are preserved and must follow Content or Comment lines
-/// 5. Code blocks (``` ... ```) within comments can contain blank lines
-fn format_blocker_content(content: &str) -> Result<String> {
-	let lines: Vec<&str> = content.lines().collect();
-
-	// First pass: validate that comments don't follow empty lines (outside of code blocks)
-	let mut in_code_block = false;
-	for (idx, line) in lines.iter().enumerate() {
-		// Track code block state - code blocks in comments are tab-indented with ```
-		let trimmed = line.trim_start_matches('\t').trim_start();
-		if trimmed.starts_with("```") {
-			in_code_block = !in_code_block;
-		}
-
-		// Skip validation inside code blocks - blank lines are allowed there
-		if in_code_block {
-			continue;
-		}
-
-		if let Some(LineType::Comment) = classify_line(line) {
-			// Check if previous line was empty
-			if idx > 0 && lines[idx - 1].is_empty() {
-				return Err(eyre!(
-					"Comment line at position {} cannot follow an empty line. Comments must follow content or other comments.",
-					idx + 1
-				));
-			}
-			// Check if it's the first line
-			if idx == 0 {
-				return Err(eyre!(
-					"Comment line at position {} cannot be first line. Comments must follow content or other comments.",
-					idx + 1
-				));
-			}
-		}
-	}
-
-	let mut formatted_lines: Vec<String> = Vec::new();
-	let mut in_code_block = false;
-
-	for line in lines.iter() {
-		// Track code block state for formatting
-		let trimmed_for_code = line.trim_start_matches('\t').trim_start();
-		if trimmed_for_code.starts_with("```") {
-			in_code_block = !in_code_block;
-		}
-
-		let line_type = classify_line(line);
-
-		match line_type {
-			None => {
-				// Preserve empty lines inside code blocks, skip others
-				if in_code_block {
-					formatted_lines.push(String::new());
-				}
-				continue;
-			}
-			Some(LineType::Comment) => {
-				// Normalize comment lines to tab indentation (convert leading spaces to tab)
-				if line.starts_with('\t') {
-					// Already tab-indented, preserve as-is
-					formatted_lines.push(line.to_string());
-				} else {
-					// Space-indented, convert to tab
-					let trimmed = line.trim_start();
-					formatted_lines.push(format!("\t{trimmed}"));
-				}
-			}
-			Some(LineType::Header { level, text }) => {
-				// Check if we need an empty line before this header
-				if !formatted_lines.is_empty() {
-					let last_line = formatted_lines.last().unwrap();
-					let prev_line_type = classify_line(last_line);
-
-					// Add empty line based on header level relationship:
-					// - No space if previous is larger rank (smaller level value) than current
-					// - Space if previous is same or lower rank (same/larger level value) than current
-					// - Space if previous line is not a header
-					let needs_space = match prev_line_type {
-						Some(LineType::Header { level: prev_level, .. }) => {
-							// Using derived Ord: One < Two < Three < Four < Five
-							prev_level >= level // same or lower rank (e.g., ## after # or ##)
-						}
-						_ => true, // previous line is not a header
-					};
-
-					if needs_space {
-						formatted_lines.push(String::new());
-					}
-				}
-
-				// Reconstruct the header line
-				let header_prefix = "#".repeat(level.to_usize());
-				formatted_lines.push(format!("{header_prefix} {text}"));
-			}
-			Some(LineType::Item) => {
-				let trimmed = line.trim();
-				// Ensure it starts with "- "
-				if trimmed.starts_with("- ") {
-					formatted_lines.push(trimmed.to_string());
-				} else {
-					formatted_lines.push(format!("- {trimmed}"));
-				}
-			}
-		}
-	}
-
-	Ok(formatted_lines.join("\n"))
-}
-
-/// Add a content line to the blocker file, preserving comments and formatting
-fn add_content_line(content: &str, new_line: &str) -> Result<String> {
-	// Parse content into lines, add the new content line, then format
-	let mut lines: Vec<&str> = content.lines().collect();
-	lines.push(new_line);
-	format_blocker_content(&lines.join("\n"))
-}
-
-/// Remove the last content line from the blocker file, preserving comments (except comments belonging to the removed line)
-fn pop_content_line(content: &str) -> Result<String> {
-	let lines: Vec<&str> = content.lines().collect();
-	let mut content_lines_indices: Vec<usize> = Vec::new();
-
-	// Find indices of all content lines (headers and items, not comments)
-	for (idx, line) in lines.iter().enumerate() {
-		if let Some(line_type) = classify_line(line)
-			&& line_type.is_content()
-		{
-			content_lines_indices.push(idx);
-		}
-	}
-
-	// Remove the last content line and its associated comments
-	if let Some(&last_content_idx) = content_lines_indices.last() {
-		// Keep lines before the last content block, exclude the last content line and its comments
-		let new_lines: Vec<&str> = lines
-			.iter()
-			.enumerate()
-			.filter(|(idx, _)| {
-				// Find where the last content block starts (the last content line)
-				// And where it ends (next content line or EOF)
-
-				*idx < last_content_idx
-			})
-			.map(|(_, line)| *line)
-			.collect();
-
-		format_blocker_content(&new_lines.join("\n"))
-	} else {
-		// No content lines to remove
-		format_blocker_content(content)
-	}
-}
-
-fn get_current_blocker(relative_path: &str) -> Option<String> {
+/// Load blocker sequence from a file
+fn load_blocker_sequence(relative_path: &str) -> BlockerSequence {
 	let blocker_path = blockers_dir().join(relative_path);
-	let blockers: Vec<String> = std::fs::read_to_string(&blocker_path)
-		.unwrap_or_else(|_| String::new())
-		.split('\n')
-		.filter(|s| !s.is_empty())
-		// Skip comment lines (tab-indented) - only consider content lines
-		.filter(|s| !s.starts_with('\t'))
-		.map(|s| s.to_owned())
-		.collect();
-	blockers.last().cloned()
+	let content = std::fs::read_to_string(&blocker_path).unwrap_or_default();
+	BlockerSequence::new(content)
+}
+
+/// Save blocker sequence to a file
+fn save_blocker_sequence(relative_path: &str, seq: &BlockerSequence) -> Result<()> {
+	let blocker_path = blockers_dir().join(relative_path);
+	std::fs::write(&blocker_path, seq.content())?;
+	Ok(())
 }
 
 /// Get the current blocker with parent headers prepended (joined by ": ")
 /// If fully_qualified is true, prepend the project name from the relative_path
 fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) -> Option<String> {
-	let current = get_current_blocker(relative_path)?;
-	let stripped = strip_blocker_prefix(&current);
-
-	// Read blocker file to parse parent headers
-	let blocker_path = blockers_dir().join(relative_path);
-	let parent_headers = if blocker_path.exists() {
-		let content = std::fs::read_to_string(&blocker_path).ok()?;
-		parse_parent_headers(&content, &current)
-	} else {
-		Vec::new()
-	};
-
-	// Build final output with parent headers
-	let mut parts = Vec::new();
-
-	// Add project name if fully_qualified is true
-	if fully_qualified {
-		// Extract project name from relative_path (filename without extension)
-		let project_name = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str()).unwrap_or(relative_path);
-		parts.push(project_name.to_string());
-	}
-
-	// Add parent headers
-	parts.extend(parent_headers);
-
-	// Add the stripped task
-	if parts.is_empty() {
-		Some(stripped.to_string())
-	} else {
-		Some(format!("{}: {stripped}", parts.join(": ")))
-	}
-}
-
-/// Strip leading "# " or "- " prefix from a blocker line
-pub fn strip_blocker_prefix(line: &str) -> &str {
-	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
-}
-
-/// Parse the tree of parent headers above a task
-/// Returns a vector of header texts in order from top-level to immediate parent
-pub fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
-	let lines: Vec<&str> = content.lines().collect();
-
-	// Find the index of the task line
-	let task_index = match lines.iter().position(|&line| {
-		// Match the task line exactly (after stripping prefix)
-		let stripped = strip_blocker_prefix(line);
-		stripped == task_line.strip_prefix("- ").unwrap_or(task_line)
-	}) {
-		Some(idx) => idx,
-		None => return Vec::new(),
-	};
-
-	let mut headers = Vec::new();
-	let mut current_level: Option<HeaderLevel> = None;
-
-	// Walk backwards from the task to find parent headers
-	for i in (0..task_index).rev() {
-		let line = lines[i];
-
-		// Classify the line
-		if let Some(LineType::Header { level, text }) = classify_line(line) {
-			// Only add headers that are parent levels (smaller level = higher in hierarchy)
-			// Using derived Ord: One < Two < Three < Four < Five
-			if current_level.is_none() || level < current_level.unwrap() {
-				headers.push(text);
-				current_level = Some(level);
-			}
-		}
-	}
-
-	// Reverse to get top-level first
-	headers.reverse();
-	headers
+	let seq = load_blocker_sequence(relative_path);
+	let project_name = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str());
+	seq.current_with_headers(fully_qualified, project_name)
 }
 
 fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
@@ -693,7 +242,7 @@ fn get_workspace_fully_qualified_setting(workspace: &str) -> Result<bool> {
 		// Ask user for preference
 		println!("Workspace '{workspace}' fully-qualified mode setting not found.");
 		print!("Use fully-qualified mode (legacy) for this workspace? [y/N]: ");
-		Write::flush(&mut std::io::stdout())?;
+		IoWrite::flush(&mut std::io::stdout())?;
 
 		let mut input = String::new();
 		std::io::stdin().read_line(&mut input)?;
@@ -757,7 +306,8 @@ fn create_default_resume_args() -> ResumeArgs {
 /// Helper to restart tracking for the current blocker in a project
 /// This is used when switching tasks or projects while tracking is enabled
 async fn restart_tracking_for_project(relative_path: &str, workspace: Option<&str>) -> Result<()> {
-	if let Some(current_blocker) = get_current_blocker(relative_path) {
+	let seq = load_blocker_sequence(relative_path);
+	if let Some(current_blocker) = seq.current() {
 		let default_resume_args = create_default_resume_args();
 		let stripped_task = strip_blocker_prefix(&current_blocker).to_string();
 
@@ -873,7 +423,8 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	};
 
 	let cached_current = load_current_blocker_cache(&default_project_path);
-	let actual_current = get_current_blocker(&default_project_path);
+	let seq = load_blocker_sequence(&default_project_path);
+	let actual_current = seq.current();
 
 	if cached_current != actual_current {
 		if is_blocker_tracking_enabled() {
@@ -971,9 +522,9 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			}
 
 			// Read existing content, add new line, format and write
-			let existing_content = std::fs::read_to_string(&target_blocker_path).unwrap_or_else(|_| String::new());
-			let formatted = add_content_line(&existing_content, &name)?;
-			std::fs::write(&target_blocker_path, formatted)?;
+			let mut seq = load_blocker_sequence(&target_relative_path);
+			seq.add(&name)?;
+			save_blocker_sequence(&target_relative_path, &seq)?;
 
 			// Save current blocker to cache
 			save_current_blocker_cache(&target_relative_path, Some(name.clone()))?;
@@ -997,12 +548,12 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			}
 
 			// Read existing content, pop last content line, format and write
-			let existing_content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
-			let formatted = pop_content_line(&existing_content)?;
-			std::fs::write(&blocker_path, formatted)?;
+			let mut seq = load_blocker_sequence(&relative_path);
+			seq.pop()?;
+			save_blocker_sequence(&relative_path, &seq)?;
 
 			// Get the new current blocker after popping
-			let new_current = get_current_blocker(&relative_path);
+			let new_current = seq.current();
 			save_current_blocker_cache(&relative_path, new_current.clone())?;
 
 			// Cleanup urgent file if it's now empty
@@ -1036,8 +587,8 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			urgent,
 		} => {
 			// Save current blocker state to cache before opening
-			let current = get_current_blocker(&relative_path);
-			save_current_blocker_cache(&relative_path, current)?;
+			let seq = load_blocker_sequence(&relative_path);
+			save_current_blocker_cache(&relative_path, seq.current())?;
 
 			// Determine which file to open
 			let resolved_path = if urgent {
@@ -1105,7 +656,8 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 		}
 		Command::Resume(resume_args) => {
 			// Check that there is a current blocker
-			if get_current_blocker(&relative_path).is_none() {
+			let seq = load_blocker_sequence(&relative_path);
+			if seq.current().is_none() {
 				return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'"));
 			}
 
@@ -1201,10 +753,7 @@ fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 
 /// Use fzf to let user choose from multiple project matches
 fn choose_project_with_fzf(matches: &[String], initial_query: &str) -> Result<Option<String>> {
-	use std::{
-		io::Write as IoWrite,
-		process::{Command, Stdio},
-	};
+	use std::process::{Command, Stdio};
 
 	// Prepare input for fzf
 	let input = matches.join("\n");
@@ -1385,350 +934,6 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn test_classify_line() {
-		assert_eq!(classify_line(""), None);
-		assert_eq!(classify_line("\tComment"), Some(LineType::Comment));
-		assert_eq!(classify_line("Content"), Some(LineType::Item));
-		// Lines with 2+ leading spaces are now treated as comments (likely tab-to-space conversion)
-		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Comment));
-		// But space-indented list items (with -) are still items
-		assert_eq!(classify_line("  - Indented list item"), Some(LineType::Item));
-		assert_eq!(
-			classify_line("# Header 1"),
-			Some(LineType::Header {
-				level: HeaderLevel::One,
-				text: "Header 1".to_string()
-			})
-		);
-		assert_eq!(
-			classify_line("## Header 2"),
-			Some(LineType::Header {
-				level: HeaderLevel::Two,
-				text: "Header 2".to_string()
-			})
-		);
-		assert_eq!(
-			classify_line("### Header 3"),
-			Some(LineType::Header {
-				level: HeaderLevel::Three,
-				text: "Header 3".to_string()
-			})
-		);
-		assert_eq!(
-			classify_line("#### Header 4"),
-			Some(LineType::Header {
-				level: HeaderLevel::Four,
-				text: "Header 4".to_string()
-			})
-		);
-		assert_eq!(
-			classify_line("##### Header 5"),
-			Some(LineType::Header {
-				level: HeaderLevel::Five,
-				text: "Header 5".to_string()
-			})
-		);
-		assert_eq!(classify_line("#NoSpace"), Some(LineType::Item)); // Invalid header
-		assert_eq!(classify_line("###### Header 6"), Some(LineType::Item)); // Level 6 not supported, treated as item
-	}
-
-	#[test]
-	fn test_comment_validation_errors() {
-		// Comment as first line
-		assert!(format_blocker_content("\tComment").is_err());
-		// Comment after empty line
-		assert!(format_blocker_content("- Task\n\n\tComment").is_err());
-	}
-
-	#[test]
-	fn test_comment_preservation() {
-		// Single and multiple comments
-		let input = "- Task 1\n\tComment 1\n- Task 2\n\tComment A\n\tComment B";
-		let expected = "- Task 1\n\tComment 1\n- Task 2\n\tComment A\n\tComment B";
-		assert_eq!(format_blocker_content(input).unwrap(), expected);
-	}
-
-	#[test]
-	fn test_header_empty_line_rules() {
-		// No empty line when going from larger rank (smaller #) to lower rank (more #)
-		assert_eq!(format_blocker_content("# H1\n## H2").unwrap(), "# H1\n## H2");
-		assert_eq!(format_blocker_content("# H1\n### H3").unwrap(), "# H1\n### H3");
-		assert_eq!(format_blocker_content("## H2\n### H3").unwrap(), "## H2\n### H3");
-
-		// Empty line when going from same rank to same rank
-		assert_eq!(format_blocker_content("# H1\n# H2").unwrap(), "# H1\n\n# H2");
-		assert_eq!(format_blocker_content("## H2a\n## H2b").unwrap(), "## H2a\n\n## H2b");
-
-		// Empty line when going from lower rank (more #) to higher rank (fewer #)
-		assert_eq!(format_blocker_content("## H2\n# H1").unwrap(), "## H2\n\n# H1");
-		assert_eq!(format_blocker_content("### H3\n# H1").unwrap(), "### H3\n\n# H1");
-		assert_eq!(format_blocker_content("### H3\n## H2").unwrap(), "### H3\n\n## H2");
-
-		// Empty line before header after item
-		assert_eq!(format_blocker_content("item\n\n# Header").unwrap(), "- item\n\n# Header");
-
-		// Valid header needs space: # vs #NoSpace
-		assert_eq!(format_blocker_content("#NoSpace").unwrap(), "- #NoSpace");
-	}
-
-	#[test]
-	fn test_add_pop_preserve_comments() {
-		let input = "- Task 1\n\tComment 1";
-		// Add preserves comments
-		assert_eq!(add_content_line(input, "Task 2").unwrap(), "- Task 1\n\tComment 1\n- Task 2");
-		// Pop preserves comments
-		let input2 = "- Task 1\n\tComment 1\n- Task 2\n\tComment 2";
-		assert_eq!(pop_content_line(input2).unwrap(), "- Task 1\n\tComment 1");
-	}
-
-	#[test]
-	fn test_empty_lines_removed() {
-		// Multiple empty lines collapsed
-		let input = "item 1\n\n\nitem 2\n\n\n\nitem 3";
-		assert_eq!(format_blocker_content(input).unwrap(), "- item 1\n- item 2\n- item 3");
-	}
-
-	#[test]
-	fn test_space_indented_comments_converted_to_tabs() {
-		// Comments with leading spaces (e.g., from editor tab-to-space conversion) should be converted to tab-indented
-		let input = "- Task 1\n    Comment with 4 spaces\n- Task 2";
-		let expected = "- Task 1\n\tComment with 4 spaces\n- Task 2";
-		assert_eq!(format_blocker_content(input).unwrap(), expected);
-
-		// Multiple space-indented comments
-		let input2 = "- Task 1\n    Comment 1\n    Comment 2\n- Task 2";
-		let expected2 = "- Task 1\n\tComment 1\n\tComment 2\n- Task 2";
-		assert_eq!(format_blocker_content(input2).unwrap(), expected2);
-
-		// Mixed: some tabs, some spaces (should normalize to tabs)
-		let input3 = "- Task 1\n\tTab comment\n    Space comment\n- Task 2";
-		let expected3 = "- Task 1\n\tTab comment\n\tSpace comment\n- Task 2";
-		assert_eq!(format_blocker_content(input3).unwrap(), expected3);
-
-		// Comments with varying amounts of leading spaces (2+ spaces)
-		let input4 = "- Task 1\n  Comment with 2 spaces\n   Comment with 3 spaces\n      Comment with 6 spaces";
-		let expected4 = "- Task 1\n\tComment with 2 spaces\n\tComment with 3 spaces\n\tComment with 6 spaces";
-		assert_eq!(format_blocker_content(input4).unwrap(), expected4);
-
-		// Space-indented comments after headers
-		let input5 = "# Section 1\n- Task 1\n    Comment about task 1";
-		let expected5 = "# Section 1\n- Task 1\n\tComment about task 1";
-		assert_eq!(format_blocker_content(input5).unwrap(), expected5);
-	}
-
-	#[test]
-	fn test_space_indented_comments_edge_cases() {
-		// Single space should NOT be treated as comment (too ambiguous)
-		let input = "- Task 1\n Content with one space";
-		let expected = "- Task 1\n- Content with one space";
-		assert_eq!(format_blocker_content(input).unwrap(), expected);
-
-		// Space-indented list items (with -) should remain as items, not become comments
-		let input2 = "- Task 1\n  - Subtask with 2 spaces and dash";
-		let expected2 = "- Task 1\n- Subtask with 2 spaces and dash";
-		assert_eq!(format_blocker_content(input2).unwrap(), expected2);
-
-		// Idempotency: formatting space-indented comments twice should yield same result
-		let input3 = "- Task 1\n    Comment";
-		let formatted_once = format_blocker_content(input3).unwrap();
-		let formatted_twice = format_blocker_content(&formatted_once).unwrap();
-		assert_eq!(formatted_once, formatted_twice);
-		assert_eq!(formatted_once, "- Task 1\n\tComment");
-	}
-
-	#[test]
-	fn test_line_type_methods() {
-		let h1 = LineType::Header {
-			level: HeaderLevel::One,
-			text: "Test".to_string(),
-		};
-		let h2 = LineType::Header {
-			level: HeaderLevel::Two,
-			text: "Test".to_string(),
-		};
-		let item = LineType::Item;
-		let comment = LineType::Comment;
-
-		// Test is_header
-		assert!(h1.is_header());
-		assert!(h2.is_header());
-		assert!(!item.is_header());
-		assert!(!comment.is_header());
-
-		// Test header_level
-		assert_eq!(h1.header_level(), Some(HeaderLevel::One));
-		assert_eq!(h2.header_level(), Some(HeaderLevel::Two));
-		assert_eq!(item.header_level(), None);
-		assert_eq!(comment.header_level(), None);
-
-		// Test header_text
-		assert_eq!(h1.header_text(), Some("Test"));
-		assert_eq!(h2.header_text(), Some("Test"));
-		assert_eq!(item.header_text(), None);
-		assert_eq!(comment.header_text(), None);
-
-		// Test is_content
-		assert!(h1.is_content());
-		assert!(h2.is_content());
-		assert!(item.is_content());
-		assert!(!comment.is_content());
-	}
-
-	#[test]
-	fn test_header_level_ordering() {
-		// Test that HeaderLevel has proper ordering (One < Two < Three < Four < Five)
-		assert!(HeaderLevel::One < HeaderLevel::Two);
-		assert!(HeaderLevel::Two < HeaderLevel::Three);
-		assert!(HeaderLevel::Three < HeaderLevel::Four);
-		assert!(HeaderLevel::Four < HeaderLevel::Five);
-
-		// Test to_usize
-		assert_eq!(HeaderLevel::One.to_usize(), 1);
-		assert_eq!(HeaderLevel::Two.to_usize(), 2);
-		assert_eq!(HeaderLevel::Three.to_usize(), 3);
-		assert_eq!(HeaderLevel::Four.to_usize(), 4);
-		assert_eq!(HeaderLevel::Five.to_usize(), 5);
-
-		// Test from_usize
-		assert_eq!(HeaderLevel::from_usize(1), Some(HeaderLevel::One));
-		assert_eq!(HeaderLevel::from_usize(2), Some(HeaderLevel::Two));
-		assert_eq!(HeaderLevel::from_usize(3), Some(HeaderLevel::Three));
-		assert_eq!(HeaderLevel::from_usize(4), Some(HeaderLevel::Four));
-		assert_eq!(HeaderLevel::from_usize(5), Some(HeaderLevel::Five));
-		assert_eq!(HeaderLevel::from_usize(6), None);
-		assert_eq!(HeaderLevel::from_usize(0), None);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_simple() {
-		let content = "# Project A\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Project A"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_nested() {
-		let content = "# Project A\n## Feature B\n### Component C\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Project A", "Feature B", "Component C"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_with_siblings() {
-		let content = "# Project A\n## Feature B\n- task 1\n## Feature C\n- task 2";
-		let headers = parse_parent_headers(content, "- task 2");
-		assert_eq!(headers, vec!["Project A", "Feature C"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_skip_comments() {
-		let content = "# Project A\n\tComment here\n## Feature B\n\tAnother comment\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Project A", "Feature B"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_no_headers() {
-		let content = "- task 1\n- task 2\n- task 3";
-		let headers = parse_parent_headers(content, "- task 3");
-		assert_eq!(headers, Vec::<String>::new());
-	}
-
-	#[test]
-	fn test_parse_parent_headers_multiple_levels_skipped() {
-		// Should only get direct ancestors, skipping intermediate levels
-		let content = "# Level 1\n### Level 3\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Level 1", "Level 3"]);
-	}
-
-	#[test]
-	fn test_typst_to_markdown_headings() {
-		// Test Typst heading conversion (= to #)
-		let typst_input = "= Level 1\n== Level 2\n=== Level 3";
-		let expected = "# Level 1\n## Level 2\n### Level 3";
-		assert_eq!(typst_to_markdown(typst_input).unwrap(), expected);
-	}
-
-	#[test]
-	fn test_typst_to_markdown_lists() {
-		// Test Typst bullet list (same as markdown)
-		let typst_input = "- First item\n- Second item";
-		let expected = "- First item\n- Second item";
-		assert_eq!(typst_to_markdown(typst_input).unwrap(), expected);
-	}
-
-	#[test]
-	fn test_typst_to_markdown_enum_lists() {
-		// Test Typst numbered list conversion
-		let typst_input = "+ First\n+ Second";
-		let markdown = typst_to_markdown(typst_input).unwrap();
-		// Should convert to markdown list items
-		assert!(markdown.contains("- First"));
-		assert!(markdown.contains("- Second"));
-	}
-
-	#[test]
-	fn test_typst_to_markdown_mixed() {
-		// Test mixed content
-		let typst_input = "= Project\n- task 1\n- task 2";
-		let markdown = typst_to_markdown(typst_input).unwrap();
-		assert!(markdown.contains("# Project"));
-		assert!(markdown.contains("- task 1"));
-		assert!(markdown.contains("- task 2"));
-	}
-
-	#[test]
-	fn test_normalize_content_markdown() {
-		use std::path::PathBuf;
-		let content = "# Header\n- item";
-		let path = PathBuf::from("test.md");
-		// For .md files, content should pass through unchanged
-		assert_eq!(normalize_content_by_extension(content, &path).unwrap(), content);
-	}
-
-	#[test]
-	fn test_normalize_content_typst() {
-		use std::path::PathBuf;
-		let content = "= Header\n- item";
-		let path = PathBuf::from("test.typ");
-		// For .typ files, should convert to markdown
-		let result = normalize_content_by_extension(content, &path).unwrap();
-		assert!(result.contains("# Header"));
-		assert!(result.contains("- item"));
-	}
-
-	#[test]
-	fn test_normalize_content_plain() {
-		use std::path::PathBuf;
-		let content = "plain text\nmore text";
-		let path = PathBuf::from("test.txt");
-		// For other extensions, content should pass through unchanged
-		assert_eq!(normalize_content_by_extension(content, &path).unwrap(), content);
-	}
-
-	#[test]
-	fn test_is_semantically_empty() {
-		// Empty string is semantically empty
-		assert!(is_semantically_empty(""));
-
-		// Only whitespace is semantically empty
-		assert!(is_semantically_empty("   \n\n  \n"));
-
-		// Only comments is semantically empty
-		assert!(is_semantically_empty("\tComment 1\n\tComment 2"));
-
-		// Comments and whitespace is semantically empty
-		assert!(is_semantically_empty("\tComment\n\n\tAnother comment\n"));
-
-		// Any content makes it not empty
-		assert!(!is_semantically_empty("- Task 1"));
-		assert!(!is_semantically_empty("# Header"));
-		assert!(!is_semantically_empty("\tComment\n- Task"));
-		assert!(!is_semantically_empty("# Header\n\tComment"));
-	}
-
-	#[test]
 	fn test_is_urgent_file() {
 		// Workspace-specific urgent files (only valid form)
 		assert!(is_urgent_file("workspace/urgent.md"));
@@ -1743,32 +948,5 @@ mod tests {
 		assert!(!is_urgent_file("blockers.md"));
 		assert!(!is_urgent_file("urgent"));
 		assert!(!is_urgent_file("workspace/blockers.md"));
-	}
-
-	#[test]
-	fn test_format_idempotent_with_same_level_headers_at_end() {
-		// Bug: when opening and closing a file, we fail to add spaces between
-		// the headers of the same level at the end
-		let input = "- move these todos over into a persisted directory\n\tcomment\n- move all typst projects\n- rewrite custom.sh\n\tcomment\n\n# marketmonkey\n- go in-depth on possibilities\n\n# SocialNetworks in rust\n- test twitter\n\n## yt\n- test\n\n# math tools\n## gauss\n- finish it\n- move gaussian pivot over in there\n\n# git lfs: docs, music, etc\n# eww: don't restore if outdated\n# todo: blocker: doesn't add spaces between same level headers";
-
-		// First format
-		let formatted_once = format_blocker_content(input).unwrap();
-
-		// Simulate file write and read (write doesn't add trailing newline, read doesn't care)
-		// This is what happens in handle_background_blocker_check
-		let formatted_twice = format_blocker_content(&formatted_once).unwrap();
-
-		// Check that there are spaces between same-level headers at the end
-		assert!(
-			formatted_once.contains("# git lfs: docs, music, etc\n\n# eww: don't restore if outdated"),
-			"Missing space between first two headers"
-		);
-		assert!(
-			formatted_once.contains("# eww: don't restore if outdated\n\n# todo: blocker: doesn't add spaces between same level headers"),
-			"Missing space between last two headers"
-		);
-
-		// Should be idempotent
-		assert_eq!(formatted_once, formatted_twice, "Formatting should be idempotent");
 	}
 }

@@ -38,10 +38,10 @@ pub async fn update_or_open(settings: &crate::config::LiveSettings, args: Manual
 				.get_xattr("user.last_ev_change")?
 				.ok_or_else(|| color_eyre::eyre::eyre!("No last_ev_change xattr found on day file\nSuggestion: try to manually remove and re-initialize with `todo manual ev -r`"))?;
 			let last_update_str = String::from_utf8_lossy(&last_update_tag).into_owned();
-			let last_update_dt = chrono::DateTime::parse_from_rfc3339(&last_update_str)?.with_timezone(&chrono::Utc);
+			let last_update_ts: jiff::Timestamp = last_update_str.parse()?;
 
-			let now = chrono::Utc::now();
-			let full_hours_ago = now.signed_duration_since(last_update_dt).num_hours();
+			let now = jiff::Timestamp::now();
+			let full_hours_ago = (now - last_update_ts).get_hours();
 			println!("{full_hours_ago}");
 			return Ok(());
 		}
@@ -112,7 +112,7 @@ pub async fn update_or_open(settings: &crate::config::LiveSettings, args: Manual
 	file.write_all(formatted_json.as_bytes()).unwrap();
 	fs::set_permissions(&target_file_path, fs::Permissions::from_mode(0o666))?;
 	if !matches!(&args.command, &ManualSubcommands::CounterStep(_)) {
-		file.set_xattr("user.last_ev_change", chrono::Utc::now().to_rfc3339().as_bytes())?;
+		file.set_xattr("user.last_ev_change", jiff::Timestamp::now().to_string().as_bytes())?;
 	}
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
