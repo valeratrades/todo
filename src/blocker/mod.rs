@@ -5,18 +5,20 @@
 //! - Forces prioritization (high leverage)
 //! - Solving top 1 thing can often unlock many smaller ones for free
 //!
-//! # Module Structure
+//! # Architecture
 //!
-//! - `standard`: Parsing primitives and formatting (HeaderLevel, LineType)
-//! - `operations`: Core stack operations (BlockerSequence with add, pop, list, current)
-//! - `clockify`: Time tracking integration (protocol + tracking state)
-//! - `io`: File/project resolution for standalone blocker files
-//! - `integration`: Helpers for working with issue files (used via --integrated flag)
+//! - `standard`: Pure parsing primitives (strings only)
+//! - `operations`: Pure operations on BlockerSequence (no I/O)
+//! - `source`: BlockerSource trait for data access abstraction
+//! - `io`: File-based source implementation + CLI handling
+//! - `integration`: Issue-based source implementation
+//! - `clockify`: Time tracking integration
 
 pub mod clockify;
 pub(super) mod integration;
 mod io;
 mod operations;
+mod source;
 mod standard;
 
 // Re-export the public API

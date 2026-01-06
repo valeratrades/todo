@@ -9,11 +9,7 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{Result, bail, eyre};
 use todo::Extension;
 
-use super::{
-	LineType,
-	operations::BlockerSequence,
-	standard::{classify_line, strip_blocker_prefix},
-};
+use super::{operations::BlockerSequence, standard::strip_blocker_prefix};
 use crate::marker::Marker;
 
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
@@ -271,62 +267,67 @@ fn extract_blockers_section(content: &str) -> Option<BlockerSequence> {
 	Some(BlockerSequence::new(blockers_lines.join("\n")))
 }
 
-/// Build the ownership hierarchy for an issue file.
-/// If fully_qualified is true, includes the issue name extracted from file path.
-fn build_ownership_hierarchy(issue_path: Option<&Path>, fully_qualified: bool) -> Vec<String> {
-	if fully_qualified {
-		if let Some(path) = issue_path {
-			if let Some(project_name) = path.file_stem().and_then(|s| s.to_str()) {
-				if !project_name.is_empty() {
-					return vec![project_name.to_string()];
-				}
-			}
-		}
-	}
-	Vec::new()
+/// Issue-based blocker source for blockers embedded in issue files.
+pub struct IssueSource {
+	issue_path: PathBuf,
+	/// Cached full file content (needed for update_blockers_in_issue)
+	full_content: std::cell::RefCell<Option<String>>,
 }
 
-/// Get the current blocker with parent headers prepended.
-/// If `fully_qualified` is true and `issue_path` is provided, prepends the issue title.
-fn get_current_blocker_with_headers(blockers: &BlockerSequence, fully_qualified: bool, issue_path: Option<&Path>) -> Option<String> {
-	let hierarchy = build_ownership_hierarchy(issue_path, fully_qualified);
-	blockers.current_with_context(&hierarchy)
-}
-
-/// List all content lines (headers and items), returning tuples of (text, is_header, is_completed)
-fn list_blockers_from_content(blockers: &BlockerSequence) -> Vec<(String, bool, bool)> {
-	let mut result = Vec::new();
-
-	for line in blockers.content().lines() {
-		// Skip empty lines and comments (tab-indented)
-		if line.is_empty() || line.starts_with('\t') {
-			continue;
-		}
-
-		let line_type = classify_line(line);
-		match line_type {
-			Some(LineType::Header { text, .. }) => {
-				result.push((text, true, false));
-			}
-			Some(LineType::Item) => {
-				// Check if it's a checkbox item
-				let trimmed = line.trim();
-				let (completed, text) = if let Some(rest) = trimmed.strip_prefix("- [x] ").or_else(|| trimmed.strip_prefix("- [X] ")) {
-					(true, rest.to_string())
-				} else if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
-					(false, rest.to_string())
-				} else {
-					// Regular item (- prefix)
-					let text = strip_blocker_prefix(trimmed);
-					(false, text.to_string())
-				};
-				result.push((text, false, completed));
-			}
-			_ => {}
+impl IssueSource {
+	pub fn new(issue_path: PathBuf) -> Self {
+		Self {
+			issue_path,
+			full_content: std::cell::RefCell::new(None),
 		}
 	}
 
-	result
+	/// Get relative path for display
+	pub fn display_relative(&self) -> String {
+		let issues_dir = issues_dir();
+		self.issue_path
+			.strip_prefix(&issues_dir)
+			.map(|p| p.to_string_lossy().to_string())
+			.unwrap_or_else(|_| self.issue_path.to_string_lossy().to_string())
+	}
+}
+
+impl super::source::BlockerSource for IssueSource {
+	fn load(&self) -> Result<String> {
+		let content = std::fs::read_to_string(&self.issue_path)?;
+		// Cache the full content for later use in save()
+		*self.full_content.borrow_mut() = Some(content.clone());
+
+		// Extract just the blockers section
+		if let Some(blockers) = extract_blockers_section(&content) {
+			Ok(blockers.into_content())
+		} else {
+			// No blockers section found
+			Ok(String::new())
+		}
+	}
+
+	fn save(&self, content: &str) -> Result<()> {
+		// We need the full file content to update the blockers section
+		let full_content = self.full_content.borrow();
+		let full = full_content.as_ref().ok_or_else(|| eyre!("Must call load() before save()"))?;
+
+		let new_blockers = BlockerSequence::new(content.to_string());
+		if let Some(updated) = update_blockers_in_issue(full, &new_blockers) {
+			std::fs::write(&self.issue_path, updated)?;
+			Ok(())
+		} else {
+			bail!("Failed to update blockers section in issue file")
+		}
+	}
+
+	fn display_name(&self) -> String {
+		self.display_relative()
+	}
+
+	fn path_for_hierarchy(&self) -> Option<PathBuf> {
+		Some(self.issue_path.clone())
+	}
 }
 
 /// Update the blockers section in an issue file.
@@ -425,64 +426,159 @@ fn resolve_issue_file(pattern: &str) -> Result<PathBuf> {
 	}
 }
 
-/// Handle `blocker set-project --integrated <pattern>`
-/// Sets the current blocker issue file.
-pub async fn handle_set(pattern: &str) -> Result<()> {
-	let issue_path = resolve_issue_file(pattern)?;
-
-	// Set as current blocker issue
-	set_current_blocker_issue(&issue_path)?;
-
-	// Get relative path for display
-	let issues_dir = issues_dir();
-	let rel_path = issue_path
-		.strip_prefix(&issues_dir)
-		.map(|p| p.to_string_lossy().to_string())
-		.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
-
-	println!("Set blocker file: {rel_path}");
-
-	// Show current blocker if any
-	let content = std::fs::read_to_string(&issue_path)?;
-	if let Some(blockers) = extract_blockers_section(&content) {
-		if let Some(current) = get_current_blocker_with_headers(&blockers, false, Some(&issue_path)) {
-			println!("Current blocker: {current}");
-		} else {
-			println!("Blockers section is empty.");
-		}
-	} else {
-		println!("No <!--blockers--> marker found in issue body.");
-	}
-
-	Ok(())
+/// Get the current issue source, or error if none set.
+fn get_current_source() -> Result<IssueSource> {
+	let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker -i set <pattern>` first."))?;
+	Ok(IssueSource::new(issue_path))
 }
 
-/// Handle `blocker open --integrated [pattern]`
-/// Opens an issue file for editing.
-pub async fn handle_open(pattern: Option<String>, set_after: bool) -> Result<()> {
-	// Determine which file to open
-	let issue_path = if let Some(pat) = pattern {
-		resolve_issue_file(&pat)?
-	} else {
-		// Use current blocker issue
-		get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker set-project --integrated <pattern>` first."))?
-	};
+/// Main entry point for integrated blocker commands (works with issue files).
+/// This is called when `--integrated` flag is set on the blocker command.
+pub async fn main_integrated(command: super::io::Command) -> Result<()> {
+	use super::{io::Command, source::BlockerSource};
 
-	// Open the file with $EDITOR
-	v_utils::io::file_open::open(&issue_path).await?;
+	match command {
+		Command::Set { pattern, touch: _ } => {
+			// touch is ignored in integrated mode - issue files are managed by `todo open`
+			let issue_path = resolve_issue_file(&pattern)?;
+			set_current_blocker_issue(&issue_path)?;
 
-	// If set_after flag is set, update the current blocker issue
-	if set_after {
-		set_current_blocker_issue(&issue_path)?;
+			let source = IssueSource::new(issue_path);
+			println!("Set blockers to: {}", source.display_name());
 
-		// Get relative path for display
-		let issues_dir = issues_dir();
-		let rel_path = issue_path
-			.strip_prefix(&issues_dir)
-			.map(|p| p.to_string_lossy().to_string())
-			.unwrap_or_else(|_| issue_path.to_string_lossy().to_string());
+			// Load and show current blocker
+			let content = source.load()?;
+			if content.is_empty() {
+				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
+				println!("No `{}` marker found in issue body.", marker);
+			} else {
+				let seq = BlockerSequence::new(content);
+				if let Some(current) = seq.current_with_context(&[]) {
+					println!("Current: {current}");
+				} else {
+					println!("Blockers section is empty.");
+				}
+			}
+		}
 
-		println!("Set blocker file: {rel_path}");
+		Command::Open {
+			pattern,
+			touch: _,
+			set_after,
+			urgent: _,
+		} => {
+			// touch and urgent are ignored in integrated mode
+			let issue_path = if let Some(pat) = pattern {
+				resolve_issue_file(&pat)?
+			} else {
+				get_current_blocker_issue().ok_or_else(|| eyre!("No issue set. Use `todo blocker -i set <pattern>` first."))?
+			};
+
+			// Open the issue file with $EDITOR
+			v_utils::io::file_open::open(&issue_path).await?;
+
+			// If set_after flag is set, update the current blocker issue
+			if set_after {
+				set_current_blocker_issue(&issue_path)?;
+				let source = IssueSource::new(issue_path);
+				println!("Set blockers to: {}", source.display_name());
+			}
+		}
+
+		Command::List => {
+			let source = get_current_source()?;
+			let content = source.load()?;
+
+			if content.is_empty() {
+				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
+				println!("No `{}` marker found in issue body.", marker);
+			} else {
+				let seq = BlockerSequence::new(content);
+				let items = seq.list();
+
+				if items.is_empty() {
+					println!("Blockers section is empty.");
+				} else {
+					for (text, is_header) in &items {
+						if *is_header {
+							println!("# {text}");
+						} else {
+							println!("- {text}");
+						}
+					}
+				}
+			}
+		}
+
+		Command::Current { fully_qualified } => {
+			let source = get_current_source()?;
+			let content = source.load()?;
+
+			if !content.is_empty() {
+				let seq = BlockerSequence::new(content);
+				let hierarchy = if fully_qualified {
+					source
+						.path_for_hierarchy()
+						.and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+						.map(|s| vec![s])
+						.unwrap_or_default()
+				} else {
+					vec![]
+				};
+
+				if let Some(current) = seq.current_with_context(&hierarchy) {
+					const MAX_LEN: usize = 70;
+					match current.len() {
+						0..=MAX_LEN => println!("{current}"),
+						_ => println!("{}...", &current[..(MAX_LEN - 3)]),
+					}
+				}
+			}
+			// No blockers section or no current blocker - silently exit (for status line integration)
+		}
+
+		Command::Pop => {
+			let source = get_current_source()?;
+			let content = source.load()?;
+
+			if content.is_empty() {
+				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
+				bail!("No `{}` marker found in issue body.", marker);
+			}
+
+			let mut seq = BlockerSequence::new(content.clone());
+			let popped = seq.pop()?;
+
+			// Only save if something was actually popped
+			if popped.is_some() {
+				source.save(seq.content())?;
+			}
+
+			// Output results
+			if let Some(popped_line) = popped {
+				let stripped = strip_blocker_prefix(&popped_line);
+				println!("Popped: {stripped}");
+			}
+
+			if let Some(new_current) = seq.current_with_context(&[]) {
+				println!("Current: {new_current}");
+			} else {
+				println!("Blockers section is now empty.");
+			}
+		}
+
+		Command::Add {
+			name: _,
+			project: _,
+			urgent: _,
+			touch: _,
+		} => {
+			bail!("Add command not supported in integrated mode. Use `todo blocker -i open` to edit the issue file directly.");
+		}
+
+		Command::Resume(_) | Command::Halt(_) => {
+			bail!("Resume/Halt not yet supported in integrated mode.");
+		}
 	}
 
 	Ok(())
@@ -605,23 +701,23 @@ mod tests {
 	}
 
 	#[test]
-	fn test_get_current_blocker_with_headers() {
+	fn test_get_current_blocker_with_context() {
 		let blockers = BlockerSequence::new("# Phase 1\n- First task\n# Phase 2\n- Third task".to_string());
-		assert_snapshot!(get_current_blocker_with_headers(&blockers, false, None).unwrap(), @"Phase 2: Third task");
+		assert_snapshot!(blockers.current_with_context(&[]).unwrap(), @"Phase 2: Third task");
 	}
 
 	#[test]
-	fn test_get_current_blocker_with_headers_fully_qualified() {
+	fn test_get_current_blocker_with_context_fully_qualified() {
 		let blockers = BlockerSequence::new("# Phase 1\n- First task\n# Phase 2\n- Third task".to_string());
-		let issue_path = Path::new("/home/user/issues/my_project.md");
-		assert_snapshot!(get_current_blocker_with_headers(&blockers, true, Some(issue_path)).unwrap(), @"my_project: Phase 2: Third task");
+		let hierarchy = vec!["my_project".to_string()];
+		assert_snapshot!(blockers.current_with_context(&hierarchy).unwrap(), @"my_project: Phase 2: Third task");
 	}
 
 	#[test]
 	fn test_list_blockers() {
 		let blockers = BlockerSequence::new("# Phase 1\n- [x] Completed task\n- [ ] Pending task\n- Regular item".to_string());
-		let items = list_blockers_from_content(&blockers);
-		assert_snapshot!(format!("{:?}", items), @r#"[("Phase 1", true, false), ("Completed task", false, true), ("Pending task", false, false), ("Regular item", false, false)]"#);
+		let items = blockers.list();
+		assert_snapshot!(format!("{:?}", items), @r#"[("Phase 1", true), ("[x] Completed task", false), ("[ ] Pending task", false), ("Regular item", false)]"#);
 	}
 
 	#[test]

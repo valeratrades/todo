@@ -29,9 +29,14 @@ static PRE_URGENT_PROJECT_FILENAME: &str = "pre_urgent_project.txt";
 pub struct BlockerArgs {
 	#[command(subcommand)]
 	pub command: Command,
+	/// The relative path of the blocker file. Will be appended to the state directory.
+	/// If contains one slash, the folder name will be used as workspace filter.
 	#[arg(short, long)]
-	/// The relative path of the blocker file. Will be appended to the state directory. If contains one slash, the folder name will be used as workspace filter. Can have any text-based format
 	pub relative_path: Option<String>,
+	/// Use issue files instead of standalone blocker files.
+	/// Changes the data source for all commands.
+	#[arg(short, long)]
+	pub integrated: bool,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -63,33 +68,27 @@ pub enum Command {
 		#[arg(short = 'f', long)]
 		fully_qualified: bool,
 	},
-	/// Just open the \`blockers\` file with $EDITOR. Text as interface.
+	/// Just open the blocker file with $EDITOR. Text as interface.
 	Open {
-		/// Optional file path relative to state directory to open instead of the default blocker file
-		file_path: Option<String>,
-		/// Create the file if it doesn't exist (touch)
+		/// Optional pattern to open a different file (standalone: relative path, integrated: issue pattern)
+		pattern: Option<String>,
+		/// Create the file if it doesn't exist (touch, standalone mode only)
 		#[arg(short = 't', long)]
 		touch: bool,
-		/// Set the opened file as chosen project after exiting the editor
+		/// Set the opened file as current project after exiting the editor
 		#[arg(short = 's', long)]
-		set_project_after: bool,
-		/// Mark as urgent (equivalent to --file-path urgent, opens urgent.md)
+		set_after: bool,
+		/// Mark as urgent (standalone mode only: opens workspace-specific urgent.md)
 		#[arg(short = 'u', long)]
 		urgent: bool,
-		/// Use issue files instead of standalone blocker files
-		#[arg(short = 'i', long)]
-		integrated: bool,
 	},
-	/// Set the default `--relative_path`, for the project you're working on currently.
-	SetProject {
+	/// Set the current project/issue for blocker operations
+	Set {
 		/// Pattern to match (standalone: relative path, integrated: issue pattern)
 		pattern: String,
-		/// Create the file if it doesn't exist (touch)
+		/// Create the file if it doesn't exist (touch, standalone mode only)
 		#[arg(short = 't', long)]
 		touch: bool,
-		/// Use issue files instead of standalone blocker files
-		#[arg(short = 'i', long)]
-		integrated: bool,
 	},
 	/// Resume tracking time on the current blocker task via Clockify
 	Resume(ResumeArgs),
@@ -130,6 +129,42 @@ fn save_blocker_sequence(relative_path: &str, seq: &BlockerSequence) -> Result<(
 	let blocker_path = blockers_dir().join(relative_path);
 	std::fs::write(&blocker_path, seq.content())?;
 	Ok(())
+}
+
+/// File-based blocker source for standalone blocker files.
+pub struct FileSource {
+	relative_path: String,
+}
+
+impl FileSource {
+	pub fn new(relative_path: String) -> Self {
+		Self { relative_path }
+	}
+
+	pub fn relative_path(&self) -> &str {
+		&self.relative_path
+	}
+}
+
+impl super::source::BlockerSource for FileSource {
+	fn load(&self) -> Result<String> {
+		let blocker_path = blockers_dir().join(&self.relative_path);
+		Ok(std::fs::read_to_string(&blocker_path).unwrap_or_default())
+	}
+
+	fn save(&self, content: &str) -> Result<()> {
+		let blocker_path = blockers_dir().join(&self.relative_path);
+		std::fs::write(&blocker_path, content)?;
+		Ok(())
+	}
+
+	fn display_name(&self) -> String {
+		self.relative_path.clone()
+	}
+
+	fn path_for_hierarchy(&self) -> Option<std::path::PathBuf> {
+		Some(std::path::PathBuf::from(&self.relative_path))
+	}
 }
 
 /// Build the ownership hierarchy for a blocker file.
@@ -307,7 +342,22 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	Ok(())
 }
 
+/// Check if a command has the urgent flag set
+fn command_has_urgent_flag(command: &Command) -> bool {
+	match command {
+		Command::Add { urgent, .. } => *urgent,
+		Command::Open { urgent, .. } => *urgent,
+		_ => false,
+	}
+}
+
 pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) -> Result<()> {
+	// If integrated mode, delegate to the integration module
+	// EXCEPT for urgent operations - urgent always uses file-based source (no issue equivalent)
+	if args.integrated && !command_has_urgent_flag(&args.command) {
+		return super::integration::main_integrated(args.command).await;
+	}
+
 	let relative_path = match args.relative_path {
 		Some(f) => f,
 		None => {
@@ -431,18 +481,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 					_ => println!("{}...", &output[..(MAX_LEN - 3)]),
 				}
 			},
-		Command::Open {
-			file_path,
-			touch,
-			set_project_after,
-			urgent,
-			integrated,
-		} => {
-			if integrated {
-				// Delegate to integration module for issue file handling
-				return super::integration::handle_open(file_path, set_project_after).await;
-			}
-
+		Command::Open { pattern, touch, set_after, urgent } => {
 			// Save current blocker state to cache before opening
 			let seq = load_blocker_sequence(&relative_path);
 			save_current_blocker_cache(&relative_path, seq.current())?;
@@ -455,7 +494,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 					format!("{workspace}/urgent.md")
 				} else {
 					return Err(eyre!(
-						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')"
+						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set work/blockers.md')"
 					));
 				};
 				// Check if we can create this urgent file (only if touch is enabled)
@@ -464,7 +503,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 				}
 				urgent_path
 			} else {
-				match file_path {
+				match pattern {
 					Some(custom_path) => resolve_project_path(&custom_path, touch)?,
 					None => relative_path.clone(),
 				}
@@ -485,20 +524,15 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			// Open the file
 			v_utils::io::file_open::open(&path_to_open).await?;
 
-			// If set_project_after flag is set, update the current project
-			if set_project_after {
+			// If set_after flag is set, update the current project
+			if set_after {
 				set_current_project(&resolved_path).await?;
 			} else {
 				// Spawn background process to check for changes after editor closes
 				spawn_blocker_comparison_process(resolved_path.clone())?;
 			}
 		}
-		Command::SetProject { pattern, touch, integrated } => {
-			if integrated {
-				// Delegate to integration module for issue file handling
-				return super::integration::handle_set(&pattern).await;
-			}
-
+		Command::Set { pattern, touch } => {
 			// Resolve the project path using pattern matching
 			let resolved_path = resolve_project_path(&pattern, touch)?;
 

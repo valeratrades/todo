@@ -136,12 +136,6 @@ impl BlockerSequence {
 		result
 	}
 
-	/// Format the content according to standardization rules
-	pub fn format(&mut self) -> Result<()> {
-		self.content = format_blocker_content(&self.content)?;
-		Ok(())
-	}
-
 	/// Check if the sequence is empty (no content lines)
 	pub fn is_empty(&self) -> bool {
 		self.current().is_none()

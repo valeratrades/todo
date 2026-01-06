@@ -17,7 +17,7 @@ fn test_exact_match_with_extension_skips_fzf() {
 	);
 
 	// "uni.md" should match exactly to uni.md, not uni_headless.md
-	let output = ctx.run(&["blocker", "set-project", "uni.md"]);
+	let output = ctx.run(&["blocker", "set", "uni.md"]);
 	assert!(output.status.success());
 
 	assert_eq!(ctx.read_current_project(), Some("uni.md".to_string()));
@@ -35,7 +35,7 @@ fn test_unique_pattern_without_extension_matches_directly() {
 	);
 
 	// "alpha" should match uniquely to project_alpha.md
-	let output = ctx.run(&["blocker", "set-project", "alpha"]);
+	let output = ctx.run(&["blocker", "set", "alpha"]);
 	assert!(output.status.success());
 
 	assert_eq!(ctx.read_current_project(), Some("project_alpha.md".to_string()));
@@ -53,7 +53,7 @@ fn test_exact_match_in_workspace() {
 	);
 
 	// "uni.md" should match the exact filename even in workspace
-	let output = ctx.run(&["blocker", "set-project", "uni.md"]);
+	let output = ctx.run(&["blocker", "set", "uni.md"]);
 	assert!(output.status.success());
 
 	assert_eq!(ctx.read_current_project(), Some("work/uni.md".to_string()));
@@ -71,12 +71,12 @@ fn test_set_project_cannot_switch_away_from_urgent() {
 	);
 
 	// First set project to urgent
-	let output = ctx.run(&["blocker", "set-project", "work/urgent.md"]);
+	let output = ctx.run(&["blocker", "set", "work/urgent.md"]);
 	assert!(output.status.success());
 	assert_eq!(ctx.read_current_project(), Some("work/urgent.md".to_string()));
 
 	// Now try to switch away from urgent - should be blocked
-	let output = ctx.run(&["blocker", "set-project", "work/normal.md"]);
+	let output = ctx.run(&["blocker", "set", "work/normal.md"]);
 	assert!(output.status.success());
 
 	// Project should still be urgent - switch was blocked
@@ -95,12 +95,12 @@ fn test_set_project_can_switch_between_urgent_files() {
 	);
 
 	// First set project to work urgent
-	let output = ctx.run(&["blocker", "set-project", "work/urgent.md"]);
+	let output = ctx.run(&["blocker", "set", "work/urgent.md"]);
 	assert!(output.status.success());
 	assert_eq!(ctx.read_current_project(), Some("work/urgent.md".to_string()));
 
 	// Should be able to switch to personal urgent
-	let output = ctx.run(&["blocker", "set-project", "personal/urgent.md"]);
+	let output = ctx.run(&["blocker", "set", "personal/urgent.md"]);
 	assert!(output.status.success());
 	assert_eq!(ctx.read_current_project(), Some("personal/urgent.md".to_string()));
 }
@@ -117,7 +117,7 @@ fn test_can_add_to_same_urgent_file() {
 	);
 
 	// Set the current project to something in the same workspace
-	let output = ctx.run(&["blocker", "set-project", "work/normal.md"]);
+	let output = ctx.run(&["blocker", "set", "work/normal.md"]);
 	assert!(output.status.success());
 
 	// Adding to urgent should work because work/urgent.md already exists
