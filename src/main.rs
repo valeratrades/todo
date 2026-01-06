@@ -1,6 +1,5 @@
 #![allow(clippy::len_zero)]
 mod blocker;
-mod clockify;
 pub mod config;
 pub mod error;
 mod github;
@@ -53,7 +52,7 @@ enum Commands {
 	/// Blocker management integrated with issue files
 	BlockerIntegrated(blocker::IntegrationArgs),
 	/// Clockify time tracking
-	Clockify(clockify::ClockifyArgs),
+	Clockify(blocker::clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
 	PerfEval(perf_eval::PerfEvalArgs),
 	/// Watch monitors daemon - takes screenshots every 60s
@@ -125,7 +124,7 @@ async fn main() {
 		}
 		Commands::Blocker(args) => blocker::main(&settings, args).await,
 		Commands::BlockerIntegrated(args) => blocker::main_integrated(&settings, args).await,
-		Commands::Clockify(args) => clockify::main(&settings, args).await,
+		Commands::Clockify(args) => blocker::clockify::clockify_main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
 		Commands::Open(args) => open::open_command(&settings, github_client, args, cli.offline).await,

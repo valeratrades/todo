@@ -2,41 +2,28 @@
 //!
 //! This module handles:
 //! - File path resolution and project management
-//! - Clockify integration (halt/resume time tracking)
-//! - Workspace settings and caching
 //! - Urgent file handling
+//! - Background blocker check process
 
-use std::{collections::HashMap, io::Write as IoWrite, path::Path};
+use std::{io::Write as IoWrite, path::Path};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
-use serde::{Deserialize, Serialize};
 
 use super::{
+	clockify::{self, HaltArgs, ResumeArgs},
 	operations::BlockerSequence,
-	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension, strip_blocker_prefix},
+	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension},
 };
-use crate::{clockify, milestones::SPRINT_HEADER_REL_PATH};
+use crate::milestones::SPRINT_HEADER_REL_PATH;
 
 fn blockers_dir() -> std::path::PathBuf {
 	v_utils::xdg_data_dir!("blockers")
 }
 
 static CURRENT_PROJECT_CACHE_FILENAME: &str = "current_project.txt";
-static BLOCKER_STATE_FILENAME: &str = "blocker_state.txt";
-static WORKSPACE_SETTINGS_FILENAME: &str = "workspace_settings.json";
 static BLOCKER_CURRENT_CACHE_FILENAME: &str = "blocker_current_cache.txt";
 static PRE_URGENT_PROJECT_FILENAME: &str = "pre_urgent_project.txt";
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct WorkspaceSettings {
-	fully_qualified: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct WorkspaceCache {
-	workspaces: HashMap<String, WorkspaceSettings>,
-}
 
 #[derive(Args, Clone, Debug)]
 pub struct BlockerArgs {
@@ -106,58 +93,6 @@ pub enum Command {
 	Format,
 }
 
-#[derive(Clone, Debug, Parser)]
-pub struct ResumeArgs {
-	/// Workspace ID or name (if omitted, use the user's active workspace)
-	#[arg(short = 'w', long)]
-	pub workspace: Option<String>,
-
-	/// Project ID or name (if omitted, uses cached project default)
-	#[arg(short = 'p', long)]
-	pub project: Option<String>,
-
-	/// Task ID or name (optional)
-	#[arg(short = 't', long)]
-	pub task: Option<String>,
-
-	/// Comma-separated tag IDs or names (optional)
-	#[arg(short = 'g', long)]
-	pub tags: Option<String>,
-
-	/// Mark entry as billable
-	#[arg(short = 'b', long, default_value_t = false)]
-	pub billable: bool,
-}
-
-#[derive(Clone, Debug, Parser)]
-pub struct HaltArgs {
-	/// Workspace ID or name (if omitted, use the user's active workspace)
-	#[arg(short = 'w', long)]
-	pub workspace: Option<String>,
-}
-
-fn get_blocker_state_path() -> std::path::PathBuf {
-	v_utils::xdg_state_file!(BLOCKER_STATE_FILENAME)
-}
-
-fn is_blocker_tracking_enabled() -> bool {
-	let state_path = get_blocker_state_path();
-	match std::fs::read_to_string(&state_path) {
-		Ok(content) => content.trim() == "true",
-		Err(_) => {
-			// File doesn't exist, create it with "false" and return false
-			let _ = std::fs::write(&state_path, "false");
-			false
-		}
-	}
-}
-
-fn set_blocker_tracking_state(enabled: bool) -> Result<()> {
-	let state_path = get_blocker_state_path();
-	std::fs::write(&state_path, if enabled { "true" } else { "false" })?;
-	Ok(())
-}
-
 fn get_current_blocker_cache_path(relative_path: &str) -> std::path::PathBuf {
 	let cache_key = relative_path.replace('/', "_");
 	v_utils::xdg_cache_file!(format!("{}_{}", cache_key, BLOCKER_CURRENT_CACHE_FILENAME))
@@ -214,108 +149,9 @@ fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 	}
 }
 
-fn get_workspace_settings_path() -> std::path::PathBuf {
-	v_utils::xdg_cache_file!(WORKSPACE_SETTINGS_FILENAME)
-}
-
-fn load_workspace_cache() -> WorkspaceCache {
-	let cache_path = get_workspace_settings_path();
-	match std::fs::read_to_string(&cache_path) {
-		Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-		Err(_) => WorkspaceCache::default(),
-	}
-}
-
-fn save_workspace_cache(cache: &WorkspaceCache) -> Result<()> {
-	let cache_path = get_workspace_settings_path();
-	let content = serde_json::to_string_pretty(cache)?;
-	std::fs::write(&cache_path, content)?;
-	Ok(())
-}
-
-fn get_workspace_fully_qualified_setting(workspace: &str) -> Result<bool> {
-	let cache = load_workspace_cache();
-
-	if let Some(settings) = cache.workspaces.get(workspace) {
-		Ok(settings.fully_qualified)
-	} else {
-		// Ask user for preference
-		println!("Workspace '{workspace}' fully-qualified mode setting not found.");
-		print!("Use fully-qualified mode (legacy) for this workspace? [y/N]: ");
-		IoWrite::flush(&mut std::io::stdout())?;
-
-		let mut input = String::new();
-		std::io::stdin().read_line(&mut input)?;
-		let use_fully_qualified = input.trim().to_lowercase() == "y" || input.trim().to_lowercase() == "yes";
-
-		// Save the preference
-		let mut cache = load_workspace_cache();
-		cache.workspaces.insert(
-			workspace.to_string(),
-			WorkspaceSettings {
-				fully_qualified: use_fully_qualified,
-			},
-		);
-		save_workspace_cache(&cache)?;
-
-		println!("Saved fully-qualified mode preference for workspace '{workspace}': {use_fully_qualified}");
-		Ok(use_fully_qualified)
-	}
-}
-
-async fn stop_current_tracking(workspace: Option<&str>) -> Result<()> {
-	clockify::stop_time_entry_with_defaults(workspace).await
-}
-
-async fn start_tracking_for_task(description: String, relative_path: &str, resume_args: &ResumeArgs, workspace_override: Option<&str>) -> Result<()> {
-	let workspace = workspace_override.or(resume_args.workspace.as_deref());
-
-	// Determine fully_qualified mode from workspace settings (legacy mode for clockify)
-	let fully_qualified = if let Some(ws) = workspace {
-		get_workspace_fully_qualified_setting(ws)?
-	} else {
-		// If no workspace specified, use default (false)
-		false
-	};
-
-	// Get current blocker with parent headers prepended (use fully_qualified for clockify legacy mode)
-	let final_description = get_current_blocker_with_headers(relative_path, fully_qualified).unwrap_or(description);
-
-	clockify::start_time_entry_with_defaults(
-		workspace,
-		resume_args.project.as_deref(),
-		final_description,
-		resume_args.task.as_deref(),
-		resume_args.tags.as_deref(),
-		resume_args.billable,
-	)
-	.await
-}
-
-/// Helper to create default resume args (used in multiple places)
-fn create_default_resume_args() -> ResumeArgs {
-	ResumeArgs {
-		workspace: None,
-		project: None,
-		task: None,
-		tags: None,
-		billable: false,
-	}
-}
-
 /// Helper to restart tracking for the current blocker in a project
-/// This is used when switching tasks or projects while tracking is enabled
 async fn restart_tracking_for_project(relative_path: &str, workspace: Option<&str>) -> Result<()> {
-	let seq = load_blocker_sequence(relative_path);
-	if let Some(current_blocker) = seq.current() {
-		let default_resume_args = create_default_resume_args();
-		let stripped_task = strip_blocker_prefix(&current_blocker).to_string();
-
-		if let Err(e) = start_tracking_for_task(stripped_task, relative_path, &default_resume_args, workspace).await {
-			eprintln!("Warning: Failed to start tracking for task: {e}");
-		}
-	}
-	Ok(())
+	clockify::restart_tracking_for_project(|fully_qualified| get_current_blocker_with_headers(relative_path, fully_qualified), workspace).await
 }
 
 fn spawn_blocker_comparison_process(relative_path: String) -> Result<()> {
@@ -370,11 +206,11 @@ async fn set_current_project(resolved_path: &str) -> Result<()> {
 	println!("Set current project to: {resolved_path}");
 
 	// If project changed and tracking is enabled, handle the transition
-	if project_changed && is_blocker_tracking_enabled() {
+	if project_changed && clockify::is_tracking_enabled() {
 		// Stop tracking on the old project
 		if let Some(old_path) = &old_project {
 			let old_workspace = parse_workspace_from_path(old_path).ok().flatten();
-			let _ = stop_current_tracking(old_workspace.as_deref()).await;
+			let _ = clockify::stop_current_tracking(old_workspace.as_deref()).await;
 		}
 
 		// Start tracking on the new project if it has a current blocker
@@ -427,10 +263,10 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	let actual_current = seq.current();
 
 	if cached_current != actual_current {
-		if is_blocker_tracking_enabled() {
+		if clockify::is_tracking_enabled() {
 			let workspace_from_path = parse_workspace_from_path(&default_project_path)?;
 
-			let _ = stop_current_tracking(workspace_from_path.as_deref()).await;
+			let _ = clockify::stop_current_tracking(workspace_from_path.as_deref()).await;
 
 			restart_tracking_for_project(&default_project_path, workspace_from_path.as_deref()).await?;
 		}
@@ -507,8 +343,8 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			let target_blocker_path = blockers_dir().join(&target_relative_path);
 
 			// If tracking is enabled, stop current task before adding new one
-			if is_blocker_tracking_enabled() {
-				let _ = stop_current_tracking(target_workspace_from_path.as_deref()).await; // Ignore errors when stopping
+			if clockify::is_tracking_enabled() {
+				let _ = clockify::stop_current_tracking(target_workspace_from_path.as_deref()).await; // Ignore errors when stopping
 			}
 
 			// Create parent directories if they don't exist (for urgent or other paths)
@@ -535,7 +371,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			// If adding to a different project (e.g., urgent), switch the current project
 			if target_relative_path != relative_path {
 				set_current_project(&target_relative_path).await?;
-			} else if is_blocker_tracking_enabled() {
+			} else if clockify::is_tracking_enabled() {
 				// Only restart tracking here if we didn't switch projects
 				// (set_current_project already handles tracking restart)
 				restart_tracking_for_project(&target_relative_path, target_workspace_from_path.as_deref()).await?;
@@ -543,8 +379,8 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 		}
 		Command::Pop => {
 			// If tracking is enabled, stop current task before popping
-			if is_blocker_tracking_enabled() {
-				let _ = stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
+			if clockify::is_tracking_enabled() {
+				let _ = clockify::stop_current_tracking(workspace_from_path.as_deref()).await; // Ignore errors when stopping
 			}
 
 			// Read existing content, pop last content line, format and write
@@ -560,7 +396,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			cleanup_urgent_file_if_empty(&relative_path).await?;
 
 			// If tracking is enabled and there's still a task, start tracking it
-			if is_blocker_tracking_enabled() {
+			if clockify::is_tracking_enabled() {
 				restart_tracking_for_project(&relative_path, workspace_from_path.as_deref()).await?;
 			}
 		}
@@ -662,21 +498,23 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			}
 
 			// Enable tracking state
-			set_blocker_tracking_state(true)?;
+			clockify::set_tracking_enabled(true)?;
 
-			// Use the shared start_tracking_for_task function which handles parent headers
-			// Pass empty description since start_tracking_for_task will get it from get_current_blocker_with_headers
-			if let Err(e) = start_tracking_for_task(String::new(), &relative_path, &resume_args, workspace_from_path.as_deref()).await {
-				eprintln!("Failed to start tracking: {e}");
-				return Err(e);
-			}
+			// Start tracking with current blocker description
+			let relative_path_clone = relative_path.clone();
+			clockify::start_tracking_for_task(
+				|fully_qualified| get_current_blocker_with_headers(&relative_path_clone, fully_qualified).unwrap_or_default(),
+				&resume_args,
+				workspace_from_path.as_deref(),
+			)
+			.await?;
 		}
-		Command::Halt(pause_args) => {
+		Command::Halt(halt_args) => {
 			// Disable tracking state
-			set_blocker_tracking_state(false)?;
+			clockify::set_tracking_enabled(false)?;
 
-			let workspace = workspace_from_path.as_deref().or(pause_args.workspace.as_deref());
-			clockify::stop_time_entry_with_defaults(workspace).await?;
+			let workspace = workspace_from_path.as_deref().or(halt_args.workspace.as_deref());
+			clockify::stop_current_tracking(workspace).await?;
 		}
 		Command::Format => {
 			// Read, format, and write back the blocker file
@@ -762,7 +600,7 @@ fn choose_project_with_fzf(matches: &[String], initial_query: &str) -> Result<Op
 
 	if let Some(stdin) = fzf.stdin.take() {
 		let mut stdin_handle = stdin;
-		stdin_handle.write_all(input.as_bytes())?;
+		IoWrite::write_all(&mut stdin_handle, input.as_bytes())?;
 	}
 
 	let output = fzf.wait_with_output()?;

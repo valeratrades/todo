@@ -7,11 +7,13 @@
 //!
 //! # Module Structure
 //!
-//! - `standard`: Parsing primitives and formatting (HeaderLevel, LineType, BlockerSequence)
-//! - `operations`: Core stack operations (add, pop, list, current)
-//! - `io`: File/project resolution, clockify integration (halt/resume)
+//! - `standard`: Parsing primitives and formatting (HeaderLevel, LineType)
+//! - `operations`: Core stack operations (BlockerSequence with add, pop, list, current)
+//! - `clockify`: Time tracking integration (protocol + tracking state)
+//! - `io`: File/project resolution for standalone blocker files
 //! - `integration`: Bridges for working with issue files and the `open` module
 
+pub mod clockify;
 mod integration;
 mod io;
 mod operations;
@@ -19,10 +21,9 @@ mod standard;
 
 // Re-export the public API
 use color_eyre::eyre::Result;
-pub use integration::{IntegrationArgs, IntegrationCommand};
-pub use io::{BlockerArgs, Command, HaltArgs, ResumeArgs};
-pub use operations::BlockerSequence;
-pub use standard::{HeaderLevel, LineType, classify_line, format_blocker_content, parse_parent_headers, strip_blocker_prefix};
+pub use integration::IntegrationArgs;
+pub use io::BlockerArgs;
+pub use standard::{LineType, classify_line};
 
 use crate::config::LiveSettings;
 
