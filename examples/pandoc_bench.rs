@@ -1,4 +1,4 @@
-//! Benchmark pandoc markdown ↔ typst conversion latency
+//! Benchmark markdown parsing/conversion latency
 //!
 //! Run with: cargo run --example pandoc_bench
 
@@ -8,8 +8,10 @@ use std::{
 	time::Instant,
 };
 
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
 fn main() {
-	// Generate ~200 lines of markdown
+	// Generate ~300 lines of markdown
 	let mut markdown = String::new();
 	for i in 1..=50 {
 		markdown.push_str(&format!("## Heading {i}\n\n"));
@@ -20,47 +22,115 @@ fn main() {
 
 	let line_count = markdown.lines().count();
 	println!("Generated {line_count} lines of markdown\n");
-	println!("=== Markdown (first 500 chars) ===\n{}\n", &markdown[..500.min(markdown.len())]);
 
-	// Benchmark md → typst
-	println!("=== Benchmarking md → typst ===");
+	// Benchmark pulldown-cmark parsing
+	println!("=== pulldown-cmark (parse only) ===");
+	let start = Instant::now();
+	let options = Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
+	let parser = Parser::new_ext(&markdown, options);
+	let events: Vec<_> = parser.collect();
+	let pulldown_parse = start.elapsed();
+	println!("Parse time: {:?}", pulldown_parse);
+	println!("Events: {}", events.len());
+
+	// Benchmark pulldown-cmark → typst conversion
+	println!("\n=== pulldown-cmark → typst ===");
+	let start = Instant::now();
+	let typst_output = md_to_typst_pulldown(&markdown);
+	let pulldown_to_typst = start.elapsed();
+	println!("Convert time: {:?}", pulldown_to_typst);
+	println!("Output (first 500 chars):\n{}\n", &typst_output[..500.min(typst_output.len())]);
+
+	// Benchmark pandoc md → typst
+	println!("=== pandoc md → typst ===");
 	let start = Instant::now();
 	let typst = pandoc_convert(&markdown, "markdown", "typst");
-	let md_to_typst = start.elapsed();
-	println!("md → typst: {:?}", md_to_typst);
+	let pandoc_to_typst = start.elapsed();
+	println!("Convert time: {:?}", pandoc_to_typst);
 
-	let typst = match typst {
-		Ok(t) => t,
-		Err(e) => {
-			eprintln!("Error: {e}");
-			return;
-		}
-	};
-
-	println!("\n=== Typst output (first 500 chars) ===\n{}\n", &typst[..500.min(typst.len())]);
-
-	// Benchmark typst → md
-	println!("=== Benchmarking typst → md ===");
-	let start = Instant::now();
-	let markdown_back = pandoc_convert(&typst, "typst", "markdown");
-	let typst_to_md = start.elapsed();
-	println!("typst → md: {:?}", typst_to_md);
-
-	match markdown_back {
-		Ok(md) => {
-			println!("\n=== Markdown roundtrip (first 500 chars) ===\n{}\n", &md[..500.min(md.len())]);
-		}
-		Err(e) => {
-			eprintln!("Error: {e}");
-		}
+	if let Ok(ref t) = typst {
+		println!("Output (first 500 chars):\n{}\n", &t[..500.min(t.len())]);
 	}
 
 	// Summary
-	println!("=== Summary ===");
-	println!("Lines:        {line_count}");
-	println!("md → typst:   {:?}", md_to_typst);
-	println!("typst → md:   {:?}", typst_to_md);
-	println!("Total:        {:?}", md_to_typst + typst_to_md);
+	println!("=== Summary for {line_count} lines ===");
+	println!("pulldown-cmark parse:     {:?}", pulldown_parse);
+	println!("pulldown-cmark → typst:   {:?}", pulldown_to_typst);
+	println!("pandoc md → typst:        {:?}", pandoc_to_typst);
+	println!("Speedup (pulldown/pandoc): {:.1}x", pandoc_to_typst.as_secs_f64() / pulldown_to_typst.as_secs_f64());
+}
+
+fn md_to_typst_pulldown(markdown: &str) -> String {
+	let options = Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
+	let parser = Parser::new_ext(markdown, options);
+
+	let mut output = String::new();
+	let mut list_depth: usize = 0;
+
+	for event in parser {
+		match event {
+			Event::Start(Tag::Heading { level, .. }) => {
+				let marker = "=".repeat(level as usize);
+				output.push_str(&marker);
+				output.push(' ');
+			}
+			Event::End(TagEnd::Heading(_)) => {
+				output.push('\n');
+			}
+			Event::Start(Tag::List(_)) => {
+				list_depth += 1;
+			}
+			Event::End(TagEnd::List(_)) => {
+				list_depth -= 1;
+				if list_depth == 0 {
+					output.push('\n');
+				}
+			}
+			Event::Start(Tag::Item) => {
+				output.push_str(&"\t".repeat(list_depth.saturating_sub(1)));
+				output.push_str("- ");
+			}
+			Event::End(TagEnd::Item) => {
+				output.push('\n');
+			}
+			Event::TaskListMarker(checked) =>
+				if checked {
+					output.push_str("#checkbox(true) ");
+				} else {
+					output.push_str("#checkbox(false) ");
+				},
+			Event::Start(Tag::Strong) => {
+				output.push('*');
+			}
+			Event::End(TagEnd::Strong) => {
+				output.push('*');
+			}
+			Event::Start(Tag::Emphasis) => {
+				output.push_str("_");
+			}
+			Event::End(TagEnd::Emphasis) => {
+				output.push_str("_");
+			}
+			Event::Code(code) => {
+				output.push('`');
+				output.push_str(&code);
+				output.push('`');
+			}
+			Event::Text(text) => {
+				output.push_str(&text);
+			}
+			Event::SoftBreak | Event::HardBreak => {
+				output.push('\n');
+			}
+			Event::Start(Tag::Paragraph) => {}
+			Event::End(TagEnd::Paragraph) => {
+				output.push('\n');
+			}
+			_ => {}
+		}
+	}
+
+	output
 }
 
 fn pandoc_convert(input: &str, from: &str, to: &str) -> Result<String, String> {

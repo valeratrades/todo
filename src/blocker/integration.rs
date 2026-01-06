@@ -10,12 +10,13 @@ use color_eyre::eyre::{Result, bail, eyre};
 use todo::Extension;
 
 use super::{operations::BlockerSequence, standard::strip_blocker_prefix};
-use crate::marker::Marker;
-
-/// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
-fn issues_dir() -> PathBuf {
-	v_utils::xdg_data_dir!("issues")
-}
+use crate::{
+	marker::Marker,
+	open::{
+		files::{choose_issue_with_fzf, issues_dir, search_issue_files},
+		util::normalize_issue_indentation,
+	},
+};
 
 /// Cache file for current blocker selection
 static CURRENT_BLOCKER_ISSUE_CACHE: &str = "current_blocker_issue.txt";
@@ -36,175 +37,6 @@ fn set_current_blocker_issue(path: &Path) -> Result<()> {
 	let cache_path = get_current_blocker_cache_path();
 	std::fs::write(&cache_path, path.to_string_lossy().as_bytes())?;
 	Ok(())
-}
-
-/// Sanitize a title for use in filenames.
-/// Converts spaces to underscores and removes special characters.
-fn sanitize_title_for_filename(title: &str) -> String {
-	title
-		.chars()
-		.map(|c| {
-			if c.is_alphanumeric() || c == '-' || c == '_' {
-				c
-			} else if c == ' ' {
-				'_'
-			} else {
-				'\0'
-			}
-		})
-		.filter(|&c| c != '\0')
-		.collect::<String>()
-		.trim_matches('_')
-		.to_string()
-}
-
-/// Extract the issue title from the first line of an issue file.
-fn extract_issue_title_from_file(path: &Path) -> Option<String> {
-	let content = std::fs::read_to_string(path).ok()?;
-	let first_line = content.lines().next()?;
-	let line = first_line.trim();
-
-	// Strip checkbox prefix
-	let rest = line.strip_prefix("- [ ] ").or_else(|| line.strip_prefix("- [x] ")).or_else(|| line.strip_prefix("- [X] "))?;
-
-	// Strip trailing marker (markdown: <!--...-->, typst: // ...)
-	let title = if let Some(pos) = rest.find("<!--") {
-		rest[..pos].trim()
-	} else if let Some(pos) = rest.find(" // ") {
-		rest[..pos].trim()
-	} else {
-		rest.trim()
-	};
-
-	if title.is_empty() { None } else { Some(title.to_string()) }
-}
-
-/// Search for issue files matching a pattern
-/// Uses exact same logic as open.rs
-fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
-	let issues_dir = issues_dir();
-	if !issues_dir.exists() {
-		return Ok(Vec::new());
-	}
-
-	// Search for .md, .typ, and their .bak variants (closed issues)
-	let all_files = crate::utils::fd(&["-t", "f", "-e", "md", "-e", "typ", "-e", "bak", "--exclude", ".*"], &issues_dir)?;
-	let mut matches = Vec::new();
-
-	let pattern_lower = pattern.to_lowercase();
-	let pattern_sanitized = sanitize_title_for_filename(pattern).to_lowercase();
-
-	for line in all_files.lines() {
-		let relative_path = line.trim();
-		if relative_path.is_empty() {
-			continue;
-		}
-
-		let path = issues_dir.join(relative_path);
-		let relative_lower = relative_path.to_lowercase();
-
-		if let Some(file_stem) = path.file_stem() {
-			let file_stem_str = file_stem.to_string_lossy().to_lowercase();
-			if file_stem_str.contains(&pattern_lower) || relative_lower.contains(&pattern_lower) || (!pattern_sanitized.is_empty() && file_stem_str.contains(&pattern_sanitized)) {
-				matches.push(path);
-				continue;
-			}
-		}
-
-		if let Some(title) = extract_issue_title_from_file(&path)
-			&& title.to_lowercase().contains(&pattern_lower)
-		{
-			matches.push(path);
-		}
-	}
-
-	Ok(matches)
-}
-
-/// Use fzf to let user choose from multiple issue file matches
-fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result<Option<PathBuf>> {
-	use std::{
-		io::Write as IoWrite,
-		process::{Command, Stdio},
-	};
-
-	let issues_dir = issues_dir();
-
-	let input: String = matches
-		.iter()
-		.filter_map(|p| p.strip_prefix(&issues_dir).ok().map(|r| r.to_string_lossy().to_string()))
-		.collect::<Vec<_>>()
-		.join("\n");
-
-	let mut fzf = Command::new("fzf").args(["--query", initial_query]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
-
-	if let Some(stdin) = fzf.stdin.take() {
-		let mut stdin_handle = stdin;
-		stdin_handle.write_all(input.as_bytes())?;
-	}
-
-	let output = fzf.wait_with_output()?;
-
-	if output.status.success() {
-		let chosen = String::from_utf8(output.stdout)?.trim().to_string();
-		Ok(Some(issues_dir.join(chosen)))
-	} else {
-		Ok(None)
-	}
-}
-
-/// Normalize issue content by converting space-based indentation to tab-based.
-/// Same logic as open.rs
-fn normalize_issue_indentation(content: &str) -> String {
-	let spaces_per_indent = content
-		.lines()
-		.find_map(|line| {
-			if line.starts_with(' ') && !line.trim().is_empty() {
-				let spaces = line.len() - line.trim_start_matches(' ').len();
-				if spaces >= 2 { Some(spaces.min(8)) } else { None }
-			} else {
-				None
-			}
-		})
-		.unwrap_or(4);
-
-	content
-		.lines()
-		.map(|line| {
-			if line.is_empty() {
-				return String::new();
-			}
-
-			let mut chars = line.chars().peekable();
-			let mut space_count = 0;
-			let mut tab_count = 0;
-
-			while let Some(&ch) = chars.peek() {
-				match ch {
-					'\t' => {
-						tab_count += 1;
-						chars.next();
-					}
-					' ' => {
-						space_count += 1;
-						chars.next();
-					}
-					_ => break,
-				}
-			}
-
-			let extra_tabs = space_count / spaces_per_indent;
-			let total_tabs = tab_count + extra_tabs;
-			let remaining_spaces = space_count % spaces_per_indent;
-
-			let rest: String = chars.collect();
-			let mut result = "\t".repeat(total_tabs);
-			result.push_str(&" ".repeat(remaining_spaces));
-			result.push_str(&rest);
-			result
-		})
-		.collect::<Vec<_>>()
-		.join("\n")
 }
 
 /// Extract blockers section from an issue file.

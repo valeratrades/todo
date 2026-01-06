@@ -6,14 +6,14 @@
 mod command;
 mod conflict;
 mod fetch;
-mod files;
+pub(crate) mod files;
 mod format;
 mod issue;
 //pub mod line;
 mod meta;
 mod sync;
 mod touch;
-mod util;
+pub(crate) mod util;
 
 // Re-export the public API
 pub use command::{OpenArgs, open_command};
