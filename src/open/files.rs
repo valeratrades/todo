@@ -175,10 +175,11 @@ pub fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result
 		.filter_map(|p| p.strip_prefix(&issues_base).ok().map(|rel| rel.to_string_lossy().to_string()))
 		.collect();
 
-	// Spawn fzf
+	// Spawn fzf with --select-1 to auto-select when only one match
 	let mut child = Command::new("fzf")
 		.arg("--query")
 		.arg(initial_query)
+		.arg("--select-1")
 		.arg("--preview")
 		.arg("cat {}")
 		.arg("--preview-window")

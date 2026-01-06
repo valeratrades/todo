@@ -319,16 +319,21 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 
 /// Open a local issue file, let user edit, then sync changes back to GitHub.
 pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool) -> Result<()> {
-	use super::{conflict::check_conflict, files::extract_owner_repo_from_path};
+	use super::{conflict::check_conflict, files::extract_owner_repo_from_path, meta::is_virtual_project};
 
 	// Extract owner and repo from path
 	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
 
+	// Auto-enable offline mode for virtual projects
+	let offline = offline || is_virtual_project(&owner, &repo);
+
 	// Load metadata
 	let meta = load_issue_meta_from_path(issue_file_path)?;
 
-	// Check for unresolved conflicts before allowing edits
-	check_conflict(&owner, &repo, meta.issue_number)?;
+	// Check for unresolved conflicts before allowing edits (skip for virtual projects)
+	if !offline {
+		check_conflict(&owner, &repo, meta.issue_number)?;
+	}
 
 	// NOTE: We intentionally do NOT fetch from GitHub before opening.
 	// This avoids the network roundtrip delay. Divergence is detected during sync.
@@ -355,10 +360,10 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 
 	// Handle duplicate close type: remove from local storage entirely
 	if issue.meta.close_state.should_remove() {
-		println!("Issue marked as duplicate, closing on GitHub and removing local file...");
+		println!("Issue marked as duplicate, removing local file...");
 
-		// Close on GitHub (if not already closed)
-		if !meta.original_close_state.is_closed() {
+		// Close on GitHub (if not already closed and not offline)
+		if !offline && !meta.original_close_state.is_closed() {
 			gh.update_issue_state(&owner, &repo, meta.issue_number, "closed").await?;
 		}
 

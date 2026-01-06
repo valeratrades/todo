@@ -6,7 +6,9 @@ use v_utils::prelude::*;
 
 use super::{
 	fetch::fetch_and_store_issue,
-	files::{issues_dir, sanitize_title_for_filename, search_issue_files},
+	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
+	issue::CloseState,
+	meta::{IssueMetaEntry, allocate_virtual_issue_number, ensure_virtual_project, save_issue_meta},
 	util::Extension,
 };
 use crate::github::BoxedGitHubClient;
@@ -151,6 +153,60 @@ pub async fn create_issue_on_github(gh: &BoxedGitHubClient, touch_path: &TouchPa
 	let issue_file_path = fetch_and_store_issue(gh, owner, repo, created.number, extension, false, parent_issue).await?;
 
 	println!("Stored issue at: {:?}", issue_file_path);
+
+	Ok(issue_file_path)
+}
+
+/// Create a new virtual issue locally (no GitHub).
+/// Virtual issues have locally-generated issue numbers and are stored in the same format.
+pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
+	let owner = &touch_path.owner;
+	let repo = &touch_path.repo;
+
+	// Ensure virtual project exists (creates if needed)
+	ensure_virtual_project(owner, repo)?;
+
+	// For now, only support single-level issues (no sub-issues for virtual projects)
+	if touch_path.issue_chain.len() > 1 {
+		// TODO: Support sub-issues for virtual projects
+		return Err(eyre!("Sub-issues are not yet supported for virtual projects. Use a flat issue structure."));
+	}
+
+	// Get the issue title (last in chain)
+	let issue_title = touch_path.issue_chain.last().unwrap();
+
+	// Allocate a new issue number
+	let issue_number = allocate_virtual_issue_number(owner, repo)?;
+
+	// Determine file path
+	let issue_file_path = get_issue_file_path(owner, repo, issue_number, issue_title, extension, false, None);
+
+	// Create parent directories
+	if let Some(parent) = issue_file_path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
+
+	// Create the issue file with basic structure
+	// Virtual issues don't have a GitHub URL, so we use a special marker
+	let content = format!("- [ ] {} <!--virtual:{}/{}#{}-->\n", issue_title, owner, repo, issue_number);
+
+	std::fs::write(&issue_file_path, &content)?;
+
+	// Save metadata
+	let meta_entry = IssueMetaEntry {
+		issue_number,
+		title: issue_title.clone(),
+		extension: extension.as_str().to_string(),
+		original_issue_body: Some(String::new()),
+		original_comments: vec![],
+		original_sub_issues: vec![],
+		parent_issue: None,
+		original_close_state: CloseState::Open,
+	};
+	save_issue_meta(owner, repo, meta_entry)?;
+
+	println!("Created virtual issue #{}: {}", issue_number, issue_title);
+	println!("Stored at: {:?}", issue_file_path);
 
 	Ok(issue_file_path)
 }

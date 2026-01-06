@@ -31,6 +31,10 @@ struct Cli {
 	/// Use mock GitHub client instead of real API (for testing)
 	#[arg(long, global = true)]
 	dbg: bool,
+	/// Skip all network operations - edit locally only, don't sync to GitHub.
+	/// Automatically enabled for virtual projects (projects without GitHub remote).
+	#[arg(long, global = true)]
+	offline: bool,
 }
 
 #[derive(Subcommand)]
@@ -125,7 +129,7 @@ async fn main() {
 		Commands::Clockify(args) => clockify::main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
-		Commands::Open(args) => open::open_command(&settings, github_client, args).await,
+		Commands::Open(args) => open::open_command(&settings, github_client, args, cli.offline).await,
 	};
 
 	match success {

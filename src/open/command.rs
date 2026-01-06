@@ -8,8 +8,9 @@ use v_utils::prelude::*;
 use super::{
 	fetch::fetch_and_store_issue,
 	files::{choose_issue_with_fzf, search_issue_files},
+	meta::is_virtual_project,
 	sync::open_local_issue,
-	touch::{create_issue_on_github, find_local_issue_for_touch, parse_touch_path},
+	touch::{create_issue_on_github, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 	util::Extension,
 };
 use crate::{
@@ -78,10 +79,11 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 	Extension::Md
 }
 
-pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs) -> Result<()> {
+pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, global_offline: bool) -> Result<()> {
 	let input = args.url_or_pattern.as_deref().unwrap_or("").trim();
 	let extension = get_effective_extension(args.extension, settings);
-	let offline = args.offline;
+	// Combine global --offline with subcommand --offline
+	let offline = global_offline || args.offline;
 
 	// Handle --last mode: open the most recently modified issue file
 	if args.last {
@@ -101,21 +103,36 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		// Determine the extension to use
 		let effective_ext = touch_path.extension.unwrap_or(extension);
 
+		// Check if the project is virtual (or if we're in offline mode for a new project)
+		let project_is_virtual = is_virtual_project(&touch_path.owner, &touch_path.repo);
+
 		// First, try to find an existing local issue file
 		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {:?}", existing_path);
-			open_local_issue(&gh, &existing_path, offline).await?;
+			// For virtual projects, always use offline mode
+			let effective_offline = offline || project_is_virtual;
+			open_local_issue(&gh, &existing_path, effective_offline).await?;
 			return Ok(());
 		}
 
-		// Not found locally - create on GitHub (can't be offline for this)
-		if offline {
-			return Err(eyre!("Cannot create new issue in offline mode"));
-		}
-		let issue_file_path = create_issue_on_github(&gh, &touch_path, &effective_ext).await?;
+		// Not found locally - create the issue
+		let issue_file_path = if offline || project_is_virtual {
+			// Create virtual issue (local only, no GitHub)
+			if project_is_virtual {
+				println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
+			} else {
+				println!("Creating virtual issue in offline mode...");
+			}
+			create_virtual_issue(&touch_path, &effective_ext)?
+		} else {
+			// Create on GitHub (normal flow)
+			create_issue_on_github(&gh, &touch_path, &effective_ext).await?
+		};
 
 		// Open the local issue file for editing
-		open_local_issue(&gh, &issue_file_path, offline).await?;
+		// For virtual projects, always use offline mode
+		let effective_offline = offline || project_is_virtual || is_virtual_project(&touch_path.owner, &touch_path.repo);
+		open_local_issue(&gh, &issue_file_path, effective_offline).await?;
 		return Ok(());
 	}
 
