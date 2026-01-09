@@ -106,10 +106,10 @@ fn md_to_typst_pulldown(markdown: &str) -> String {
 				output.push('*');
 			}
 			Event::Start(Tag::Emphasis) => {
-				output.push_str("_");
+				output.push('_');
 			}
 			Event::End(TagEnd::Emphasis) => {
-				output.push_str("_");
+				output.push('_');
 			}
 			Event::Code(code) => {
 				output.push('`');

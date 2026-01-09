@@ -234,13 +234,13 @@ impl BlockerSequence {
 
 	fn render_headers_inner(&self, lines: &mut Vec<Line>) {
 		// Output header if this is not the root
-		if self.level > 0 {
-			if let Some(header_level) = HeaderLevel::from_usize(self.level) {
-				lines.push(Line::Header {
-					level: header_level,
-					text: self.title.clone(),
-				});
-			}
+		if self.level > 0
+			&& let Some(header_level) = HeaderLevel::from_usize(self.level)
+		{
+			lines.push(Line::Header {
+				level: header_level,
+				text: self.title.clone(),
+			});
 		}
 
 		// Output items

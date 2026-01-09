@@ -23,7 +23,7 @@ struct WorkspaceCache {
 	workspaces: HashMap<String, WorkspaceSettings>,
 }
 
-#[derive(Clone, Debug, Parser)]
+#[derive(Clone, Debug, Parser, Default)]
 pub struct ResumeArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]
@@ -44,18 +44,6 @@ pub struct ResumeArgs {
 	/// Mark entry as billable
 	#[arg(short = 'b', long, default_value_t = false)]
 	pub billable: bool,
-}
-
-impl Default for ResumeArgs {
-	fn default() -> Self {
-		Self {
-			workspace: None,
-			project: None,
-			task: None,
-			tags: None,
-			billable: false,
-		}
-	}
 }
 
 #[derive(Clone, Debug, Parser)]

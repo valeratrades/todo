@@ -175,10 +175,8 @@ impl super::source::BlockerSource for FileSource {
 /// Build the ownership hierarchy for a blocker file.
 /// If fully_qualified is true, includes the project name extracted from relative_path.
 fn build_ownership_hierarchy(relative_path: &str, fully_qualified: bool) -> Vec<String> {
-	if fully_qualified {
-		if let Some(project_name) = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str()) {
-			return vec![project_name.to_string()];
-		}
+	if fully_qualified && let Some(project_name) = std::path::Path::new(relative_path).file_stem().and_then(|s| s.to_str()) {
+		return vec![project_name.to_string()];
 	}
 	Vec::new()
 }
@@ -383,7 +381,7 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 	// Parse workspace from path if it contains a slash
 	let workspace_from_path = parse_workspace_from_path(&relative_path)?;
 
-	let blocker_path = blockers_dir().join(&relative_path);
+	let _blocker_path = blockers_dir().join(&relative_path);
 
 	match args.command {
 		Command::Add { name, project, urgent, touch } => {

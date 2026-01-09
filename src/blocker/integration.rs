@@ -138,7 +138,7 @@ fn get_current_source() -> Result<IssueSource> {
 
 /// Main entry point for integrated blocker commands (works with issue files).
 /// This is the default mode for blocker commands.
-pub async fn main_integrated(settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat) -> Result<()> {
+pub async fn main_integrated(_settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat) -> Result<()> {
 	use super::{io::Command, source::BlockerSource};
 
 	match command {
