@@ -32,180 +32,6 @@ pub enum DisplayFormat {
 	Nested,
 }
 
-/// A node in the blocker tree.
-/// Each node has a title (from header or implicit root), items, and children.
-#[derive(Clone, Debug, Default)]
-pub struct BlockerNode {
-	/// Header text (empty for implicit root)
-	pub title: String,
-	/// Header level (0 for implicit root, 1-5 for real headers)
-	pub level: usize,
-	/// Items directly under this node (not under any child header)
-	pub items: Vec<BlockerItem>,
-	/// Child sections (sub-headers)
-	pub children: Vec<BlockerNode>,
-}
-impl BlockerNode {
-	/// Create a new empty node with the given title and level
-	pub fn new(title: impl Into<String>, level: usize) -> Self {
-		Self {
-			title: title.into(),
-			level,
-			items: Vec::new(),
-			children: Vec::new(),
-		}
-	}
-
-	/// Create an implicit root node (level 0)
-	pub fn root() -> Self {
-		Self::new("", 0)
-	}
-
-	/// Check if this node has any content (items or children with content)
-	pub fn is_empty(&self) -> bool {
-		self.items.is_empty() && self.children.iter().all(|c| c.is_empty())
-	}
-
-	/// Get the last item in the tree (depth-first, rightmost)
-	pub fn last_item(&self) -> Option<&BlockerItem> {
-		// Check children first (rightmost child's last item)
-		for child in self.children.iter().rev() {
-			if let Some(item) = child.last_item() {
-				return Some(item);
-			}
-		}
-		// Then check our own items
-		self.items.last()
-	}
-
-	/// Get the path of headers leading to the last item
-	pub fn path_to_last(&self) -> Vec<&str> {
-		let mut path = Vec::new();
-		self.path_to_last_inner(&mut path);
-		path
-	}
-
-	fn path_to_last_inner<'a>(&'a self, path: &mut Vec<&'a str>) {
-		// Check if any child has content
-		for child in self.children.iter().rev() {
-			if !child.is_empty() {
-				if !self.title.is_empty() {
-					path.push(&self.title);
-				}
-				child.path_to_last_inner(path);
-				return;
-			}
-		}
-		// If we have items, add our title
-		if !self.items.is_empty() && !self.title.is_empty() {
-			path.push(&self.title);
-		}
-	}
-
-	/// Render to flat format with headers (traditional)
-	pub fn render_headers(&self) -> Vec<Line> {
-		let mut lines = Vec::new();
-		self.render_headers_inner(&mut lines);
-		lines
-	}
-
-	fn render_headers_inner(&self, lines: &mut Vec<Line>) {
-		// Output header if this is not the root
-		if self.level > 0 {
-			if let Some(header_level) = HeaderLevel::from_usize(self.level) {
-				lines.push(Line::Header {
-					level: header_level,
-					text: self.title.clone(),
-				});
-			}
-		}
-
-		// Output items
-		for item in &self.items {
-			lines.push(Line::Item(item.text.clone()));
-			for comment in &item.comments {
-				lines.push(Line::Comment(comment.clone()));
-			}
-		}
-
-		// Output children
-		for child in &self.children {
-			child.render_headers_inner(lines);
-		}
-	}
-
-	/// Render to nested format with indentation
-	pub fn render_nested(&self) -> Vec<String> {
-		let mut lines = Vec::new();
-		self.render_nested_inner(&mut lines, 0);
-		lines
-	}
-
-	fn render_nested_inner(&self, lines: &mut Vec<String>, indent: usize) {
-		let indent_str = "\t".repeat(indent);
-
-		// Output title if this is not the root
-		if self.level > 0 && !self.title.is_empty() {
-			lines.push(format!("{indent_str}{}", self.title));
-		}
-
-		// Output items (indented one more level if we have a title)
-		let item_indent = if self.level > 0 { indent + 1 } else { indent };
-		let item_indent_str = "\t".repeat(item_indent);
-
-		for item in &self.items {
-			lines.push(format!("{item_indent_str}- {}", item.text));
-			for comment in &item.comments {
-				lines.push(format!("{item_indent_str}\t{comment}"));
-			}
-		}
-
-		// Output children
-		let child_indent = if self.level > 0 { indent + 1 } else { indent };
-		for child in &self.children {
-			child.render_nested_inner(lines, child_indent);
-		}
-	}
-
-	/// Add an item to the appropriate place based on current header context
-	fn add_item_at_level(&mut self, item: BlockerItem, target_level: usize) {
-		if target_level == 0 || self.children.is_empty() {
-			// Add to this node
-			self.items.push(item);
-		} else {
-			// Try to add to the last child that matches or is below target level
-			if let Some(last_child) = self.children.last_mut() {
-				if last_child.level <= target_level {
-					last_child.add_item_at_level(item, target_level);
-				} else {
-					self.items.push(item);
-				}
-			} else {
-				self.items.push(item);
-			}
-		}
-	}
-
-	/// Pop the last item from the tree, returns the removed item and whether tree is now empty
-	pub fn pop_last(&mut self) -> Option<BlockerItem> {
-		// Try children first (rightmost)
-		for child in self.children.iter_mut().rev() {
-			if let Some(item) = child.pop_last() {
-				return Some(item);
-			}
-		}
-		// Then our own items
-		self.items.pop()
-	}
-
-	/// Count total items in the tree
-	pub fn item_count(&self) -> usize {
-		let own_count = self.items.len();
-		let child_count: usize = self.children.iter().map(|c| c.item_count()).sum();
-		own_count + child_count
-	}
-}
-
 /// An item in a blocker section
 #[derive(Clone, Debug)]
 pub struct BlockerItem {
@@ -215,33 +41,53 @@ pub struct BlockerItem {
 }
 
 /// A sequence of blocker lines that can be manipulated.
-/// Internally represented as a tree, but can be rendered in different formats.
+/// Internally represented as a tree, where each sequence can contain child sequences.
 #[derive(Clone, Debug, Default)]
 pub struct BlockerSequence {
-	/// The root node of the tree (implicit H0)
-	root: BlockerNode,
+	/// Header text (empty for root)
+	pub title: String,
+	/// Header level (0 for root, 1-5 for real headers)
+	pub level: usize,
+	/// Items directly under this sequence (not under any child header)
+	pub items: Vec<BlockerItem>,
+	/// Child sections (sub-headers)
+	pub children: Vec<BlockerSequence>,
 }
 
 impl BlockerSequence {
-	/// Create a new BlockerSequence from parsed lines
-	pub fn new(lines: Vec<Line>) -> Self {
-		Self::from_lines(&lines)
+	/// Create a new empty sequence with the given title and level
+	pub fn new(title: impl Into<String>, level: usize) -> Self {
+		Self {
+			title: title.into(),
+			level,
+			items: Vec::new(),
+			children: Vec::new(),
+		}
+	}
+
+	/// Create an implicit root sequence (level 0)
+	pub fn root() -> Self {
+		Self::new("", 0)
+	}
+
+	/// Create a BlockerSequence from parsed lines
+	pub fn from_lines(lines: Vec<Line>) -> Self {
+		Self::build_from_lines(&lines)
 	}
 
 	/// Parse raw text content into a BlockerSequence
 	pub fn parse(content: &str) -> Self {
 		let lines: Vec<Line> = content.lines().filter_map(classify_line).collect();
-		Self::from_lines(&lines)
+		Self::build_from_lines(&lines)
 	}
 
 	/// Build tree from flat line list
-	fn from_lines(lines: &[Line]) -> Self {
-		let mut root = BlockerNode::root();
+	fn build_from_lines(lines: &[Line]) -> Self {
+		let mut root = Self::root();
 		let mut current_item_comments: Vec<String> = Vec::new();
 		let mut pending_item: Option<String> = None;
 
-		// Stack of (level, node_index_in_parent) to track where we are
-		// We build incrementally, tracking the "current" section at each level
+		// Stack of levels to track where we are
 		let mut level_stack: Vec<usize> = vec![0]; // Start at root level
 
 		for line in lines {
@@ -263,9 +109,9 @@ impl BlockerSequence {
 						level_stack.pop();
 					}
 
-					// Add new node at appropriate position
-					let new_node = BlockerNode::new(text.clone(), lvl);
-					Self::add_node_to_tree(&mut root, &level_stack, new_node);
+					// Add new sequence at appropriate position
+					let new_seq = Self::new(text.clone(), lvl);
+					Self::add_child_to_tree(&mut root, &level_stack, new_seq);
 
 					// Push this level
 					level_stack.push(lvl);
@@ -297,15 +143,14 @@ impl BlockerSequence {
 			Self::add_item_to_tree(&mut root, &level_stack, item);
 		}
 
-		Self { root }
+		root
 	}
 
-	/// Add a node to the tree at the position indicated by the level stack
-	fn add_node_to_tree(root: &mut BlockerNode, level_stack: &[usize], node: BlockerNode) {
+	/// Add a child sequence to the tree at the position indicated by the level stack
+	fn add_child_to_tree(root: &mut Self, level_stack: &[usize], child: Self) {
 		let mut current = root;
 
 		for &lvl in level_stack.iter().skip(1) {
-			// Find the last child at this level
 			let idx = current.children.iter().rposition(|c| c.level == lvl);
 			if let Some(i) = idx {
 				current = &mut current.children[i];
@@ -314,15 +159,14 @@ impl BlockerSequence {
 			}
 		}
 
-		current.children.push(node);
+		current.children.push(child);
 	}
 
 	/// Add an item to the tree at the position indicated by the level stack
-	fn add_item_to_tree(root: &mut BlockerNode, level_stack: &[usize], item: BlockerItem) {
+	fn add_item_to_tree(root: &mut Self, level_stack: &[usize], item: BlockerItem) {
 		let mut current = root;
 
 		for &lvl in level_stack.iter().skip(1) {
-			// Find the last child at this level
 			if let Some(idx) = current.children.iter().rposition(|c| c.level == lvl) {
 				current = &mut current.children[idx];
 			} else {
@@ -333,37 +177,152 @@ impl BlockerSequence {
 		current.items.push(item);
 	}
 
+	/// Check if this sequence has any content (items or children with content)
+	pub fn is_empty(&self) -> bool {
+		self.items.is_empty() && self.children.iter().all(|c| c.is_empty())
+	}
+
+	/// Get the number of items in the sequence (recursive)
+	pub fn len(&self) -> usize {
+		let own_count = self.items.len();
+		let child_count: usize = self.children.iter().map(|c| c.len()).sum();
+		own_count + child_count
+	}
+
+	/// Get the last item in the tree (depth-first, rightmost)
+	fn last_item(&self) -> Option<&BlockerItem> {
+		// Check children first (rightmost child's last item)
+		for child in self.children.iter().rev() {
+			if let Some(item) = child.last_item() {
+				return Some(item);
+			}
+		}
+		// Then check our own items
+		self.items.last()
+	}
+
+	/// Get the path of headers leading to the last item
+	fn path_to_last(&self) -> Vec<&str> {
+		let mut path = Vec::new();
+		self.path_to_last_inner(&mut path);
+		path
+	}
+
+	fn path_to_last_inner<'a>(&'a self, path: &mut Vec<&'a str>) {
+		// Check if any child has content
+		for child in self.children.iter().rev() {
+			if !child.is_empty() {
+				if !self.title.is_empty() {
+					path.push(&self.title);
+				}
+				child.path_to_last_inner(path);
+				return;
+			}
+		}
+		// If we have items, add our title
+		if !self.items.is_empty() && !self.title.is_empty() {
+			path.push(&self.title);
+		}
+	}
+
+	/// Render to flat format with headers (traditional)
+	fn render_headers_vec(&self) -> Vec<Line> {
+		let mut lines = Vec::new();
+		self.render_headers_inner(&mut lines);
+		lines
+	}
+
+	fn render_headers_inner(&self, lines: &mut Vec<Line>) {
+		// Output header if this is not the root
+		if self.level > 0 {
+			if let Some(header_level) = HeaderLevel::from_usize(self.level) {
+				lines.push(Line::Header {
+					level: header_level,
+					text: self.title.clone(),
+				});
+			}
+		}
+
+		// Output items
+		for item in &self.items {
+			lines.push(Line::Item(item.text.clone()));
+			for comment in &item.comments {
+				lines.push(Line::Comment(comment.clone()));
+			}
+		}
+
+		// Output children
+		for child in &self.children {
+			child.render_headers_inner(lines);
+		}
+	}
+
+	/// Render to nested format with indentation
+	fn render_nested_vec(&self) -> Vec<String> {
+		let mut lines = Vec::new();
+		self.render_nested_inner(&mut lines, 0);
+		lines
+	}
+
+	fn render_nested_inner(&self, lines: &mut Vec<String>, indent: usize) {
+		let indent_str = "\t".repeat(indent);
+
+		// Output title if this is not the root
+		if self.level > 0 && !self.title.is_empty() {
+			lines.push(format!("{indent_str}{}", self.title));
+		}
+
+		// Output items (indented one more level if we have a title)
+		let item_indent = if self.level > 0 { indent + 1 } else { indent };
+		let item_indent_str = "\t".repeat(item_indent);
+
+		for item in &self.items {
+			lines.push(format!("{item_indent_str}- {}", item.text));
+			for comment in &item.comments {
+				lines.push(format!("{item_indent_str}\t{comment}"));
+			}
+		}
+
+		// Output children
+		let child_indent = if self.level > 0 { indent + 1 } else { indent };
+		for child in &self.children {
+			child.render_nested_inner(lines, child_indent);
+		}
+	}
+
+	/// Pop the last item from the tree
+	fn pop_last(&mut self) -> Option<BlockerItem> {
+		// Try children first (rightmost)
+		for child in self.children.iter_mut().rev() {
+			if let Some(item) = child.pop_last() {
+				return Some(item);
+			}
+		}
+		// Then our own items
+		self.items.pop()
+	}
+
 	/// Serialize to raw text format (headers mode)
 	pub fn serialize(&self) -> String {
-		self.root.render_headers().iter().map(|l| l.to_raw()).collect::<Vec<_>>().join("\n")
+		self.render_headers_vec().iter().map(|l| l.to_raw()).collect::<Vec<_>>().join("\n")
 	}
 
 	/// Get the lines in headers format
 	pub fn lines(&self) -> Vec<Line> {
-		self.root.render_headers()
+		self.render_headers_vec()
 	}
 
 	/// Render in the specified format
 	pub fn render(&self, format: DisplayFormat) -> String {
 		match format {
 			DisplayFormat::Headers => self.serialize(),
-			DisplayFormat::Nested => self.root.render_nested().join("\n"),
+			DisplayFormat::Nested => self.render_nested_vec().join("\n"),
 		}
-	}
-
-	/// Check if the sequence is empty (no content)
-	pub fn is_empty(&self) -> bool {
-		self.root.is_empty()
-	}
-
-	/// Get the number of items in the sequence
-	pub fn len(&self) -> usize {
-		self.root.item_count()
 	}
 
 	/// Get the current (last) blocker item
 	pub fn current(&self) -> Option<&BlockerItem> {
-		self.root.last_item()
+		self.last_item()
 	}
 
 	/// Get the current blocker as a raw string (for caching/comparison)
@@ -379,7 +338,7 @@ impl BlockerSequence {
 		let current = self.current()?;
 
 		// Get path of headers to the current item
-		let path = self.root.path_to_last();
+		let path = self.path_to_last();
 
 		// Build final output: ownership hierarchy + blocker headers + task
 		let mut parts: Vec<&str> = ownership_hierarchy.iter().map(|s| s.as_str()).collect();
@@ -405,67 +364,36 @@ impl BlockerSequence {
 	fn add_item_to_current(&mut self, item: BlockerItem) {
 		// Find the deepest non-empty section and add there
 		// If all empty, add to root
-		fn add_to_deepest(node: &mut BlockerNode, item: BlockerItem) -> bool {
+		fn add_to_deepest(seq: &mut BlockerSequence, item: BlockerItem) -> bool {
 			// Try children first (rightmost)
-			for child in node.children.iter_mut().rev() {
+			for child in seq.children.iter_mut().rev() {
 				if add_to_deepest(child, item.clone()) {
 					return true;
 				}
 			}
-			// If this node has items or is non-root, add here
-			if !node.items.is_empty() || node.level > 0 {
-				node.items.push(item);
+			// If this sequence has items or is non-root, add here
+			if !seq.items.is_empty() || seq.level > 0 {
+				seq.items.push(item);
 				return true;
 			}
 			false
 		}
 
-		if !add_to_deepest(&mut self.root, item.clone()) {
+		if !add_to_deepest(self, item.clone()) {
 			// Nothing found, add to root
-			self.root.items.push(item);
+			self.items.push(item);
 		}
-	}
-
-	/// Add a header to the blocker sequence
-	pub fn add_header(&mut self, level: HeaderLevel, text: &str) {
-		let node = BlockerNode::new(text, level.to_usize());
-		// Add at appropriate position based on level
-		self.add_node_at_level(node);
-	}
-
-	fn add_node_at_level(&mut self, node: BlockerNode) {
-		let target_level = node.level;
-
-		fn add_at_level(current: &mut BlockerNode, node: BlockerNode, target_level: usize) {
-			// If we can add as sibling or child here
-			if current.level < target_level {
-				// Check if last child can accept it
-				if let Some(last_child) = current.children.last_mut() {
-					if last_child.level < target_level {
-						add_at_level(last_child, node, target_level);
-						return;
-					}
-				}
-				// Add as direct child
-				current.children.push(node);
-			} else {
-				// This shouldn't happen at root
-				current.children.push(node);
-			}
-		}
-
-		add_at_level(&mut self.root, node, target_level);
 	}
 
 	/// Remove the last content line from the blocker sequence.
 	/// Returns the removed item text, if any.
 	pub fn pop(&mut self) -> Option<String> {
-		self.root.pop_last().map(|item| item.text)
+		self.pop_last().map(|item| item.text)
 	}
 
 	/// List all content items with their header paths
 	pub fn list(&self) -> Vec<(String, bool)> {
-		let lines = self.root.render_headers();
+		let lines = self.render_headers_vec();
 		lines
 			.iter()
 			.filter_map(|line| match line {
@@ -474,16 +402,6 @@ impl BlockerSequence {
 				Line::Comment(_) => None,
 			})
 			.collect()
-	}
-
-	/// Get access to the root node for advanced operations
-	pub fn root(&self) -> &BlockerNode {
-		&self.root
-	}
-
-	/// Get mutable access to the root node
-	pub fn root_mut(&mut self) -> &mut BlockerNode {
-		&mut self.root
 	}
 }
 

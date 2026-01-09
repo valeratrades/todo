@@ -328,7 +328,7 @@ impl Issue {
 			labels,
 			comments,
 			children,
-			blockers: crate::blocker::BlockerSequence::new(blocker_lines),
+			blockers: crate::blocker::BlockerSequence::from_lines(blocker_lines),
 		})
 	}
 
