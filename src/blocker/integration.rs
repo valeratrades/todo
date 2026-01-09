@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, bail, eyre};
 
-use super::operations::BlockerSequence;
+use super::operations::{BlockerSequence, DisplayFormat};
 use crate::{
 	error::ParseContext,
 	marker::Marker,
@@ -138,8 +138,8 @@ fn get_current_source() -> Result<IssueSource> {
 
 /// Main entry point for integrated blocker commands (works with issue files).
 /// This is called when `--integrated` flag is set on the blocker command.
-pub async fn main_integrated(command: super::io::Command) -> Result<()> {
-	use super::{io::Command, source::BlockerSource, standard::Line};
+pub async fn main_integrated(command: super::io::Command, format: DisplayFormat) -> Result<()> {
+	use super::{io::Command, source::BlockerSource};
 
 	match command {
 		Command::Set { pattern, touch: _ } => {
@@ -194,17 +194,11 @@ pub async fn main_integrated(command: super::io::Command) -> Result<()> {
 				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
 				println!("No `{marker}` marker found in issue body.");
 			} else {
-				let items = blockers.list();
-				if items.is_empty() {
+				let output = blockers.render(format);
+				if output.is_empty() {
 					println!("Blockers section is empty.");
 				} else {
-					for (text, is_header) in &items {
-						if *is_header {
-							println!("# {text}");
-						} else {
-							println!("- {text}");
-						}
-					}
+					println!("{output}");
 				}
 			}
 		}
@@ -252,12 +246,7 @@ pub async fn main_integrated(command: super::io::Command) -> Result<()> {
 			}
 
 			// Output results
-			if let Some(popped_line) = popped {
-				let text = match &popped_line {
-					Line::Header { text, .. } => text,
-					Line::Item(text) => text,
-					Line::Comment(text) => text,
-				};
+			if let Some(text) = popped {
 				println!("Popped: {text}");
 			}
 

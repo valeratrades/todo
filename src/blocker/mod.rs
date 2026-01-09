@@ -24,7 +24,7 @@ mod standard;
 // Re-export the public API
 use color_eyre::eyre::Result;
 pub use io::BlockerArgs;
-pub use operations::BlockerSequence;
+pub use operations::{BlockerSequence, DisplayFormat};
 pub use standard::{Line, classify_line};
 
 use crate::config::LiveSettings;

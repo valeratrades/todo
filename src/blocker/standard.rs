@@ -71,7 +71,7 @@ impl Line {
 	/// Serialize to raw text format
 	pub fn to_raw(&self) -> String {
 		match self {
-			Line::Header { level, text } => format!("{} {}", "#".repeat(level.to_usize()), text),
+			Line::Header { level, text } => format!("{} {text}", "#".repeat(level.to_usize())),
 			Line::Item(text) => format!("- {text}"),
 			Line::Comment(text) => format!("\t{text}"),
 		}

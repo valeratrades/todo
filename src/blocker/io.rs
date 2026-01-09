@@ -12,7 +12,7 @@ use color_eyre::eyre::{Result, bail, eyre};
 
 use super::{
 	clockify::{self, HaltArgs, ResumeArgs},
-	operations::BlockerSequence,
+	operations::{BlockerSequence, DisplayFormat},
 	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension},
 };
 use crate::milestones::SPRINT_HEADER_REL_PATH;
@@ -37,6 +37,9 @@ pub struct BlockerArgs {
 	/// Changes the data source for all commands.
 	#[arg(short, long)]
 	pub integrated: bool,
+	/// Output format for list command
+	#[arg(short, long, default_value = "nested")]
+	pub format: DisplayFormat,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -356,7 +359,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 	// If integrated mode, delegate to the integration module
 	// EXCEPT for urgent operations - urgent always uses file-based source (no issue equivalent)
 	if args.integrated && !command_has_urgent_flag(&args.command) {
-		return super::integration::main_integrated(args.command).await;
+		return super::integration::main_integrated(args.command, args.format).await;
 	}
 
 	let relative_path = match args.relative_path {
@@ -471,8 +474,9 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 			if let Some(s) = sprint_header {
 				println!("{s}");
 			}
-			let content = std::fs::read_to_string(&blocker_path).unwrap_or_else(|_| String::new());
-			println!("{content}");
+			let seq = load_blocker_sequence(&relative_path);
+			let output = seq.render(args.format);
+			println!("{output}");
 		}
 		Command::Current { fully_qualified } =>
 			if let Some(output) = get_current_blocker_with_headers(&relative_path, fully_qualified) {

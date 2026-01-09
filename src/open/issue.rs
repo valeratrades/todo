@@ -10,7 +10,7 @@ use crate::{
 
 /// Close state of an issue.
 /// Maps to GitHub's binary open/closed, but locally supports additional variants.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CloseState {
 	/// Issue is open: `- [ ]`
 	#[default]
