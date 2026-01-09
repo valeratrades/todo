@@ -58,6 +58,11 @@ pub struct OpenArgs {
 	/// prompts: [s]kip (use local), [o]verwrite (use remote), [m]erge (attempt merge)
 	#[arg(short, long)]
 	pub pull: bool,
+
+	/// Use the current blocker issue file (from `todo blocker set`)
+	/// If no pattern provided, opens the current blocker issue.
+	#[arg(short, long)]
+	pub blocker: bool,
 }
 
 /// Get the effective extension from args, config, or default
@@ -80,10 +85,19 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 }
 
 pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, global_offline: bool) -> Result<()> {
-	let input = args.url_or_pattern.as_deref().unwrap_or("").trim();
 	let extension = get_effective_extension(args.extension, settings);
 	// Combine global --offline with subcommand --offline
 	let offline = global_offline || args.offline;
+
+	// Handle --blocker mode: use current blocker issue file if no pattern provided
+	let input = if args.blocker && args.url_or_pattern.is_none() {
+		// Get current blocker issue path
+		let blocker_path = crate::blocker::integration::get_current_blocker_issue().ok_or_else(|| eyre!("No blocker issue set. Use `todo blocker set <pattern>` first."))?;
+		blocker_path.to_string_lossy().to_string()
+	} else {
+		args.url_or_pattern.as_deref().unwrap_or("").trim().to_string()
+	};
+	let input = input.as_str();
 
 	// Handle --last mode: open the most recently modified issue file
 	if args.last {

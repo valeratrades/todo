@@ -220,11 +220,11 @@
         "nixpkgs": "nixpkgs_4"
       },
       "locked": {
-        "lastModified": 1767974773,
-        "narHash": "sha256-F7NxQiXCq1B8Yvg/8LGecHLghGb5BQvg87i4Z5wZYwY=",
+        "lastModified": 1767979812,
+        "narHash": "sha256-2nJs6mXD3fLNf5q1L1f5ZVPujzdHhu7cFIA9Hj0ZYqg=",
         "owner": "valeratrades",
         "repo": ".github",
-        "rev": "3fba733e705c3dd4948059b45d63757d8a81adcc",
+        "rev": "5fdb91f1d5e62ba643f838c6f6e5a2b87acb30a8",
         "type": "github"
       },
       "original": {

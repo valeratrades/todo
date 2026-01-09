@@ -27,7 +27,7 @@ fn get_current_blocker_cache_path() -> PathBuf {
 }
 
 /// Get the currently selected blocker issue file path
-fn get_current_blocker_issue() -> Option<PathBuf> {
+pub fn get_current_blocker_issue() -> Option<PathBuf> {
 	let cache_path = get_current_blocker_cache_path();
 	std::fs::read_to_string(&cache_path).ok().map(|s| PathBuf::from(s.trim())).filter(|p| p.exists())
 }
@@ -137,8 +137,8 @@ fn get_current_source() -> Result<IssueSource> {
 }
 
 /// Main entry point for integrated blocker commands (works with issue files).
-/// This is called when `--integrated` flag is set on the blocker command.
-pub async fn main_integrated(command: super::io::Command, format: DisplayFormat) -> Result<()> {
+/// This is the default mode for blocker commands.
+pub async fn main_integrated(settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat) -> Result<()> {
 	use super::{io::Command, source::BlockerSource};
 
 	match command {
@@ -162,7 +162,7 @@ pub async fn main_integrated(command: super::io::Command, format: DisplayFormat)
 			}
 		}
 
-		Command::Open {
+		Command::OpenStandalone {
 			pattern,
 			touch: _,
 			set_after,
@@ -172,10 +172,10 @@ pub async fn main_integrated(command: super::io::Command, format: DisplayFormat)
 			let issue_path = if let Some(pat) = pattern {
 				resolve_issue_file(&pat)?
 			} else {
-				get_current_blocker_issue().ok_or_else(|| eyre!("No issue set. Use `todo blocker -i set <pattern>` first."))?
+				get_current_blocker_issue().ok_or_else(|| eyre!("No issue set. Use `todo blocker set <pattern>` first."))?
 			};
 
-			// Open the issue file with $EDITOR
+			// Open the issue file with $EDITOR (offline, no GitHub sync)
 			v_utils::io::file_open::open(&issue_path).await?;
 
 			// If set_after flag is set, update the current blocker issue

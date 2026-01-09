@@ -31,12 +31,13 @@ pub struct BlockerArgs {
 	pub command: Command,
 	/// The relative path of the blocker file. Will be appended to the state directory.
 	/// If contains one slash, the folder name will be used as workspace filter.
+	/// Only used in standalone mode.
 	#[arg(short, long)]
 	pub relative_path: Option<String>,
-	/// Use issue files instead of standalone blocker files.
-	/// Changes the data source for all commands.
-	#[arg(short, long)]
-	pub integrated: bool,
+	/// Use individual blocker files instead of issue files.
+	/// By default, blockers are read from issue files (integrated mode).
+	#[arg(long)]
+	pub individual_files: bool,
 	/// Output format for list command
 	#[arg(short, long, default_value = "nested")]
 	pub format: DisplayFormat,
@@ -71,17 +72,17 @@ pub enum Command {
 		#[arg(short = 'f', long)]
 		fully_qualified: bool,
 	},
-	/// Just open the blocker file with $EDITOR. Text as interface.
-	Open {
-		/// Optional pattern to open a different file (standalone: relative path, integrated: issue pattern)
+	/// Open standalone blocker file with $EDITOR (individual files mode, no GitHub sync)
+	OpenStandalone {
+		/// Optional pattern to open a different file
 		pattern: Option<String>,
-		/// Create the file if it doesn't exist (touch, standalone mode only)
+		/// Create the file if it doesn't exist (touch)
 		#[arg(short = 't', long)]
 		touch: bool,
 		/// Set the opened file as current project after exiting the editor
 		#[arg(short = 's', long)]
 		set_after: bool,
-		/// Mark as urgent (standalone mode only: opens workspace-specific urgent.md)
+		/// Mark as urgent (opens workspace-specific urgent.md)
 		#[arg(short = 'u', long)]
 		urgent: bool,
 	},
@@ -350,16 +351,17 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 fn command_has_urgent_flag(command: &Command) -> bool {
 	match command {
 		Command::Add { urgent, .. } => *urgent,
-		Command::Open { urgent, .. } => *urgent,
+		Command::OpenStandalone { urgent, .. } => *urgent,
 		_ => false,
 	}
 }
 
-pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) -> Result<()> {
-	// If integrated mode, delegate to the integration module
-	// EXCEPT for urgent operations - urgent always uses file-based source (no issue equivalent)
-	if args.integrated && !command_has_urgent_flag(&args.command) {
-		return super::integration::main_integrated(args.command, args.format).await;
+pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> Result<()> {
+	// By default, use integrated mode (issue files)
+	// Use individual files mode only if --individual-files flag is set OR if urgent flag is set
+	// (urgent operations always use file-based source - no issue equivalent)
+	if !args.individual_files && !command_has_urgent_flag(&args.command) {
+		return super::integration::main_integrated(settings, args.command, args.format).await;
 	}
 
 	let relative_path = match args.relative_path {
@@ -486,7 +488,7 @@ pub async fn main(_settings: &crate::config::LiveSettings, args: BlockerArgs) ->
 					_ => println!("{}...", &output[..(MAX_LEN - 3)]),
 				}
 			},
-		Command::Open { pattern, touch, set_after, urgent } => {
+		Command::OpenStandalone { pattern, touch, set_after, urgent } => {
 			// Save current blocker state to cache before opening
 			let seq = load_blocker_sequence(&relative_path);
 			save_current_blocker_cache(&relative_path, seq.current_raw())?;
