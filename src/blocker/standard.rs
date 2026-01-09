@@ -2,7 +2,7 @@
 //!
 //! This module provides the core types and functions for understanding blocker file syntax:
 //! - `HeaderLevel`: Represents heading depth (1-5)
-//! - `LineType`: Classifies lines as headers, items, or comments
+//! - `Line`: Classifies lines as headers, items, or comments (with content)
 //! - `classify_line`: Parse a single line into its type
 //! - `format_blocker_content`: Normalize blocker content to standard format
 
@@ -45,69 +45,66 @@ impl HeaderLevel {
 	}
 }
 
-/// Line classification for blocker files
+/// A parsed line in a blocker file.
+/// This is the boundary format between raw text and structured blocker data.
 #[derive(Clone, Debug, PartialEq)]
-pub enum LineType {
+pub enum Line {
 	/// Header with level and text (without # prefix)
 	Header { level: HeaderLevel, text: String },
-	/// List item or other content line (contributes to blocker list)
-	Item,
-	/// Comment line - tab-indented explanatory text (does not contribute to blocker list)
-	Comment,
+	/// List item content (without - prefix)
+	Item(String),
+	/// Comment line - tab-indented explanatory text (without leading tab)
+	Comment(String),
 }
 
-impl LineType {
-	/// Check if this line type is a header
+impl Line {
+	/// Check if this line is a header
 	pub fn is_header(&self) -> bool {
-		matches!(self, LineType::Header { .. })
+		matches!(self, Line::Header { .. })
 	}
 
-	/// Get the header level, or None if not a header
-	pub fn header_level(&self) -> Option<HeaderLevel> {
-		match self {
-			LineType::Header { level, .. } => Some(*level),
-			_ => None,
-		}
-	}
-
-	/// Get the header text, or None if not a header
-	pub fn header_text(&self) -> Option<&str> {
-		match self {
-			LineType::Header { text, .. } => Some(text),
-			_ => None,
-		}
-	}
-
-	/// Check if this line type contributes to the blocker list (headers and items)
+	/// Check if this line contributes to the blocker list (headers and items)
 	pub fn is_content(&self) -> bool {
-		!matches!(self, LineType::Comment)
+		!matches!(self, Line::Comment(_))
+	}
+
+	/// Serialize to raw text format
+	pub fn to_raw(&self) -> String {
+		match self {
+			Line::Header { level, text } => format!("{} {}", "#".repeat(level.to_usize()), text),
+			Line::Item(text) => format!("- {text}"),
+			Line::Comment(text) => format!("\t{text}"),
+		}
 	}
 }
 
-/// Classify a line based on markdown syntax.
-/// - Lines starting with tab are Comments
+/// Parse a line into a structured Line.
+/// - Lines starting with tab are Comments (content without leading tab)
 /// - Lines starting with 2+ spaces (likely editor-converted tabs) are Comments
-/// - Lines starting with # are Headers (levels 1-5)
-/// - All other non-empty lines are Items
+/// - Lines starting with # are Headers (levels 1-5, text without # prefix)
+/// - Lines starting with - are Items (content without - prefix)
+/// - All other non-empty lines are Items (raw content)
 /// - Returns None for empty lines
-pub fn classify_line(line: &str) -> Option<LineType> {
+pub fn classify_line(line: &str) -> Option<Line> {
 	if line.is_empty() {
 		return None;
 	}
 
-	if line.starts_with('\t') {
-		return Some(LineType::Comment);
+	// Comment: tab-indented
+	if let Some(content) = line.strip_prefix('\t') {
+		return Some(Line::Comment(content.to_string()));
 	}
 
-	// Treat lines starting with 2+ spaces as comments (likely from editor tab-to-space conversion)
-	// We check for at least 2 spaces to avoid misclassifying accidentally indented content
+	// Comment: 2+ spaces (likely editor tab-to-space conversion)
+	// But not if it looks like an indented list item
 	if line.starts_with("  ") && !line.trim_start().starts_with('-') {
-		return Some(LineType::Comment);
+		let content = line.trim_start();
+		return Some(Line::Comment(content.to_string()));
 	}
 
 	let trimmed = line.trim();
 
-	// Check for headers (# with space after)
+	// Header: # with space after
 	if trimmed.starts_with('#') {
 		let mut count = 0;
 		for ch in trimmed.chars() {
@@ -127,17 +124,19 @@ pub fn classify_line(line: &str) -> Option<LineType> {
 				// Warn if header is nested too deeply (level > 5)
 				if count > 5 {
 					eprintln!("Warning: Header level {count} is too deep (max 5 supported). Treating as regular item: {trimmed}");
-					return Some(LineType::Item);
+					return Some(Line::Item(trimmed.to_string()));
 				}
 
 				if let Some(level) = HeaderLevel::from_usize(count) {
-					return Some(LineType::Header { level, text });
+					return Some(Line::Header { level, text });
 				}
 			}
 		}
 	}
 
-	Some(LineType::Item)
+	// Item: strip - prefix if present
+	let content = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+	Some(Line::Item(content.to_string()))
 }
 
 /// Check if the content is semantically empty (only comments or whitespace, no actual content)
@@ -168,7 +167,7 @@ pub fn format_blocker_content(content: &str) -> Result<String> {
 			continue;
 		}
 
-		if let Some(LineType::Comment) = classify_line(line) {
+		if let Some(Line::Comment(_)) = classify_line(line) {
 			// Check if previous line was empty
 			if idx > 0 && lines[idx - 1].is_empty() {
 				return Err(eyre!(
@@ -206,18 +205,11 @@ pub fn format_blocker_content(content: &str) -> Result<String> {
 				}
 				continue;
 			}
-			Some(LineType::Comment) => {
-				// Normalize comment lines to tab indentation (convert leading spaces to tab)
-				if line.starts_with('\t') {
-					// Already tab-indented, preserve as-is
-					formatted_lines.push(line.to_string());
-				} else {
-					// Space-indented, convert to tab
-					let trimmed = line.trim_start();
-					formatted_lines.push(format!("\t{trimmed}"));
-				}
+			Some(Line::Comment(content)) => {
+				// Use the parsed content, which has the leading tab/spaces stripped
+				formatted_lines.push(format!("\t{content}"));
 			}
-			Some(LineType::Header { level, text }) => {
+			Some(Line::Header { level, text }) => {
 				// Check if we need an empty line before this header
 				if !formatted_lines.is_empty() {
 					let last_line = formatted_lines.last().unwrap();
@@ -228,7 +220,7 @@ pub fn format_blocker_content(content: &str) -> Result<String> {
 					// - Space if previous is same or lower rank (same/larger level value) than current
 					// - Space if previous line is not a header
 					let needs_space = match prev_line_type {
-						Some(LineType::Header { level: prev_level, .. }) => {
+						Some(Line::Header { level: prev_level, .. }) => {
 							// Using derived Ord: One < Two < Three < Four < Five
 							prev_level >= level // same or lower rank (e.g., ## after # or ##)
 						}
@@ -244,14 +236,9 @@ pub fn format_blocker_content(content: &str) -> Result<String> {
 				let header_prefix = "#".repeat(level.to_usize());
 				formatted_lines.push(format!("{header_prefix} {text}"));
 			}
-			Some(LineType::Item) => {
-				let trimmed = line.trim();
-				// Ensure it starts with "- "
-				if trimmed.starts_with("- ") {
-					formatted_lines.push(trimmed.to_string());
-				} else {
-					formatted_lines.push(format!("- {trimmed}"));
-				}
+			Some(Line::Item(text)) => {
+				// Use the parsed text and format with proper "- " prefix
+				formatted_lines.push(format!("- {text}"));
 			}
 		}
 	}
@@ -379,7 +366,7 @@ pub fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
 		let line = lines[i];
 
 		// Classify the line
-		if let Some(LineType::Header { level, text }) = classify_line(line) {
+		if let Some(Line::Header { level, text }) = classify_line(line) {
 			// Only add headers that are parent levels (smaller level = higher in hierarchy)
 			// Using derived Ord: One < Two < Three < Four < Five
 			if current_level.is_none() || level < current_level.unwrap() {
@@ -401,49 +388,49 @@ mod tests {
 	#[test]
 	fn test_classify_line() {
 		assert_eq!(classify_line(""), None);
-		assert_eq!(classify_line("\tComment"), Some(LineType::Comment));
-		assert_eq!(classify_line("Content"), Some(LineType::Item));
+		assert_eq!(classify_line("\tComment"), Some(Line::Comment("Comment".to_string())));
+		assert_eq!(classify_line("Content"), Some(Line::Item("Content".to_string())));
 		// Lines with 2+ leading spaces are now treated as comments (likely tab-to-space conversion)
-		assert_eq!(classify_line("  Spaces not tab"), Some(LineType::Comment));
+		assert_eq!(classify_line("  Spaces not tab"), Some(Line::Comment("Spaces not tab".to_string())));
 		// But space-indented list items (with -) are still items
-		assert_eq!(classify_line("  - Indented list item"), Some(LineType::Item));
+		assert_eq!(classify_line("  - Indented list item"), Some(Line::Item("Indented list item".to_string())));
 		assert_eq!(
 			classify_line("# Header 1"),
-			Some(LineType::Header {
+			Some(Line::Header {
 				level: HeaderLevel::One,
 				text: "Header 1".to_string()
 			})
 		);
 		assert_eq!(
 			classify_line("## Header 2"),
-			Some(LineType::Header {
+			Some(Line::Header {
 				level: HeaderLevel::Two,
 				text: "Header 2".to_string()
 			})
 		);
 		assert_eq!(
 			classify_line("### Header 3"),
-			Some(LineType::Header {
+			Some(Line::Header {
 				level: HeaderLevel::Three,
 				text: "Header 3".to_string()
 			})
 		);
 		assert_eq!(
 			classify_line("#### Header 4"),
-			Some(LineType::Header {
+			Some(Line::Header {
 				level: HeaderLevel::Four,
 				text: "Header 4".to_string()
 			})
 		);
 		assert_eq!(
 			classify_line("##### Header 5"),
-			Some(LineType::Header {
+			Some(Line::Header {
 				level: HeaderLevel::Five,
 				text: "Header 5".to_string()
 			})
 		);
-		assert_eq!(classify_line("#NoSpace"), Some(LineType::Item)); // Invalid header
-		assert_eq!(classify_line("###### Header 6"), Some(LineType::Item)); // Level 6 not supported, treated as item
+		assert_eq!(classify_line("#NoSpace"), Some(Line::Item("#NoSpace".to_string()))); // Invalid header
+		assert_eq!(classify_line("###### Header 6"), Some(Line::Item("###### Header 6".to_string()))); // Level 6 not supported, treated as item
 	}
 
 	#[test]
@@ -541,17 +528,17 @@ mod tests {
 	}
 
 	#[test]
-	fn test_line_type_methods() {
-		let h1 = LineType::Header {
+	fn test_line_methods() {
+		let h1 = Line::Header {
 			level: HeaderLevel::One,
 			text: "Test".to_string(),
 		};
-		let h2 = LineType::Header {
+		let h2 = Line::Header {
 			level: HeaderLevel::Two,
 			text: "Test".to_string(),
 		};
-		let item = LineType::Item;
-		let comment = LineType::Comment;
+		let item = Line::Item("Task".to_string());
+		let comment = Line::Comment("Note".to_string());
 
 		// Test is_header
 		assert!(h1.is_header());
@@ -559,23 +546,17 @@ mod tests {
 		assert!(!item.is_header());
 		assert!(!comment.is_header());
 
-		// Test header_level
-		assert_eq!(h1.header_level(), Some(HeaderLevel::One));
-		assert_eq!(h2.header_level(), Some(HeaderLevel::Two));
-		assert_eq!(item.header_level(), None);
-		assert_eq!(comment.header_level(), None);
-
-		// Test header_text
-		assert_eq!(h1.header_text(), Some("Test"));
-		assert_eq!(h2.header_text(), Some("Test"));
-		assert_eq!(item.header_text(), None);
-		assert_eq!(comment.header_text(), None);
-
 		// Test is_content
 		assert!(h1.is_content());
 		assert!(h2.is_content());
 		assert!(item.is_content());
 		assert!(!comment.is_content());
+
+		// Test to_raw
+		assert_eq!(h1.to_raw(), "# Test");
+		assert_eq!(h2.to_raw(), "## Test");
+		assert_eq!(item.to_raw(), "- Task");
+		assert_eq!(comment.to_raw(), "\tNote");
 	}
 
 	#[test]

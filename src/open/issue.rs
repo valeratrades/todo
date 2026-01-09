@@ -10,9 +10,10 @@ use crate::{
 
 /// Close state of an issue.
 /// Maps to GitHub's binary open/closed, but locally supports additional variants.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Default)]
 pub enum CloseState {
 	/// Issue is open: `- [ ]`
+	#[default]
 	Open,
 	/// Issue is closed normally: `- [x]`
 	Closed,
@@ -66,12 +67,6 @@ impl CloseState {
 	}
 }
 
-impl Default for CloseState {
-	fn default() -> Self {
-		CloseState::Open
-	}
-}
-
 /// Metadata for an issue (title line info)
 #[derive(Clone, Debug, PartialEq)]
 pub struct IssueMeta {
@@ -92,13 +87,6 @@ pub struct Comment {
 	pub owned: bool,
 }
 
-/// A blocker entry - classification + raw content
-#[derive(Clone, Debug, PartialEq)]
-pub struct Blocker {
-	pub line_type: crate::blocker::LineType,
-	pub raw: String,
-}
-
 /// Complete representation of an issue file
 #[derive(Clone, Debug)]
 pub struct Issue {
@@ -108,8 +96,8 @@ pub struct Issue {
 	pub comments: Vec<Comment>,
 	/// Sub-issues in order
 	pub children: Vec<Issue>,
-	/// Blockers section (empty if none). Parsed exactly like a standalone blockers file.
-	pub blockers: Vec<Blocker>,
+	/// Blockers section. Uses the blocker module's BlockerSequence directly.
+	pub blockers: crate::blocker::BlockerSequence,
 }
 
 impl Issue {
@@ -122,10 +110,8 @@ impl Issue {
 		} else {
 			let mut full_body = base_body.to_string();
 			full_body.push_str("# Blockers\n");
-			for blocker in &self.blockers {
-				full_body.push_str(&blocker.raw);
-				full_body.push('\n');
-			}
+			full_body.push_str(&self.blockers.serialize());
+			full_body.push('\n');
 			full_body
 		}
 	}
@@ -156,7 +142,7 @@ impl Issue {
 
 		let mut comments = Vec::new();
 		let mut children = Vec::new();
-		let mut blockers = Vec::new();
+		let mut blocker_lines = Vec::new();
 		let mut current_comment_lines: Vec<String> = Vec::new();
 		let mut current_comment_meta: Option<(Option<u64>, bool)> = None; // (id, owned)
 		let mut in_body = true;
@@ -208,17 +194,22 @@ impl Issue {
 			}
 
 			// If in blockers section, parse as blocker lines
+			// But stop at sub-issue lines (they end the blockers section)
 			if in_blockers {
-				if let Some(line_type) = crate::blocker::classify_line(content) {
-					tracing::debug!("[parse] blocker line: {:?} -> {:?}", content, line_type);
-					blockers.push(Blocker {
-						line_type,
-						raw: content.to_string(),
-					});
+				// Check if this is a sub-issue line - if so, exit blockers mode and process it below
+				if content.starts_with("- [") && Self::parse_child_title_line(content).is_some() {
+					in_blockers = false;
+					tracing::debug!("[parse] exiting blockers section due to sub-issue: {:?}", content);
+					// Fall through to sub-issue processing below
 				} else {
-					tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {:?}", content);
+					if let Some(line) = crate::blocker::classify_line(content) {
+						tracing::debug!("[parse] blocker line: {:?} -> {:?}", content, line);
+						blocker_lines.push(line);
+					} else {
+						tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {:?}", content);
+					}
+					continue;
 				}
-				continue;
 			}
 
 			// Check for comment marker
@@ -309,7 +300,7 @@ impl Issue {
 					labels: vec![],
 					comments: child_comments,
 					children: vec![],
-					blockers: vec![],
+					blockers: crate::blocker::BlockerSequence::default(),
 				});
 				continue;
 			}
@@ -337,7 +328,7 @@ impl Issue {
 			labels,
 			comments,
 			children,
-			blockers,
+			blockers: crate::blocker::BlockerSequence::new(blocker_lines),
 		})
 	}
 
@@ -505,8 +496,8 @@ impl Issue {
 				out.push_str(&format!("{content_indent}\n"));
 			}
 			out.push_str(&format!("{content_indent}# Blockers\n"));
-			for blocker in &self.blockers {
-				out.push_str(&format!("{content_indent}{}\n", blocker.raw));
+			for line in self.blockers.lines() {
+				out.push_str(&format!("{content_indent}{}\n", line.to_raw()));
 			}
 		}
 
@@ -697,8 +688,8 @@ impl Issue {
 					},
 					labels: sub.labels.iter().map(|l| l.name.clone()).collect(),
 					comments: sub_comments,
-					children: vec![], // Sub-issues don't have nested children in this context
-					blockers: vec![], // Sub-issues don't have blockers
+					children: vec![],                                     // Sub-issues don't have nested children in this context
+					blockers: crate::blocker::BlockerSequence::default(), // Sub-issues don't have blockers
 				}
 			})
 			.collect();
@@ -708,7 +699,7 @@ impl Issue {
 			labels,
 			comments: issue_comments,
 			children,
-			blockers: vec![], // Blockers are local-only, not from GitHub
+			blockers: crate::blocker::BlockerSequence::default(), // Blockers are local-only, not from GitHub
 		}
 	}
 
@@ -762,7 +753,7 @@ impl Issue {
 					labels: vec![],
 					comments: vec![],
 					children: vec![],
-					blockers: vec![],
+					blockers: crate::blocker::BlockerSequence::default(),
 				}
 			})
 			.collect();
@@ -772,7 +763,7 @@ impl Issue {
 			labels: vec![], // Not stored in meta
 			comments,
 			children,
-			blockers: vec![],
+			blockers: crate::blocker::BlockerSequence::default(),
 		}
 	}
 }

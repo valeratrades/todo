@@ -7,14 +7,16 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
 
+use super::operations::BlockerSequence;
+
 /// Trait for blocker data sources.
 /// Implementations handle reading/writing blocker content from different backends.
 pub trait BlockerSource {
-	/// Load the blocker content as a string
-	fn load(&self) -> Result<String>;
+	/// Load the blocker sequence
+	fn load(&self) -> Result<BlockerSequence>;
 
-	/// Save the blocker content
-	fn save(&self, content: &str) -> Result<()>;
+	/// Save the blocker sequence
+	fn save(&self, blockers: &BlockerSequence) -> Result<()>;
 
 	/// Get a display name for this source (for user messages)
 	fn display_name(&self) -> String;

@@ -8,7 +8,7 @@ mod conflict;
 mod fetch;
 pub(crate) mod files;
 mod format;
-mod issue;
+pub(crate) mod issue;
 //pub mod line;
 mod meta;
 mod sync;
