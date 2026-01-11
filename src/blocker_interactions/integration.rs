@@ -7,12 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, bail, eyre};
-use todo::{Issue, Marker, ParseContext};
+use todo::{DisplayFormat, Issue, Marker, ParseContext};
 
-use super::{
-	BlockerSequence,
-	operations::{BlockerSequenceExt, DisplayFormat},
-};
+use super::{BlockerSequence, operations::BlockerSequenceExt};
 use crate::open_interactions::files::{choose_issue_with_fzf, issues_dir, search_issue_files};
 
 /// Cache file for current blocker selection
@@ -191,7 +188,7 @@ pub async fn main_integrated(_settings: &crate::config::LiveSettings, command: s
 				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
 				println!("No `{marker}` marker found in issue body.");
 			} else {
-				let output = blockers.render(format);
+				let output = blockers.serialize(format);
 				if output.is_empty() {
 					println!("Blockers section is empty.");
 				} else {
@@ -302,13 +299,7 @@ mod tests {
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		assert!(!issue.blockers.is_empty());
-		let items = issue.blockers.list();
-		assert_eq!(items.len(), 5); // 2 headers + 3 items
-		assert_eq!(items[0], ("Phase 1".to_string(), true));
-		assert_eq!(items[1], ("First task".to_string(), false));
-		assert_eq!(items[2], ("Second task".to_string(), false));
-		assert_eq!(items[3], ("Phase 2".to_string(), true));
-		assert_eq!(items[4], ("Third task".to_string(), false));
+		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"");
 	}
 
 	#[test]
@@ -346,10 +337,7 @@ mod tests {
 
 		issue.blockers.pop();
 
-		let items = issue.blockers.list();
-		assert_eq!(items.len(), 2);
-		assert_eq!(items[0], ("First task".to_string(), false));
-		assert_eq!(items[1], ("Second task".to_string(), false));
+		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"");
 	}
 
 	#[test]
@@ -398,10 +386,7 @@ mod tests {
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		// Blockers should only contain the blocker items, not the sub-issue
-		let items = issue.blockers.list();
-		assert_eq!(items.len(), 2);
-		assert_eq!(items[0], ("Blocker one".to_string(), false));
-		assert_eq!(items[1], ("Blocker two".to_string(), false));
+		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"");
 
 		// Sub-issue should be in children
 		assert_eq!(issue.children.len(), 1);

@@ -18,19 +18,11 @@ async fn find_ancestry_chain(gh: &BoxedGitHubClient, owner: &str, repo: &str, is
 	let mut ancestry = Vec::new();
 	let mut current_issue_number = issue_number;
 
-	loop {
-		match gh.fetch_parent_issue(owner, repo, current_issue_number).await? {
-			Some(parent) => {
-				// Found a parent, add to the chain
-				let fetched = FetchedIssue::from_parts(owner, repo, parent.number, &parent.title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for parent #{}", parent.number))?;
-				ancestry.push(fetched);
-				current_issue_number = parent.number;
-			}
-			None => {
-				// No more parents, we've reached the root
-				break;
-			}
-		}
+	while let Some(parent) = gh.fetch_parent_issue(owner, repo, current_issue_number).await? {
+		// Found a parent, add to the chain
+		let fetched = FetchedIssue::from_parts(owner, repo, parent.number, &parent.title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for parent #{}", parent.number))?;
+		ancestry.push(fetched);
+		current_issue_number = parent.number;
 	}
 
 	// Reverse so it goes from root to immediate parent
@@ -134,10 +126,10 @@ async fn fetch_issue_with_ancestors(
 	// Recursively fetch all sub-issues
 	for sub_issue in &sub_issues {
 		// Only recurse into open issues, or all if render_closed is true
-		if render_closed || sub_issue.state != "closed" {
-			if let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, render_closed, child_ancestors.clone()).await {
-				eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
-			}
+		if (render_closed || sub_issue.state != "closed")
+			&& let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, render_closed, child_ancestors.clone()).await
+		{
+			eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
 		}
 	}
 
@@ -197,10 +189,10 @@ fn fetch_sub_issue_tree<'a>(
 
 		// Recursively fetch all sub-issues
 		for sub_issue in &sub_issues {
-			if render_closed || sub_issue.state != "closed" {
-				if let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, render_closed, child_ancestors.clone()).await {
-					eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
-				}
+			if (render_closed || sub_issue.state != "closed")
+				&& let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, render_closed, child_ancestors.clone()).await
+			{
+				eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
 			}
 		}
 

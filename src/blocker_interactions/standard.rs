@@ -11,7 +11,7 @@ use std::path::Path;
 
 use color_eyre::eyre::{Result, eyre};
 // Re-export from library for internal use
-pub use todo::{HeaderLevel, Line, classify_line};
+pub use todo::{Line, classify_line};
 
 /// Check if the content is semantically empty (only comments or whitespace, no actual content)
 pub fn is_semantically_empty(content: &str) -> bool {
@@ -212,51 +212,10 @@ pub fn typst_to_markdown(content: &str) -> Result<String> {
 	Ok(markdown_lines.join("\n"))
 }
 
-/// Strip leading "# " or "- " prefix from a blocker line
-pub fn strip_blocker_prefix(line: &str) -> &str {
-	line.strip_prefix("# ").or_else(|| line.strip_prefix("- ")).unwrap_or(line)
-}
-
-/// Parse the tree of parent headers above a task.
-/// Returns a vector of header texts in order from top-level to immediate parent.
-pub fn parse_parent_headers(content: &str, task_line: &str) -> Vec<String> {
-	let lines: Vec<&str> = content.lines().collect();
-
-	// Find the index of the task line
-	let task_index = match lines.iter().position(|&line| {
-		// Match the task line exactly (after stripping prefix)
-		let stripped = strip_blocker_prefix(line);
-		stripped == task_line.strip_prefix("- ").unwrap_or(task_line)
-	}) {
-		Some(idx) => idx,
-		None => return Vec::new(),
-	};
-
-	let mut headers = Vec::new();
-	let mut current_level: Option<HeaderLevel> = None;
-
-	// Walk backwards from the task to find parent headers
-	for i in (0..task_index).rev() {
-		let line = lines[i];
-
-		// Classify the line
-		if let Some(Line::Header { level, text }) = classify_line(line) {
-			// Only add headers that are parent levels (smaller level = higher in hierarchy)
-			// Using derived Ord: One < Two < Three < Four < Five
-			if current_level.is_none() || level < current_level.unwrap() {
-				headers.push(text);
-				current_level = Some(level);
-			}
-		}
-	}
-
-	// Reverse to get top-level first
-	headers.reverse();
-	headers
-}
-
 #[cfg(test)]
 mod tests {
+	use todo::HeaderLevel;
+
 	use super::*;
 
 	#[test]
@@ -456,49 +415,6 @@ mod tests {
 		assert_eq!(HeaderLevel::from_usize(5), Some(HeaderLevel::Five));
 		assert_eq!(HeaderLevel::from_usize(6), None);
 		assert_eq!(HeaderLevel::from_usize(0), None);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_simple() {
-		let content = "# Project A\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Project A"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_nested() {
-		let content = "# Project A\n## Feature B\n### Component C\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Project A", "Feature B", "Component C"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_with_siblings() {
-		let content = "# Project A\n## Feature B\n- task 1\n## Feature C\n- task 2";
-		let headers = parse_parent_headers(content, "- task 2");
-		assert_eq!(headers, vec!["Project A", "Feature C"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_skip_comments() {
-		let content = "# Project A\n\tComment here\n## Feature B\n\tAnother comment\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Project A", "Feature B"]);
-	}
-
-	#[test]
-	fn test_parse_parent_headers_no_headers() {
-		let content = "- task 1\n- task 2\n- task 3";
-		let headers = parse_parent_headers(content, "- task 3");
-		assert_eq!(headers, Vec::<String>::new());
-	}
-
-	#[test]
-	fn test_parse_parent_headers_multiple_levels_skipped() {
-		// Should only get direct ancestors, skipping intermediate levels
-		let content = "# Level 1\n### Level 3\n- task 1";
-		let headers = parse_parent_headers(content, "- task 1");
-		assert_eq!(headers, vec!["Level 1", "Level 3"]);
 	}
 
 	#[test]

@@ -3,6 +3,18 @@
 //! This module contains the core data structures for blockers without I/O dependencies.
 //! These types can be used in both the library and binary contexts.
 
+use clap::ValueEnum;
+
+/// Display format for blocker output
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum DisplayFormat {
+	/// Traditional flat format with `# Header` lines
+	#[default]
+	Headers,
+	/// Indented format showing hierarchy visually
+	Nested,
+}
+
 /// Header level (1-5), where 1 is the highest/largest.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum HeaderLevel {
@@ -281,15 +293,18 @@ impl BlockerSequence {
 		self.items.is_empty() && self.children.iter().all(|c| c.is_empty())
 	}
 
-	/// Serialize to raw text lines
-	pub fn serialize(&self) -> String {
+	/// Serialize to text in the specified format
+	pub fn serialize(&self, format: DisplayFormat) -> String {
 		let mut lines = Vec::new();
-		self.serialize_into(&mut lines);
+		match format {
+			DisplayFormat::Headers => self.serialize_headers(&mut lines),
+			DisplayFormat::Nested => self.serialize_nested(&mut lines, 0),
+		}
 		lines.join("\n")
 	}
 
-	/// Internal recursive serialization
-	fn serialize_into(&self, lines: &mut Vec<String>) {
+	/// Internal recursive serialization (headers format)
+	fn serialize_headers(&self, lines: &mut Vec<String>) {
 		// Items first
 		for item in &self.items {
 			lines.push(format!("- {}", item.text));
@@ -304,7 +319,34 @@ impl BlockerSequence {
 			if child.level > 0 {
 				lines.push(format!("{} {}", "#".repeat(child.level), child.title));
 			}
-			child.serialize_into(lines);
+			child.serialize_headers(lines);
+		}
+	}
+
+	/// Internal recursive serialization (nested/indented format)
+	fn serialize_nested(&self, lines: &mut Vec<String>, indent: usize) {
+		let indent_str = "\t".repeat(indent);
+
+		// Output title if this is not the root
+		if self.level > 0 && !self.title.is_empty() {
+			lines.push(format!("{indent_str}{}", self.title));
+		}
+
+		// Output items (indented one more level if we have a title)
+		let item_indent = if self.level > 0 { indent + 1 } else { indent };
+		let item_indent_str = "\t".repeat(item_indent);
+
+		for item in &self.items {
+			lines.push(format!("{item_indent_str}- {}", item.text));
+			for comment in &item.comments {
+				lines.push(format!("{item_indent_str}\t{comment}"));
+			}
+		}
+
+		// Output children
+		let child_indent = if self.level > 0 { indent + 1 } else { indent };
+		for child in &self.children {
+			child.serialize_nested(lines, child_indent);
 		}
 	}
 
@@ -327,10 +369,10 @@ impl BlockerSequence {
 
 		// Then children
 		for child in &self.children {
-			if child.level > 0 {
-				if let Some(level) = HeaderLevel::from_usize(child.level) {
-					result.push(Line::Header { level, text: child.title.clone() });
-				}
+			if child.level > 0
+				&& let Some(level) = HeaderLevel::from_usize(child.level)
+			{
+				result.push(Line::Header { level, text: child.title.clone() });
 			}
 			child.collect_lines(result);
 		}
@@ -379,7 +421,7 @@ mod tests {
 	fn test_blocker_sequence_serialize() {
 		let content = "- item 1\n\tcomment\n# Section\n- item 2";
 		let seq = BlockerSequence::parse(content);
-		let serialized = seq.serialize();
+		let serialized = seq.serialize(DisplayFormat::Headers);
 
 		assert!(serialized.contains("- item 1"));
 		assert!(serialized.contains("\tcomment"));

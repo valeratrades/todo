@@ -4,8 +4,8 @@ pub mod issue;
 
 // Re-export all public types from issue module at crate root for convenience
 pub use issue::{
-	BlockerItem, BlockerSequence, CloseState, Comment, FetchedIssue, HeaderLevel, Issue, IssueLink, IssueMeta, Line, Marker, ParseContext, ParseError, classify_line, is_blockers_marker,
-	normalize_issue_indentation,
+	BlockerItem, BlockerSequence, CloseState, Comment, DisplayFormat, FetchedIssue, HeaderLevel, Issue, IssueLink, IssueMeta, Line, Marker, ParseContext, ParseError, classify_line,
+	is_blockers_marker, normalize_issue_indentation,
 };
 
 /// File extension/type for issue files.
@@ -68,10 +68,10 @@ impl Header {
 				// Valid header must have space after the # characters
 				if level > 0 && trimmed.len() > level {
 					let rest = &trimmed[level..];
-					if rest.starts_with(' ') {
+					if let Some(stripped) = rest.strip_prefix(' ') {
 						return Some(Self {
 							level,
-							content: rest[1..].to_string(),
+							content: stripped.to_string(),
 						});
 					}
 				}
@@ -93,10 +93,10 @@ impl Header {
 				// Valid header must have space after the = characters
 				if level > 0 && trimmed.len() > level {
 					let rest = &trimmed[level..];
-					if rest.starts_with(' ') {
+					if let Some(stripped) = rest.strip_prefix(' ') {
 						return Some(Self {
 							level,
-							content: rest[1..].to_string(),
+							content: stripped.to_string(),
 						});
 					}
 				}

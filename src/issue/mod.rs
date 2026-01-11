@@ -12,7 +12,7 @@ mod marker;
 mod types;
 mod util;
 
-pub use blocker::{BlockerItem, BlockerSequence, HeaderLevel, Line, classify_line};
+pub use blocker::{BlockerItem, BlockerSequence, DisplayFormat, HeaderLevel, Line, classify_line};
 pub use error::{ParseContext, ParseError};
 pub use marker::Marker;
 pub use types::{CloseState, Comment, FetchedIssue, Issue, IssueLink, IssueMeta};

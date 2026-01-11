@@ -57,11 +57,13 @@ impl TodoTestContext {
 	}
 
 	/// Read a blocker file (path relative to blockers directory).
+	#[cfg(test)]
 	pub fn read_blocker(&self, blocker_relative_path: &str) -> String {
 		self.xdg.read_data(&format!("blockers/{blocker_relative_path}"))
 	}
 
 	/// Check if a blocker file exists.
+	#[cfg(test)]
 	pub fn blocker_exists(&self, blocker_relative_path: &str) -> bool {
 		self.xdg.data_exists(&format!("blockers/{blocker_relative_path}"))
 	}

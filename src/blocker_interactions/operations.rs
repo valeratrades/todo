@@ -3,7 +3,6 @@
 //! This module provides extension methods on BlockerSequence from the library:
 //! - `add`: Push a new blocker onto the stack
 //! - `pop`: Remove the last blocker from the stack
-//! - `list`: Show all blockers with their headers
 //! - `current`: Get the current (last) blocker with its parent context
 //!
 //! # Hierarchy Model
@@ -18,18 +17,7 @@
 //! - `headers`: Traditional flat format with `# Header` lines
 //! - `nested`: Indented format showing hierarchy visually
 
-use clap::ValueEnum;
-use todo::{BlockerItem, BlockerSequence, HeaderLevel, Line};
-
-/// Display format for blocker output
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum DisplayFormat {
-	/// Traditional flat format with `# Header` lines
-	#[default]
-	Headers,
-	/// Indented format showing hierarchy visually
-	Nested,
-}
+use todo::{BlockerItem, BlockerSequence};
 
 /// Extension trait for BlockerSequence with additional operations
 pub trait BlockerSequenceExt {
@@ -50,12 +38,6 @@ pub trait BlockerSequenceExt {
 
 	/// Remove the last content line from the blocker sequence.
 	fn pop(&mut self) -> Option<String>;
-
-	/// List all content items with their header paths
-	fn list(&self) -> Vec<(String, bool)>;
-
-	/// Render in the specified format
-	fn render(&self, format: DisplayFormat) -> String;
 }
 
 impl BlockerSequenceExt for BlockerSequence {
@@ -102,25 +84,6 @@ impl BlockerSequenceExt for BlockerSequence {
 	fn pop(&mut self) -> Option<String> {
 		pop_last(self).map(|item| item.text)
 	}
-
-	fn list(&self) -> Vec<(String, bool)> {
-		let lines = render_headers_vec(self);
-		lines
-			.iter()
-			.filter_map(|line| match line {
-				Line::Header { text, .. } => Some((text.clone(), true)),
-				Line::Item(text) => Some((text.clone(), false)),
-				Line::Comment(_) => None,
-			})
-			.collect()
-	}
-
-	fn render(&self, format: DisplayFormat) -> String {
-		match format {
-			DisplayFormat::Headers => self.serialize(),
-			DisplayFormat::Nested => render_nested_vec(self).join("\n"),
-		}
-	}
 }
 
 /// Get the last item in the tree (depth-first, rightmost)
@@ -156,71 +119,6 @@ fn path_to_last_inner(seq: &BlockerSequence, path: &mut Vec<String>) {
 	// If we have items, add our title
 	if !seq.items.is_empty() && !seq.title.is_empty() {
 		path.push(seq.title.clone());
-	}
-}
-
-/// Render to flat format with headers (traditional)
-fn render_headers_vec(seq: &BlockerSequence) -> Vec<Line> {
-	let mut lines = Vec::new();
-	render_headers_inner(seq, &mut lines);
-	lines
-}
-
-fn render_headers_inner(seq: &BlockerSequence, lines: &mut Vec<Line>) {
-	// Output header if this is not the root
-	if seq.level > 0
-		&& let Some(header_level) = HeaderLevel::from_usize(seq.level)
-	{
-		lines.push(Line::Header {
-			level: header_level,
-			text: seq.title.clone(),
-		});
-	}
-
-	// Output items
-	for item in &seq.items {
-		lines.push(Line::Item(item.text.clone()));
-		for comment in &item.comments {
-			lines.push(Line::Comment(comment.clone()));
-		}
-	}
-
-	// Output children
-	for child in &seq.children {
-		render_headers_inner(child, lines);
-	}
-}
-
-/// Render to nested format with indentation
-fn render_nested_vec(seq: &BlockerSequence) -> Vec<String> {
-	let mut lines = Vec::new();
-	render_nested_inner(seq, &mut lines, 0);
-	lines
-}
-
-fn render_nested_inner(seq: &BlockerSequence, lines: &mut Vec<String>, indent: usize) {
-	let indent_str = "\t".repeat(indent);
-
-	// Output title if this is not the root
-	if seq.level > 0 && !seq.title.is_empty() {
-		lines.push(format!("{indent_str}{}", seq.title));
-	}
-
-	// Output items (indented one more level if we have a title)
-	let item_indent = if seq.level > 0 { indent + 1 } else { indent };
-	let item_indent_str = "\t".repeat(item_indent);
-
-	for item in &seq.items {
-		lines.push(format!("{item_indent_str}- {}", item.text));
-		for comment in &item.comments {
-			lines.push(format!("{item_indent_str}\t{comment}"));
-		}
-	}
-
-	// Output children
-	let child_indent = if seq.level > 0 { indent + 1 } else { indent };
-	for child in &seq.children {
-		render_nested_inner(child, lines, child_indent);
 	}
 }
 
@@ -262,13 +160,15 @@ fn add_item_to_current(seq: &mut BlockerSequence, item: BlockerItem) {
 
 #[cfg(test)]
 mod tests {
+	use todo::DisplayFormat;
+
 	use super::*;
 
 	#[test]
 	fn test_parse_and_serialize() {
 		let content = "# Header\n- task 1\n\tcomment\n- task 2";
 		let seq = BlockerSequence::parse(content);
-		assert_eq!(seq.serialize(), content);
+		assert_eq!(seq.serialize(DisplayFormat::Headers), content);
 	}
 
 	#[test]
@@ -326,7 +226,7 @@ mod tests {
 	fn test_add() {
 		let mut seq = BlockerSequence::parse("- task 1");
 		seq.add("task 2");
-		assert_eq!(seq.serialize(), "- task 1\n- task 2");
+		assert_eq!(seq.serialize(DisplayFormat::Headers), "- task 1\n- task 2");
 	}
 
 	#[test]
@@ -334,7 +234,7 @@ mod tests {
 		let mut seq = BlockerSequence::parse("# Section\n- task 1");
 		seq.add("task 2");
 		// Should add under the same section
-		assert_eq!(seq.serialize(), "# Section\n- task 1\n- task 2");
+		assert_eq!(seq.serialize(DisplayFormat::Headers), "# Section\n- task 1\n- task 2");
 	}
 
 	#[test]
@@ -342,7 +242,7 @@ mod tests {
 		let mut seq = BlockerSequence::parse("- task 1\n- task 2");
 		let popped = seq.pop();
 		assert_eq!(popped, Some("task 2".to_string()));
-		assert_eq!(seq.serialize(), "- task 1");
+		assert_eq!(seq.serialize(DisplayFormat::Headers), "- task 1");
 	}
 
 	#[test]
@@ -350,7 +250,7 @@ mod tests {
 		let mut seq = BlockerSequence::parse("# Section\n- task 1\n- task 2");
 		let popped = seq.pop();
 		assert_eq!(popped, Some("task 2".to_string()));
-		assert_eq!(seq.serialize(), "# Section\n- task 1");
+		assert_eq!(seq.serialize(DisplayFormat::Headers), "# Section\n- task 1");
 	}
 
 	#[test]
@@ -361,18 +261,10 @@ mod tests {
 	}
 
 	#[test]
-	fn test_list() {
-		let seq = BlockerSequence::parse("# Header 1\n- task 1\n# Header 2\n- task 2");
-		let list = seq.list();
-		assert_eq!(
-			list,
-			vec![
-				("Header 1".to_string(), true),
-				("task 1".to_string(), false),
-				("Header 2".to_string(), true),
-				("task 2".to_string(), false),
-			]
-		);
+	fn test_serialize_roundtrip() {
+		let input = "# Header 1\n- task 1\n# Header 2\n- task 2";
+		let seq = BlockerSequence::parse(input);
+		insta::assert_snapshot!(seq.serialize(DisplayFormat::Headers), @"");
 	}
 
 	#[test]
@@ -389,20 +281,20 @@ mod tests {
 	}
 
 	#[test]
-	fn test_render_nested() {
+	fn test_serialize_nested() {
 		let seq = BlockerSequence::parse("# Section A\n- task 1\n## Subsection\n- task 2\n# Section B\n- task 3");
 
-		let nested = seq.render(DisplayFormat::Nested);
+		let nested = seq.serialize(DisplayFormat::Nested);
 		let expected = "Section A\n\t- task 1\n\tSubsection\n\t\t- task 2\nSection B\n\t- task 3";
 		assert_eq!(nested, expected);
 	}
 
 	#[test]
-	fn test_render_headers() {
+	fn test_serialize_headers() {
 		let content = "# Section A\n- task 1\n## Subsection\n- task 2";
 		let seq = BlockerSequence::parse(content);
 
-		let headers = seq.render(DisplayFormat::Headers);
+		let headers = seq.serialize(DisplayFormat::Headers);
 		assert_eq!(headers, content);
 	}
 
@@ -412,7 +304,7 @@ mod tests {
 		let seq = BlockerSequence::parse(content);
 
 		// Should serialize back correctly
-		assert_eq!(seq.serialize(), content);
+		assert_eq!(seq.serialize(DisplayFormat::Headers), content);
 
 		// Current should be the section task
 		assert_eq!(seq.current_with_context(&[]), Some("Section: section task".to_string()));
@@ -436,6 +328,6 @@ mod tests {
 		let content = "# Section\n- task 1\n\tcomment 1\n\tcomment 2\n- task 2";
 		let seq = BlockerSequence::parse(content);
 
-		assert_eq!(seq.serialize(), content);
+		assert_eq!(seq.serialize(DisplayFormat::Headers), content);
 	}
 }

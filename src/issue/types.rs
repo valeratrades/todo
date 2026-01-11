@@ -223,7 +223,7 @@ impl Issue {
 		} else {
 			let mut full_body = base_body.to_string();
 			full_body.push_str("# Blockers\n");
-			full_body.push_str(&self.blockers.serialize());
+			full_body.push_str(&self.blockers.serialize(super::blocker::DisplayFormat::Headers));
 			full_body.push('\n');
 			full_body
 		}

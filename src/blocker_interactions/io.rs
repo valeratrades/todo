@@ -9,11 +9,13 @@ use std::{io::Write as IoWrite, path::Path};
 
 use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
+use todo::DisplayFormat;
 
 use super::{
 	BlockerSequence,
 	clockify::{self, HaltArgs, ResumeArgs},
-	operations::{BlockerSequenceExt, DisplayFormat},
+	operations::BlockerSequenceExt,
+	source::BlockerSource,
 	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension},
 };
 use crate::milestones::SPRINT_HEADER_REL_PATH;
@@ -122,20 +124,6 @@ fn load_current_blocker_cache(relative_path: &str) -> Option<String> {
 	std::fs::read_to_string(&cache_path).ok()
 }
 
-/// Load blocker sequence from a file
-fn load_blocker_sequence(relative_path: &str) -> BlockerSequence {
-	let blocker_path = blockers_dir().join(relative_path);
-	let content = std::fs::read_to_string(&blocker_path).unwrap_or_default();
-	BlockerSequence::parse(&content)
-}
-
-/// Save blocker sequence to a file
-fn save_blocker_sequence(relative_path: &str, seq: &BlockerSequence) -> Result<()> {
-	let blocker_path = blockers_dir().join(relative_path);
-	std::fs::write(&blocker_path, seq.serialize())?;
-	Ok(())
-}
-
 /// File-based blocker source for standalone blocker files.
 pub struct FileSource {
 	relative_path: String,
@@ -144,10 +132,6 @@ pub struct FileSource {
 impl FileSource {
 	pub fn new(relative_path: String) -> Self {
 		Self { relative_path }
-	}
-
-	pub fn relative_path(&self) -> &str {
-		&self.relative_path
 	}
 }
 
@@ -160,7 +144,7 @@ impl super::source::BlockerSource for FileSource {
 
 	fn save(&self, blockers: &BlockerSequence) -> Result<()> {
 		let blocker_path = blockers_dir().join(&self.relative_path);
-		std::fs::write(&blocker_path, blockers.serialize())?;
+		std::fs::write(&blocker_path, blockers.serialize(todo::DisplayFormat::Headers))?;
 		Ok(())
 	}
 
@@ -185,7 +169,8 @@ fn build_ownership_hierarchy(relative_path: &str, fully_qualified: bool) -> Vec<
 /// Get the current blocker with parent headers prepended (joined by ": ")
 /// If fully_qualified is true, prepend the project name from the relative_path
 fn get_current_blocker_with_headers(relative_path: &str, fully_qualified: bool) -> Option<String> {
-	let seq = load_blocker_sequence(relative_path);
+	let source = FileSource::new(relative_path.to_string());
+	let seq = source.load().ok()?;
 	let hierarchy = build_ownership_hierarchy(relative_path, fully_qualified);
 	seq.current_with_context(&hierarchy)
 }
@@ -313,7 +298,8 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	};
 
 	let cached_current = load_current_blocker_cache(&default_project_path);
-	let seq = load_blocker_sequence(&default_project_path);
+	let source = FileSource::new(default_project_path.clone());
+	let seq = source.load()?;
 	let actual_current = seq.current_raw();
 
 	if cached_current != actual_current {
@@ -428,9 +414,10 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 			}
 
 			// Read existing content, add new line, format and write
-			let mut seq = load_blocker_sequence(&target_relative_path);
+			let source = FileSource::new(target_relative_path.clone());
+			let mut seq = source.load()?;
 			seq.add(&name);
-			save_blocker_sequence(&target_relative_path, &seq)?;
+			source.save(&seq)?;
 
 			// Save current blocker to cache
 			save_current_blocker_cache(&target_relative_path, Some(name.clone()))?;
@@ -454,9 +441,10 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 			}
 
 			// Read existing content, pop last content line, format and write
-			let mut seq = load_blocker_sequence(&relative_path);
+			let source = FileSource::new(relative_path.clone());
+			let mut seq = source.load()?;
 			seq.pop();
-			save_blocker_sequence(&relative_path, &seq)?;
+			source.save(&seq)?;
 
 			// Get the new current blocker after popping
 			let new_current = seq.current_raw();
@@ -475,8 +463,9 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 			if let Some(s) = sprint_header {
 				println!("{s}");
 			}
-			let seq = load_blocker_sequence(&relative_path);
-			let output = seq.render(args.format);
+			let source = FileSource::new(relative_path.clone());
+			let seq = source.load()?;
+			let output = seq.serialize(args.format);
 			println!("{output}");
 		}
 		Command::Current { fully_qualified } =>
@@ -489,7 +478,8 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 			},
 		Command::OpenStandalone { pattern, touch, set_after, urgent } => {
 			// Save current blocker state to cache before opening
-			let seq = load_blocker_sequence(&relative_path);
+			let source = FileSource::new(relative_path.clone());
+			let seq = source.load()?;
 			save_current_blocker_cache(&relative_path, seq.current_raw())?;
 
 			// Determine which file to open
@@ -558,7 +548,8 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 		}
 		Command::Resume(resume_args) => {
 			// Check that there is a current blocker
-			let seq = load_blocker_sequence(&relative_path);
+			let source = FileSource::new(relative_path.clone());
+			let seq = source.load()?;
 			if seq.current().is_none() {
 				return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'"));
 			}
