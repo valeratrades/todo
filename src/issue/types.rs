@@ -4,6 +4,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Minimal issue identifier for building file paths and tracking ancestry.
+/// Contains just enough info to construct directory names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IssueLink {
+	pub number: u64,
+	pub title: String,
+}
+
+impl IssueLink {
+	pub fn new(number: u64, title: impl Into<String>) -> Self {
+		Self { number, title: title.into() }
+	}
+}
+
 use super::{
 	blocker::{BlockerSequence, classify_line},
 	error::{ParseContext, ParseError},

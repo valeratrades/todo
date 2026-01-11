@@ -534,6 +534,37 @@ impl GitHubClient for MockGitHubClient {
 
 		Ok(false)
 	}
+
+	#[instrument(skip(self), name = "MockGitHubClient::fetch_parent_issue")]
+	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GitHubIssue>> {
+		tracing::info!(target: "mock_github", owner, repo, issue_number, "fetch_parent_issue");
+		self.log_call(&format!("fetch_parent_issue({owner}, {repo}, {issue_number})"));
+
+		let key = RepoKey::new(owner, repo);
+
+		// Find the parent by searching through sub_issues relationships
+		let parent_number = {
+			let sub_issues = self.sub_issues.lock().unwrap();
+			if let Some(repo_sub_issues) = sub_issues.get(&key) {
+				// Find which parent has this issue as a child
+				repo_sub_issues
+					.iter()
+					.find_map(|(parent, children)| if children.contains(&issue_number) { Some(*parent) } else { None })
+			} else {
+				None
+			}
+		};
+
+		match parent_number {
+			Some(parent_num) => {
+				let issues = self.issues.lock().unwrap();
+				let repo_issues = issues.get(&key).ok_or_else(|| eyre!("Repository not found: {}/{}", owner, repo))?;
+				let parent_data = repo_issues.get(&parent_num).ok_or_else(|| eyre!("Parent issue not found: #{}", parent_num))?;
+				Ok(Some(self.convert_issue_data(parent_data)))
+			}
+			None => Ok(None),
+		}
+	}
 }
 
 #[cfg(test)]
@@ -629,5 +660,33 @@ mod tests {
 
 		client.clear_call_log();
 		assert!(client.get_call_log().is_empty());
+	}
+
+	#[tokio::test]
+	async fn test_mock_fetch_parent_issue() {
+		let client = MockGitHubClient::new("testuser");
+
+		// Add parent and child issues
+		client.add_issue("owner", "repo", 1, "Parent Issue", "", "open", vec![], "testuser");
+		client.add_issue("owner", "repo", 2, "Child Issue", "", "open", vec![], "testuser");
+		client.add_issue("owner", "repo", 3, "Grandchild Issue", "", "open", vec![], "testuser");
+
+		// Add sub-issue relationships
+		client.add_sub_issue_relation("owner", "repo", 1, 2);
+		client.add_sub_issue_relation("owner", "repo", 2, 3);
+
+		// Root issue has no parent
+		let parent = client.fetch_parent_issue("owner", "repo", 1).await.unwrap();
+		assert!(parent.is_none());
+
+		// Child issue has parent
+		let parent = client.fetch_parent_issue("owner", "repo", 2).await.unwrap();
+		assert!(parent.is_some());
+		assert_eq!(parent.unwrap().number, 1);
+
+		// Grandchild has child as parent
+		let parent = client.fetch_parent_issue("owner", "repo", 3).await.unwrap();
+		assert!(parent.is_some());
+		assert_eq!(parent.unwrap().number, 2);
 	}
 }

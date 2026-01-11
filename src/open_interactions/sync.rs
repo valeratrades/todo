@@ -8,7 +8,7 @@
 //! - If both changed since consensus → conflict requiring manual resolution
 //! - If neither changed → no action needed
 
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 use jiff::Timestamp;
 use todo::{Extension, Issue, ParseContext};
@@ -176,12 +176,44 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 /// These commits are not counted as the "last synced truth" for consensus.
 const CONFLICT_COMMIT_PREFIX: &str = "__conflicts:";
 
+/// Commit local changes to git after successful sync to GitHub.
+/// This ensures that the local git state reflects the synced state.
+/// Only commits if git is initialized in the issues directory.
+fn commit_synced_changes(owner: &str, repo: &str, issue_number: u64) {
+	use super::files::issues_dir;
+
+	let data_dir = issues_dir();
+	let data_dir_str = match data_dir.to_str() {
+		Some(s) => s,
+		None => return,
+	};
+
+	// Check if git is initialized
+	let git_check = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output();
+	if !git_check.map(|o| o.status.success()).unwrap_or(false) {
+		// Git not initialized, skip committing
+		return;
+	}
+
+	// Stage all changes
+	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status();
+
+	// Check if there are staged changes
+	let diff_output = Command::new("git").args(["-C", data_dir_str, "diff", "--cached", "--quiet"]).status();
+	if diff_output.map(|s| s.success()).unwrap_or(true) {
+		// No staged changes
+		return;
+	}
+
+	// Commit with a descriptive message
+	let commit_msg = format!("sync: {owner}/{repo}#{issue_number}");
+	let _ = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &commit_msg]).output();
+}
+
 /// Handle divergence: both local and remote changed since last sync.
 /// Creates a local `remote-state` branch with remote changes and initiates a git merge.
 /// No PR is created - conflicts are resolved locally via standard git workflow.
 async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, meta: &IssueMetaEntry, _local_issue: &Issue, remote_issue: &Issue) -> Result<()> {
-	use std::process::Command;
-
 	use super::files::issues_dir;
 
 	let data_dir = issues_dir();
@@ -389,6 +421,9 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		project_meta.issues.remove(&meta.issue_number);
 		super::meta::save_project_meta(&project_meta)?;
 
+		// Commit the removal to git
+		commit_synced_changes(&owner, &repo, meta.issue_number);
+
 		println!("Duplicate issue removed from local storage.");
 		return Ok(());
 	}
@@ -461,6 +496,8 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 				updated_meta.original_close_state = remote_issue.meta.close_state.clone();
 				// Note: comments and sub-issues would need similar updates for full implementation
 				super::meta::save_issue_meta(&owner, &repo, updated_meta)?;
+				// Commit the remote state update to git
+				commit_synced_changes(&owner, &repo, meta.issue_number);
 				println!("Remote changed, local file updated.");
 				return Ok(());
 			}
@@ -542,6 +579,9 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		if actions_executed > 0 {
 			println!("Synced {actions_executed} actions to GitHub.");
 		}
+
+		// Commit the synced changes to local git
+		commit_synced_changes(&owner, &repo, issue_number);
 	} else {
 		println!("No changes made.");
 	}

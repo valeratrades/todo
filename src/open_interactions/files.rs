@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use todo::IssueLink;
 use v_utils::prelude::*;
 
 use super::util::Extension;
