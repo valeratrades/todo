@@ -233,8 +233,8 @@ fn test_only_remote_changed_takes_remote() {
 	// Current behavior: triggers divergence even for one-sided change
 	// New behavior should: accept remote silently
 	// For now, we document current behavior
-	eprintln!("stdout: {}", stdout);
-	eprintln!("stderr: {}", stderr);
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
 	eprintln!("status: {:?}", output.status);
 
 	// TODO: After implementing consensus-based sync, this should succeed
@@ -285,8 +285,8 @@ fn test_only_local_changed_pushes_local() {
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	let stdout = String::from_utf8_lossy(&output.stdout);
 
-	eprintln!("stdout: {}", stdout);
-	eprintln!("stderr: {}", stderr);
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
 	eprintln!("status: {:?}", output.status);
 
 	// Expected behavior: only local changed, so we should push local to remote

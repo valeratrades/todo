@@ -29,7 +29,7 @@ use crate::{error::ParseContext, github::BoxedGitHubClient};
 /// Input for sync resolution decision.
 ///
 /// Contains the last synced state and timestamps, plus current local and remote states.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct SyncInput {
 	/// Timestamp of the last successful sync (consensus point)
 	pub last_synced_timestamp: u64,
@@ -46,7 +46,7 @@ pub struct SyncInput {
 }
 
 /// Decision from sync resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncDecision {
 	/// No changes on either side - nothing to do
 	NoAction,
