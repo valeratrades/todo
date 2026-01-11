@@ -207,9 +207,7 @@ fn test_both_diverged_with_git_initiates_merge() {
 
 	assert!(
 		stdout.contains("Merging") || stdout.contains("merged") || stderr.contains("CONFLICT") || stderr.contains("Conflict"),
-		"Expected merge activity or conflict. stdout: {}, stderr: {}",
-		stdout,
-		stderr
+		"Expected merge activity or conflict. stdout: {stdout}, stderr: {stderr}"
 	);
 }
 
@@ -232,7 +230,7 @@ fn test_only_remote_changed_takes_remote() {
 	eprintln!("stderr: {stderr}");
 	eprintln!("status: {:?}", output.status);
 
-	assert!(output.status.success(), "Should succeed when only remote changed. stderr: {}", stderr);
+	assert!(output.status.success(), "Should succeed when only remote changed. stderr: {stderr}");
 }
 
 #[test]
@@ -253,11 +251,9 @@ fn test_only_local_changed_pushes_local() {
 	eprintln!("stderr: {stderr}");
 	eprintln!("status: {:?}", output.status);
 
-	assert!(output.status.success(), "Should succeed when only local changed. stderr: {}", stderr);
+	assert!(output.status.success(), "Should succeed when only local changed. stderr: {stderr}");
 	assert!(
 		stdout.contains("Updating") || stdout.contains("Synced") || stdout.contains("No changes"),
-		"Expected sync activity. stdout: {}, stderr: {}",
-		stdout,
-		stderr
+		"Expected sync activity. stdout: {stdout}, stderr: {stderr}"
 	);
 }
