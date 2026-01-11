@@ -8,8 +8,7 @@ mod conflict;
 mod fetch;
 pub(crate) mod files;
 mod format;
-pub(crate) mod issue;
-//pub mod line;
+mod github_sync;
 mod meta;
 mod sync;
 mod touch;
@@ -17,4 +16,5 @@ pub(crate) mod util;
 
 // Re-export the public API
 pub use command::{OpenArgs, open_command};
-// Re-export for tests that need access to internal types
+// Re-export Issue from the library crate
+pub use todo::Issue;

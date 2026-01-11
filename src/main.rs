@@ -1,14 +1,12 @@
 #![allow(clippy::len_zero)]
-mod blocker;
+mod blocker_interactions;
 pub mod config;
-pub mod error;
 mod github;
 mod manual_stats;
-pub mod marker;
 mod milestones;
 mod mock_github;
 pub mod mocks;
-mod open;
+pub mod open_interactions;
 mod perf_eval;
 mod shell_init;
 pub mod utils;
@@ -48,15 +46,15 @@ enum Commands {
 	/// Shell aliases and hooks. Usage: `todos init <shell> | source`
 	Init(shell_init::ShellInitArgs),
 	/// Blockers tree (use --integrated flag for issue files)
-	Blocker(blocker::BlockerArgs),
+	Blocker(blocker_interactions::BlockerArgs),
 	/// Clockify time tracking
-	Clockify(blocker::clockify::ClockifyArgs),
+	Clockify(blocker_interactions::clockify::ClockifyArgs),
 	/// Performance evaluation with screenshots
 	PerfEval(perf_eval::PerfEvalArgs),
 	/// Watch monitors daemon - takes screenshots every 60s
 	WatchMonitors(watch_monitors::WatchMonitorsArgs),
 	/// Open a GitHub issue in $EDITOR
-	Open(open::OpenArgs),
+	Open(open_interactions::OpenArgs),
 }
 
 #[tokio::main]
@@ -120,11 +118,11 @@ async fn main() {
 			shell_init::output(&settings, args);
 			Ok(())
 		}
-		Commands::Blocker(args) => blocker::main(&settings, args).await,
-		Commands::Clockify(args) => blocker::clockify::clockify_main(&settings, args).await,
+		Commands::Blocker(args) => blocker_interactions::main(&settings, args).await,
+		Commands::Clockify(args) => blocker_interactions::clockify::clockify_main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),
-		Commands::Open(args) => open::open_command(&settings, github_client, args, cli.offline).await,
+		Commands::Open(args) => open_interactions::open_command(&settings, github_client, args, cli.offline).await,
 	};
 
 	match success {

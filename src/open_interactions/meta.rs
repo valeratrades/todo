@@ -3,9 +3,10 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
+use todo::CloseState;
 use v_utils::prelude::*;
 
-use super::{files::get_project_dir, issue::CloseState};
+use super::files::get_project_dir;
 use crate::github::{OriginalComment, OriginalSubIssue};
 
 /// Stored metadata for a single issue

@@ -142,6 +142,9 @@ pub trait GitHubClient: Send + Sync {
 
 	/// Check if an issue exists by number
 	async fn issue_exists(&self, owner: &str, repo: &str, issue_number: u64) -> Result<bool>;
+
+	/// Fetch the parent issue of a sub-issue (returns None if issue has no parent)
+	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GitHubIssue>>;
 }
 
 //==============================================================================
@@ -491,6 +494,32 @@ impl GitHubClient for RealGitHubClient {
 			.await?;
 
 		Ok(res.status().is_success())
+	}
+
+	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GitHubIssue>> {
+		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/parent");
+
+		let res = self
+			.http_client
+			.get(&api_url)
+			.header("User-Agent", "Rust GitHub Client")
+			.header("Authorization", self.auth_header())
+			.send()
+			.await?;
+
+		if res.status() == reqwest::StatusCode::NOT_FOUND {
+			// Issue has no parent
+			return Ok(None);
+		}
+
+		if !res.status().is_success() {
+			let status = res.status();
+			let body = res.text().await.unwrap_or_default();
+			return Err(eyre!("Failed to fetch parent issue: {} - {}", status, body));
+		}
+
+		let parent = res.json::<GitHubIssue>().await?;
+		Ok(Some(parent))
 	}
 }
 

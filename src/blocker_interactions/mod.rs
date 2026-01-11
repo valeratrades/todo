@@ -7,12 +7,15 @@
 //!
 //! # Architecture
 //!
-//! - `standard`: Pure parsing primitives (strings only)
-//! - `operations`: Pure operations on BlockerSequence (no I/O)
+//! - `standard`: Extended parsing primitives (typst conversion, formatting)
+//! - `operations`: Extended operations on BlockerSequence (pop, move, etc.)
 //! - `source`: BlockerSource trait for data access abstraction
 //! - `io`: File-based source implementation + CLI handling
 //! - `integration`: Issue-based source implementation
 //! - `clockify`: Time tracking integration
+//!
+//! Core types (HeaderLevel, Line, BlockerSequence, classify_line) are defined in the
+//! library crate (todo::blocker_types) and re-exported here for convenience.
 
 pub mod clockify;
 pub(super) mod integration;
@@ -21,11 +24,13 @@ mod operations;
 mod source;
 mod standard;
 
-// Re-export the public API
+// Re-export core types from library
+// Re-export the CLI API
 use color_eyre::eyre::Result;
 pub use io::BlockerArgs;
-pub use operations::BlockerSequence;
-pub use standard::classify_line;
+// Re-export extended operations
+pub use operations::BlockerSequenceExt;
+pub use todo::BlockerSequence;
 
 use crate::config::LiveSettings;
 

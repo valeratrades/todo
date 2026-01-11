@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use todo::FetchedIssue;
 use v_utils::prelude::*;
 
 use super::util::Extension;
@@ -46,19 +47,26 @@ pub fn format_issue_filename(issue_number: Option<u64>, title: &str, extension: 
 	if closed { format!("{base}.bak") } else { base }
 }
 
+/// Format a FetchedIssue into a directory name: `{number}_-_{sanitized_title}`
+fn format_issue_dir_name(issue: &FetchedIssue) -> String {
+	format!("{}_-_{}", issue.number(), sanitize_title_for_filename(&issue.title))
+}
+
 /// Get the path for an issue file in XDG_DATA.
 /// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}[.bak] (or just {title}.{ext} for pending/virtual)
-/// For sub-issues: issues/{owner}/{repo}/{parent_number}_-_{parent_title}/{number}_-_{title}.{ext}[.bak]
-pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, extension: &Extension, closed: bool, parent_issue: Option<(u64, &str)>) -> PathBuf {
-	let base = issues_dir().join(owner).join(repo);
-	let filename = format_issue_filename(issue_number, title, extension, closed);
-	match parent_issue {
-		None => base.join(filename),
-		Some((parent_num, parent_title)) => {
-			let parent_dir = format!("{}_-_{}", parent_num, sanitize_title_for_filename(parent_title));
-			base.join(parent_dir).join(filename)
-		}
+/// For nested sub-issues: issues/{owner}/{repo}/{ancestor1_dir}/{ancestor2_dir}/.../{number}_-_{title}.{ext}[.bak]
+///
+/// `ancestors` is the chain of parent issues from root to immediate parent (not including the issue itself).
+pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, extension: &Extension, closed: bool, ancestors: &[FetchedIssue]) -> PathBuf {
+	let mut path = issues_dir().join(owner).join(repo);
+
+	// Build nested directory structure for all ancestors
+	for ancestor in ancestors {
+		path = path.join(format_issue_dir_name(ancestor));
 	}
+
+	let filename = format_issue_filename(issue_number, title, extension, closed);
+	path.join(filename)
 }
 
 /// Get the project directory path (where meta.json lives).
@@ -68,12 +76,16 @@ pub fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
 }
 
 /// Find the local file path for a sub-issue given its number.
-/// Searches in the parent issue's directory for files matching the pattern {number}_-_*.{ext}[.bak]
+/// Searches in the ancestors' nested directory for files matching the pattern {number}_-_*.{ext}[.bak]
+/// `ancestors` is the chain from root to immediate parent of the sub-issue.
 /// Returns None if no matching file is found.
-pub fn find_sub_issue_file(owner: &str, repo: &str, parent_number: u64, parent_title: &str, sub_issue_number: u64) -> Option<PathBuf> {
-	let base = issues_dir().join(owner).join(repo);
-	let parent_dir = format!("{}_-_{}", parent_number, sanitize_title_for_filename(parent_title));
-	let sub_dir = base.join(&parent_dir);
+pub fn find_sub_issue_file(owner: &str, repo: &str, ancestors: &[FetchedIssue], sub_issue_number: u64) -> Option<PathBuf> {
+	let mut sub_dir = issues_dir().join(owner).join(repo);
+
+	// Build nested directory path from ancestors
+	for ancestor in ancestors {
+		sub_dir = sub_dir.join(format_issue_dir_name(ancestor));
+	}
 
 	if !sub_dir.exists() {
 		return None;

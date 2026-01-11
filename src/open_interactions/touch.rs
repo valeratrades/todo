@@ -2,13 +2,12 @@
 
 use std::path::PathBuf;
 
+use todo::{CloseState, Extension};
 use v_utils::prelude::*;
 
 use super::{
 	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
-	issue::CloseState,
 	meta::{IssueMetaEntry, allocate_virtual_issue_number, ensure_virtual_project, save_issue_meta},
-	util::Extension,
 };
 
 /// Parsed touch path components
@@ -93,7 +92,7 @@ pub fn create_pending_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 	let issue_title = touch_path.issue_chain.last().unwrap();
 
 	// No issue number yet - will be assigned after GitHub creation
-	let issue_file_path = get_issue_file_path(owner, repo, None, issue_title, extension, false, None);
+	let issue_file_path = get_issue_file_path(owner, repo, None, issue_title, extension, false, &[]);
 
 	if let Some(parent) = issue_file_path.parent() {
 		std::fs::create_dir_all(parent)?;
@@ -144,7 +143,7 @@ pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 	let issue_number = allocate_virtual_issue_number(owner, repo)?;
 
 	// Determine file path (no number prefix for virtual issues)
-	let issue_file_path = get_issue_file_path(owner, repo, None, issue_title, extension, false, None);
+	let issue_file_path = get_issue_file_path(owner, repo, None, issue_title, extension, false, &[]);
 
 	// Create parent directories
 	if let Some(parent) = issue_file_path.parent() {

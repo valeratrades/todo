@@ -1,11 +1,124 @@
 //! Core issue data structures and parsing/serialization.
+//!
+//! This module contains the pure Issue type with parsing and serialization.
+
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
-use super::util::{is_blockers_marker, normalize_issue_indentation};
-use crate::{
+/// A GitHub issue identifier. Wraps a URL and derives all properties on demand.
+/// Format: `https://github.com/{owner}/{repo}/issues/{number}`
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct IssueLink(Url);
+
+impl IssueLink {
+	/// Create from a URL. Returns None if not a valid GitHub issue URL.
+	pub fn new(url: Url) -> Option<Self> {
+		// Validate it's a GitHub issue URL
+		if url.host_str() != Some("github.com") {
+			return None;
+		}
+		let segments: Vec<_> = url.path_segments()?.collect();
+		// Must be: owner/repo/issues/number
+		if segments.len() < 4 || segments[2] != "issues" {
+			return None;
+		}
+		// Number must be valid
+		segments[3].parse::<u64>().ok()?;
+		Some(Self(url))
+	}
+
+	/// Parse from a URL string.
+	pub fn parse(url: &str) -> Option<Self> {
+		let url = Url::parse(url).ok()?;
+		Self::new(url)
+	}
+
+	/// Get the underlying URL.
+	pub fn url(&self) -> &Url {
+		&self.0
+	}
+
+	/// Get the owner (first path segment).
+	pub fn owner(&self) -> &str {
+		self.0.path_segments().unwrap().next().unwrap()
+	}
+
+	/// Get the repo (second path segment).
+	pub fn repo(&self) -> &str {
+		self.0.path_segments().unwrap().nth(1).unwrap()
+	}
+
+	/// Get the issue number (fourth path segment).
+	pub fn number(&self) -> u64 {
+		self.0.path_segments().unwrap().nth(3).unwrap().parse().unwrap()
+	}
+
+	/// Build URL string.
+	pub fn as_str(&self) -> &str {
+		self.0.as_str()
+	}
+}
+
+impl fmt::Display for IssueLink {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
+
+impl From<IssueLink> for Url {
+	fn from(link: IssueLink) -> Url {
+		link.0
+	}
+}
+
+impl AsRef<Url> for IssueLink {
+	fn as_ref(&self) -> &Url {
+		&self.0
+	}
+}
+
+/// An issue with its title - used when we need both identity and display name.
+/// This is what we have after fetching an issue from GitHub.
+#[derive(Clone, Debug)]
+pub struct FetchedIssue {
+	pub link: IssueLink,
+	pub title: String,
+}
+
+impl FetchedIssue {
+	pub fn new(link: IssueLink, title: impl Into<String>) -> Self {
+		Self { link, title: title.into() }
+	}
+
+	/// Create from owner, repo, number, and title (constructs the URL internally).
+	pub fn from_parts(owner: &str, repo: &str, number: u64, title: impl Into<String>) -> Option<Self> {
+		let url_str = format!("https://github.com/{owner}/{repo}/issues/{number}");
+		let link = IssueLink::parse(&url_str)?;
+		Some(Self { link, title: title.into() })
+	}
+
+	/// Convenience: get the issue number
+	pub fn number(&self) -> u64 {
+		self.link.number()
+	}
+
+	/// Convenience: get owner
+	pub fn owner(&self) -> &str {
+		self.link.owner()
+	}
+
+	/// Convenience: get repo
+	pub fn repo(&self) -> &str {
+		self.link.repo()
+	}
+}
+
+use super::{
+	blocker::{BlockerSequence, classify_line},
 	error::{ParseContext, ParseError},
-	github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue},
+	util::{is_blockers_marker, normalize_issue_indentation},
 };
 
 /// Close state of an issue.
@@ -96,8 +209,8 @@ pub struct Issue {
 	pub comments: Vec<Comment>,
 	/// Sub-issues in order
 	pub children: Vec<Issue>,
-	/// Blockers section. Uses the blocker module's BlockerSequence directly.
-	pub blockers: crate::blocker::BlockerSequence,
+	/// Blockers section.
+	pub blockers: BlockerSequence,
 }
 
 impl Issue {
@@ -202,7 +315,7 @@ impl Issue {
 					tracing::debug!("[parse] exiting blockers section due to sub-issue: {:?}", content);
 					// Fall through to sub-issue processing below
 				} else {
-					if let Some(line) = crate::blocker::classify_line(content) {
+					if let Some(line) = classify_line(content) {
 						tracing::debug!("[parse] blocker line: {:?} -> {:?}", content, line);
 						blocker_lines.push(line);
 					} else {
@@ -300,7 +413,7 @@ impl Issue {
 					labels: vec![],
 					comments: child_comments,
 					children: vec![],
-					blockers: crate::blocker::BlockerSequence::default(),
+					blockers: BlockerSequence::default(),
 				});
 				continue;
 			}
@@ -328,7 +441,7 @@ impl Issue {
 			labels,
 			comments,
 			children,
-			blockers: crate::blocker::BlockerSequence::from_lines(blocker_lines),
+			blockers: BlockerSequence::from_lines(blocker_lines),
 		})
 	}
 
@@ -538,77 +651,6 @@ impl Issue {
 		out
 	}
 
-	/// Collect all required GitHub actions, organized by nesting level.
-	/// Returns a Vec where index 0 = actions for root issue, index 1 = actions for children, etc.
-	/// Each level's actions can be executed in parallel, but levels must be sequential.
-	pub fn collect_actions(&self, original_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>> {
-		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
-
-		// Check if root issue needs to be created (no URL = pending creation from --touch)
-		if self.meta.url.is_none() {
-			levels.push(vec![IssueAction::CreateIssue {
-				path: vec![],
-				title: self.meta.title.clone(),
-				body: self.body(),
-				closed: self.meta.close_state.is_closed(),
-				parent: None,
-			}]);
-			// Don't collect sub-issue actions yet - they'll be handled after root is created
-			return levels;
-		}
-
-		self.collect_actions_recursive(&[], original_sub_issues, &mut levels);
-		levels
-	}
-
-	/// Recursively collect actions from this issue and its children
-	fn collect_actions_recursive(&self, current_path: &[usize], original_sub_issues: &[OriginalSubIssue], levels: &mut Vec<Vec<IssueAction>>) {
-		let depth = current_path.len();
-
-		// Ensure we have a vec for this level
-		while levels.len() <= depth {
-			levels.push(Vec::new());
-		}
-
-		// Get parent issue number from URL
-		let parent_number = self.meta.url.as_ref().and_then(|url| github::extract_issue_number_from_url(url));
-
-		// Check each child for required actions
-		for (i, child) in self.children.iter().enumerate() {
-			let mut child_path = current_path.to_vec();
-			child_path.push(i);
-
-			if child.meta.url.is_none() {
-				// New issue - needs to be created
-				if let Some(parent_num) = parent_number {
-					levels[depth].push(IssueAction::CreateIssue {
-						path: child_path.clone(),
-						title: child.meta.title.clone(),
-						body: String::new(),
-						closed: child.meta.close_state.is_closed(),
-						parent: Some(parent_num),
-					});
-				}
-			} else if let Some(child_url) = &child.meta.url {
-				// Existing issue - check if state changed
-				if let Some(child_number) = github::extract_issue_number_from_url(child_url)
-					&& let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number)
-				{
-					let orig_closed = orig.state == "closed";
-					if child.meta.close_state.is_closed() != orig_closed {
-						levels[depth].push(IssueAction::UpdateIssueState {
-							issue_number: child_number,
-							closed: child.meta.close_state.is_closed(),
-						});
-					}
-				}
-			}
-
-			// Recursively process child's children
-			child.collect_actions_recursive(&child_path, original_sub_issues, levels);
-		}
-	}
-
 	/// Get a mutable reference to a child issue by path
 	pub fn get_child_mut(&mut self, path: &[usize]) -> Option<&mut Issue> {
 		if path.is_empty() {
@@ -619,152 +661,6 @@ impl Issue {
 			current = current.children.get_mut(idx)?;
 		}
 		current.children.get_mut(*path.last()?)
-	}
-
-	//==========================================================================
-	// Construction from GitHub API data
-	//==========================================================================
-
-	/// Construct an Issue directly from GitHub API data.
-	/// This is the canonical way to create an Issue from remote state.
-	///
-	/// `current_user` is used to determine ownership (owned vs immutable).
-	pub fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Self {
-		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
-		let issue_owned = issue.user.login == current_user;
-		let close_state = if issue.state == "closed" { CloseState::Closed } else { CloseState::Open };
-
-		let meta = IssueMeta {
-			title: issue.title.clone(),
-			url: Some(issue_url.clone()),
-			close_state,
-			owned: issue_owned,
-		};
-
-		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
-
-		// Build comments: body is first comment
-		let mut issue_comments = Vec::new();
-
-		// Body as first comment
-		let body = issue.body.as_deref().unwrap_or("").to_string();
-		issue_comments.push(Comment { id: None, body, owned: issue_owned });
-
-		// Actual comments
-		for c in comments {
-			let comment_owned = c.user.login == current_user;
-			issue_comments.push(Comment {
-				id: Some(c.id),
-				body: c.body.as_deref().unwrap_or("").to_string(),
-				owned: comment_owned,
-			});
-		}
-
-		// Build children from sub-issues
-		let children: Vec<Issue> = sub_issues
-			.iter()
-			.map(|sub| {
-				let sub_url = format!("https://github.com/{owner}/{repo}/issues/{}", sub.number);
-				let sub_close_state = if sub.state == "closed" { CloseState::Closed } else { CloseState::Open };
-				let sub_owned = sub.user.login == current_user;
-
-				let sub_body = sub.body.as_deref().unwrap_or("").to_string();
-				let sub_comments = if sub_body.is_empty() {
-					vec![]
-				} else {
-					vec![Comment {
-						id: None,
-						body: sub_body,
-						owned: sub_owned,
-					}]
-				};
-
-				Issue {
-					meta: IssueMeta {
-						title: sub.title.clone(),
-						url: Some(sub_url),
-						close_state: sub_close_state,
-						owned: sub_owned,
-					},
-					labels: sub.labels.iter().map(|l| l.name.clone()).collect(),
-					comments: sub_comments,
-					children: vec![],                                     // Sub-issues don't have nested children in this context
-					blockers: crate::blocker::BlockerSequence::default(), // Sub-issues don't have blockers
-				}
-			})
-			.collect();
-
-		Issue {
-			meta,
-			labels,
-			comments: issue_comments,
-			children,
-			blockers: crate::blocker::BlockerSequence::default(), // Blockers are local-only, not from GitHub
-		}
-	}
-
-	/// Reconstruct an Issue from stored metadata (original state at last fetch).
-	/// This is used for comparing against current remote state to detect divergence.
-	///
-	/// Note: This reconstructs a minimal Issue suitable for comparison.
-	/// It won't have blockers (local-only) or full sub-issue content.
-	pub fn from_meta(meta: &super::meta::IssueMetaEntry, owner: &str, repo: &str) -> Self {
-		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", meta.issue_number);
-
-		let issue_meta = IssueMeta {
-			title: meta.title.clone(),
-			url: Some(issue_url.clone()),
-			close_state: meta.original_close_state.clone(),
-			owned: true, // Doesn't matter for comparison
-		};
-
-		// Build comments from original_comments
-		let mut comments = Vec::new();
-
-		// Body as first comment
-		comments.push(Comment {
-			id: None,
-			body: meta.original_issue_body.clone().unwrap_or_default(),
-			owned: true,
-		});
-
-		// Original comments
-		for oc in &meta.original_comments {
-			comments.push(Comment {
-				id: Some(oc.id),
-				body: oc.body.clone().unwrap_or_default(),
-				owned: true,
-			});
-		}
-
-		// Build children from original_sub_issues (minimal - just state for comparison)
-		let children: Vec<Issue> = meta
-			.original_sub_issues
-			.iter()
-			.map(|sub| {
-				let sub_close_state = if sub.state == "closed" { CloseState::Closed } else { CloseState::Open };
-				Issue {
-					meta: IssueMeta {
-						title: String::new(), // Not stored in OriginalSubIssue
-						url: Some(format!("https://github.com/{owner}/{repo}/issues/{}", sub.number)),
-						close_state: sub_close_state,
-						owned: true,
-					},
-					labels: vec![],
-					comments: vec![],
-					children: vec![],
-					blockers: crate::blocker::BlockerSequence::default(),
-				}
-			})
-			.collect();
-
-		Issue {
-			meta: issue_meta,
-			labels: vec![], // Not stored in meta
-			comments,
-			children,
-			blockers: crate::blocker::BlockerSequence::default(),
-		}
 	}
 }
 
@@ -883,7 +779,7 @@ mod tests {
 	#[test]
 	fn test_parse_and_serialize_not_planned() {
 		let content = "- [-] Not planned issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
-		let ctx = crate::error::ParseContext::new(content.to_string(), "test".to_string());
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		assert_eq!(issue.meta.close_state, CloseState::NotPlanned);
@@ -897,7 +793,7 @@ mod tests {
 	#[test]
 	fn test_parse_and_serialize_duplicate() {
 		let content = "- [456] Duplicate issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
-		let ctx = crate::error::ParseContext::new(content.to_string(), "test".to_string());
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		assert_eq!(issue.meta.close_state, CloseState::Duplicate(456));
@@ -922,121 +818,12 @@ mod tests {
 	- [42] Duplicate sub <!--sub https://github.com/owner/repo/issues/4 -->
 		<!-- omitted -->
 "#;
-		let ctx = crate::error::ParseContext::new(content.to_string(), "test".to_string());
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		assert_eq!(issue.children.len(), 3);
 		assert_eq!(issue.children[0].meta.close_state, CloseState::Closed);
 		assert_eq!(issue.children[1].meta.close_state, CloseState::NotPlanned);
 		assert_eq!(issue.children[2].meta.close_state, CloseState::Duplicate(42));
-	}
-
-	#[test]
-	fn test_from_github() {
-		use crate::github::{GitHubLabel, GitHubUser};
-
-		let issue = GitHubIssue {
-			number: 123,
-			title: "Test Issue".to_string(),
-			body: Some("Issue body".to_string()),
-			labels: vec![GitHubLabel { name: "bug".to_string() }],
-			user: GitHubUser { login: "me".to_string() },
-			state: "open".to_string(),
-		};
-
-		let comments = vec![GitHubComment {
-			id: 456,
-			body: Some("A comment".to_string()),
-			user: GitHubUser { login: "other".to_string() },
-		}];
-
-		let sub_issues = vec![GitHubIssue {
-			number: 124,
-			title: "Sub Issue".to_string(),
-			body: Some("Sub body".to_string()),
-			labels: vec![],
-			user: GitHubUser { login: "me".to_string() },
-			state: "closed".to_string(),
-		}];
-
-		let result = Issue::from_github(&issue, &comments, &sub_issues, "owner", "repo", "me");
-
-		assert_eq!(result.meta.title, "Test Issue");
-		assert_eq!(result.meta.url, Some("https://github.com/owner/repo/issues/123".to_string()));
-		assert_eq!(result.meta.close_state, CloseState::Open);
-		assert!(result.meta.owned);
-		assert_eq!(result.labels, vec!["bug".to_string()]);
-
-		// Body + 1 comment
-		assert_eq!(result.comments.len(), 2);
-		assert_eq!(result.comments[0].body, "Issue body");
-		assert!(result.comments[0].owned);
-		assert_eq!(result.comments[1].id, Some(456));
-		assert_eq!(result.comments[1].body, "A comment");
-		assert!(!result.comments[1].owned); // different user
-
-		// Sub-issue
-		assert_eq!(result.children.len(), 1);
-		assert_eq!(result.children[0].meta.title, "Sub Issue");
-		assert_eq!(result.children[0].meta.close_state, CloseState::Closed);
-	}
-
-	#[test]
-	fn test_partial_eq() {
-		use crate::github::GitHubUser;
-
-		let make_issue = |body: &str, state: &str| -> Issue {
-			let gh_issue = GitHubIssue {
-				number: 1,
-				title: "Test".to_string(),
-				body: Some(body.to_string()),
-				labels: vec![],
-				user: GitHubUser { login: "me".to_string() },
-				state: state.to_string(),
-			};
-			Issue::from_github(&gh_issue, &[], &[], "o", "r", "me")
-		};
-
-		let issue1 = make_issue("body", "open");
-		let issue2 = make_issue("body", "open");
-		let issue3 = make_issue("different", "open");
-		let issue4 = make_issue("body", "closed");
-
-		assert_eq!(issue1, issue2);
-		assert_ne!(issue1, issue3); // different body
-		assert_ne!(issue1, issue4); // different state
-	}
-
-	#[test]
-	fn test_from_meta_roundtrip() {
-		use super::super::meta::IssueMetaEntry;
-		use crate::github::OriginalComment;
-
-		let meta = IssueMetaEntry {
-			issue_number: 42,
-			title: "Meta Issue".to_string(),
-			extension: "md".to_string(),
-			original_issue_body: Some("Original body".to_string()),
-			original_comments: vec![OriginalComment {
-				id: 100,
-				body: Some("Original comment".to_string()),
-			}],
-			original_sub_issues: vec![OriginalSubIssue {
-				number: 43,
-				state: "open".to_string(),
-			}],
-			parent_issue: None,
-			original_close_state: CloseState::Open,
-		};
-
-		let issue = Issue::from_meta(&meta, "owner", "repo");
-
-		assert_eq!(issue.meta.title, "Meta Issue");
-		assert_eq!(issue.meta.close_state, CloseState::Open);
-		assert_eq!(issue.comments.len(), 2); // body + 1 comment
-		assert_eq!(issue.comments[0].body, "Original body");
-		assert_eq!(issue.comments[1].id, Some(100));
-		assert_eq!(issue.children.len(), 1);
-		assert_eq!(issue.children[0].meta.close_state, CloseState::Open);
 	}
 }

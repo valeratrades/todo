@@ -23,7 +23,7 @@ struct WorkspaceCache {
 	workspaces: HashMap<String, WorkspaceSettings>,
 }
 
-#[derive(Clone, Debug, Parser, Default)]
+#[derive(Clone, Debug, Default, Parser)]
 pub struct ResumeArgs {
 	/// Workspace ID or name (if omitted, use the user's active workspace)
 	#[arg(short = 'w', long)]

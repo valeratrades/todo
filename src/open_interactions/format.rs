@@ -1,16 +1,27 @@
 //! Issue formatting for rendering GitHub issues to local files.
 
+use todo::{Extension, FetchedIssue, Marker};
+
 use super::{
 	files::{find_sub_issue_file, read_sub_issue_body_from_file},
-	util::{Extension, convert_markdown_to_typst, extract_checkbox_title},
+	util::{convert_markdown_to_typst, extract_checkbox_title},
 };
-use crate::{
-	github::{GitHubComment, GitHubIssue},
-	marker::Marker,
-};
+use crate::github::{GitHubComment, GitHubIssue};
 
+/// Format an issue for local file storage.
+/// `ancestors` is the chain of parent issues (for sub-issue file lookup).
 #[expect(clippy::too_many_arguments)]
-pub fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool, ext: Extension) -> String {
+pub fn format_issue(
+	issue: &GitHubIssue,
+	comments: &[GitHubComment],
+	sub_issues: &[GitHubIssue],
+	owner: &str,
+	repo: &str,
+	current_user: &str,
+	render_closed: bool,
+	ext: Extension,
+	ancestors: &[FetchedIssue],
+) -> String {
 	let mut content = String::new();
 
 	let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
@@ -134,7 +145,12 @@ pub fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues:
 		}
 
 		// Try to read local file contents for this sub-issue
-		let local_body = find_sub_issue_file(owner, repo, issue.number, &issue.title, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
+		// Build ancestors for the sub-issue lookup (current issue + existing ancestors)
+		let mut sub_ancestors = ancestors.to_vec();
+		if let Some(this_issue) = FetchedIssue::from_parts(owner, repo, issue.number, &issue.title) {
+			sub_ancestors.push(this_issue);
+		}
+		let local_body = find_sub_issue_file(owner, repo, &sub_ancestors, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
 
 		// Use local file contents if available, otherwise fall back to GitHub body
 		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
@@ -181,7 +197,7 @@ mod tests {
 	fn test_format_issue_md_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec!["bug", "help wanted"], "me", "open");
 
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] [bug, help wanted] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -192,7 +208,7 @@ mod tests {
 	fn test_format_issue_md_not_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -204,7 +220,7 @@ mod tests {
 		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
 
 		// Default: closed issues have omitted contents
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			<!-- omitted -->
@@ -216,7 +232,7 @@ mod tests {
 		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
 
 		// With render_closed: full contents shown
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", true, Extension::Md);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", true, Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -231,7 +247,7 @@ mod tests {
 			make_issue(125, "Closed sub-issue", None, vec![], "me", "closed"),
 		];
 
-		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", false, Extension::Md);
+		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", false, Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -260,7 +276,7 @@ mod tests {
 			},
 		];
 
-		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", false, Extension::Md);
+		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", false, Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -277,7 +293,7 @@ mod tests {
 	fn test_format_issue_typ_owned() {
 		let issue = make_issue(123, "Test Issue", Some("## Subheading\nBody text"), vec!["enhancement"], "me", "open");
 
-		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ, &[]);
 		assert_snapshot!(typ, @"
 		- [ ] [enhancement] Test Issue // https://github.com/owner/repo/issues/123
 			== Subheading
@@ -294,7 +310,7 @@ mod tests {
 			user: make_user("other"),
 		}];
 
-		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", false, Extension::Typ);
+		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", false, Extension::Typ, &[]);
 		assert_snapshot!(typ, @"
 		- [ ] Typst Issue // immutable https://github.com/testowner/testrepo/issues/456
 				Body
@@ -307,7 +323,7 @@ mod tests {
 	fn test_format_issue_typ_closed_omitted() {
 		let issue = make_issue(123, "Closed Issue", Some("Body text"), vec![], "me", "closed");
 
-		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ, &[]);
 		assert_snapshot!(typ, @"
 		- [x] Closed Issue // https://github.com/owner/repo/issues/123
 			// omitted
@@ -340,7 +356,7 @@ mod tests {
 			make_issue(125, "Sub Issue Two", None, vec![], "me", "closed"),
 		];
 
-		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", false, Extension::Md);
+		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", false, Extension::Md, &[]);
 
 		// Expected order:
 		// 1. Title line with labels: `- [ ] [label1, label2] Title <!-- url -->`

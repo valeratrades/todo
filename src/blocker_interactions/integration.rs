@@ -7,16 +7,13 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, bail, eyre};
+use todo::{Issue, Marker, ParseContext};
 
-use super::operations::{BlockerSequence, DisplayFormat};
-use crate::{
-	error::ParseContext,
-	marker::Marker,
-	open::{
-		files::{choose_issue_with_fzf, issues_dir, search_issue_files},
-		issue::Issue,
-	},
+use super::{
+	BlockerSequence,
+	operations::{BlockerSequenceExt, DisplayFormat},
 };
+use crate::open_interactions::files::{choose_issue_with_fzf, issues_dir, search_issue_files};
 
 /// Cache file for current blocker selection
 static CURRENT_BLOCKER_ISSUE_CACHE: &str = "current_blocker_issue.txt";
@@ -276,8 +273,9 @@ pub async fn main_integrated(_settings: &crate::config::LiveSettings, command: s
 
 #[cfg(test)]
 mod tests {
+	use todo::ParseContext;
+
 	use super::*;
-	use crate::error::ParseContext;
 
 	#[test]
 	fn test_issue_source_load_and_save() {

@@ -1,18 +1,31 @@
 //! Sync local issue changes back to GitHub.
+//!
+//! ## Consensus-based sync model
+//!
+//! The sync logic treats the last synced state as the "consensus". When syncing:
+//! - If only local changed since consensus → push local to remote
+//! - If only remote changed since consensus → take remote as new local
+//! - If both changed since consensus → conflict requiring manual resolution
+//! - If neither changed → no action needed
 
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 use jiff::Timestamp;
+use todo::{Extension, FetchedIssue, Issue, ParseContext};
 use v_utils::prelude::*;
 
 use super::{
 	conflict::{ConflictState, save_conflict},
 	fetch::fetch_and_store_issue,
-	issue::Issue,
+	github_sync::IssueGitHubExt,
 	meta::{IssueMetaEntry, get_issue_meta, load_issue_meta_from_path},
-	util::{Extension, expand_blocker_shorthand},
+	util::expand_blocker_shorthand,
 };
-use crate::{error::ParseContext, github::BoxedGitHubClient};
+use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
+
+//=============================================================================
+// Sync implementation
+//=============================================================================
 
 /// Sync changes from a local issue file back to GitHub using stored metadata.
 /// Returns whether the issue state changed (for file renaming).
@@ -159,71 +172,111 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 	Ok((executed, created_root_number))
 }
 
-/// Handle divergence: remote changed since we last fetched.
-/// Creates a PR to merge remote changes into our local state.
-async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, meta: &IssueMetaEntry, _local_issue: &Issue, remote_issue: &Issue) -> Result<()> {
-	use std::process::Command;
+/// Special commit message prefix that indicates a conflict-in-progress commit.
+/// These commits are not counted as the "last synced truth" for consensus.
+const CONFLICT_COMMIT_PREFIX: &str = "__conflicts:";
 
+/// Commit local changes to git after successful sync to GitHub.
+/// This ensures that the local git state reflects the synced state.
+/// Only commits if git is initialized in the issues directory.
+fn commit_synced_changes(owner: &str, repo: &str, issue_number: u64) {
 	use super::files::issues_dir;
 
-	// gh CLI is required for PR creation
-	let gh_check = Command::new("gh").arg("--version").output();
-	if gh_check.is_err() {
-		return Err(eyre!("'gh' (GitHub CLI) is required but not found in PATH"));
+	let data_dir = issues_dir();
+	let data_dir_str = match data_dir.to_str() {
+		Some(s) => s,
+		None => return,
+	};
+
+	// Check if git is initialized
+	let git_check = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output();
+	if !git_check.map(|o| o.status.success()).unwrap_or(false) {
+		// Git not initialized, skip committing
+		return;
 	}
+
+	// Stage all changes
+	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status();
+
+	// Check if there are staged changes
+	let diff_output = Command::new("git").args(["-C", data_dir_str, "diff", "--cached", "--quiet"]).status();
+	if diff_output.map(|s| s.success()).unwrap_or(true) {
+		// No staged changes
+		return;
+	}
+
+	// Commit with a descriptive message
+	let commit_msg = format!("sync: {owner}/{repo}#{issue_number}");
+	let _ = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &commit_msg]).output();
+}
+
+/// Handle divergence: both local and remote changed since last sync.
+/// Creates a local `remote-state` branch with remote changes and initiates a git merge.
+/// No PR is created - conflicts are resolved locally via standard git workflow.
+async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, meta: &IssueMetaEntry, _local_issue: &Issue, remote_issue: &Issue) -> Result<()> {
+	use super::files::issues_dir;
 
 	let data_dir = issues_dir();
 	let data_dir_str = data_dir.to_str().ok_or_else(|| eyre!("Invalid data directory path"))?;
 
-	// Get current branch name
-	let branch_output = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--abbrev-ref", "HEAD"]).output()?;
-	if !branch_output.status.success() {
+	// Check if git is initialized
+	let git_check = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output()?;
+	if !git_check.status.success() {
 		return Err(eyre!(
-			"Remote issue changed and merge workflow requires git.\n\
-			 Initialize git in your issues directory:\n\
-			   cd {} && git init && git remote add origin <your-repo-url>",
+			"Conflict detected: both local and remote have changes since last sync.\n\
+			 \n\
+			 To enable conflict resolution, initialize git in your issues directory:\n\
+			   cd {} && git init\n\
+			 \n\
+			 Then re-run the command.",
 			data_dir.display()
 		));
 	}
+
+	// Get current branch name
+	let branch_output = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--abbrev-ref", "HEAD"]).output()?;
 	let current_branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
 
-	// Auto-commit local changes
+	// Commit local changes with special prefix (so we know it's a conflict-in-progress)
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
 
-	let commit_status = Command::new("git")
-		.args(["-C", data_dir_str, "commit", "-m", &format!("Local changes for issue #{}", meta.issue_number)])
-		.status()?;
+	let commit_msg = format!("{CONFLICT_COMMIT_PREFIX} local changes for issue #{}", meta.issue_number);
+	let commit_output = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &commit_msg]).output()?;
 
-	if commit_status.success() {
+	if commit_output.status.success() {
 		println!("Committed local changes.");
 	}
 
-	// Push current branch to ensure local changes are on remote
-	let push_output = Command::new("git").args(["-C", data_dir_str, "push", "-u", "origin", &current_branch]).output()?;
-
-	if !push_output.status.success() {
-		let stderr = String::from_utf8_lossy(&push_output.stderr);
-		return Err(eyre!(
-			"Remote issue changed but failed to push local changes for merge workflow.\n\
-			 Error: {}\n\n\
-			 Ensure your issues directory has a git remote configured:\n\
-			   cd {} && git remote add origin <your-repo-url>",
-			stderr.trim(),
-			data_dir.display()
-		));
-	}
-
 	// Create branch for remote state
-	let branch_name = format!("remote-sync-{owner}-{repo}-{}", meta.issue_number);
+	let branch_name = "remote-state".to_string();
 
-	// Delete branch if it exists (from previous failed attempt)
+	// Delete branch if it exists (from previous attempt)
 	let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).output();
 
-	// Create and checkout new branch
-	let branch_status = Command::new("git").args(["-C", data_dir_str, "checkout", "-b", &branch_name]).status()?;
+	// Create new branch from current HEAD (before our conflict commit)
+	// First, get the parent commit (before our conflict commit)
+	let parent_output = Command::new("git").args(["-C", data_dir_str, "rev-parse", "HEAD~1"]).output();
+	let base_commit = if let Ok(output) = parent_output
+		&& output.status.success()
+	{
+		String::from_utf8_lossy(&output.stdout).trim().to_string()
+	} else {
+		// No parent commit (first commit), use HEAD
+		"HEAD".to_string()
+	};
+
+	// Create remote-state branch from the base commit
+	let branch_status = Command::new("git").args(["-C", data_dir_str, "branch", &branch_name, &base_commit]).status()?;
 
 	if !branch_status.success() {
 		return Err(eyre!("Failed to create branch for remote state"));
+	}
+
+	// Checkout the remote-state branch
+	let checkout_status = Command::new("git").args(["-C", data_dir_str, "checkout", &branch_name]).status()?;
+
+	if !checkout_status.success() {
+		return Err(eyre!("Failed to checkout remote-state branch"));
 	}
 
 	// Write remote state to the issue file
@@ -233,76 +286,69 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	// Commit remote state
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
 
-	let commit_status = Command::new("git")
-		.args(["-C", data_dir_str, "commit", "-m", &format!("Remote state for issue #{} (to be merged)", meta.issue_number)])
-		.status()?;
+	let remote_commit_msg = format!("Remote state for {owner}/{repo}#{}", meta.issue_number);
+	let commit_status = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &remote_commit_msg]).status()?;
 
 	if !commit_status.success() {
 		// Restore original branch
 		let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
+		let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).status();
 		return Err(eyre!("Failed to commit remote state"));
 	}
 
-	// Push branch
-	let push_status = Command::new("git").args(["-C", data_dir_str, "push", "-u", "origin", &branch_name, "--force"]).status()?;
+	// Switch back to original branch
+	let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status()?;
 
-	if !push_status.success() {
-		// Restore original branch
-		let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
-		return Err(eyre!("Failed to push remote state branch"));
-	}
-
-	// Create PR using gh CLI
-	let pr_title = format!("Sync remote changes for issue #{}", meta.issue_number);
-	let pr_body = format!(
-		"Remote issue #{} on {owner}/{repo} changed since last fetch.\n\n\
-		 This PR contains the remote state that needs to be merged into your local changes.\n\n\
-		 Review the changes and merge to resolve the conflict.",
-		meta.issue_number
-	);
-
-	let pr_output = Command::new("gh")
-		.args(["pr", "create", "--title", &pr_title, "--body", &pr_body, "--base", &current_branch, "--head", &branch_name])
-		.current_dir(&data_dir)
+	// Attempt to merge remote-state into current branch
+	println!("Merging remote changes...");
+	let merge_output = Command::new("git")
+		.args(["-C", data_dir_str, "merge", &branch_name, "-m", &format!("Merge remote state for issue #{}", meta.issue_number)])
 		.output()?;
 
-	// Restore original branch
-	let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
+	if merge_output.status.success() {
+		// Merge succeeded without conflicts - clean up
+		let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).status();
+		println!("Remote changes merged successfully.");
+		// Note: The conflict marker is not saved since merge succeeded
+		return Ok(());
+	}
 
-	let pr_url = if pr_output.status.success() {
-		String::from_utf8_lossy(&pr_output.stdout).trim().to_string()
-	} else {
-		let stderr = String::from_utf8_lossy(&pr_output.stderr);
-		// PR might already exist
-		if stderr.contains("already exists") {
-			format!("(PR already exists for branch {branch_name})")
-		} else {
-			return Err(eyre!("Failed to create PR: {}", stderr));
-		}
-	};
+	// Merge failed - likely due to conflicts
+	let merge_stderr = String::from_utf8_lossy(&merge_output.stderr);
+	let merge_stdout = String::from_utf8_lossy(&merge_output.stdout);
 
-	// Save conflict state
-	let conflict = ConflictState {
-		issue_number: meta.issue_number,
-		detected_at: Timestamp::now(),
-		pr_url: pr_url.clone(),
-		reason: "Remote issue changed since last fetch".to_string(),
-	};
+	// Check if it's actually a conflict (vs other error)
+	if merge_stdout.contains("CONFLICT") || merge_stderr.contains("CONFLICT") || merge_stdout.contains("Automatic merge failed") {
+		// Save conflict state
+		let conflict = ConflictState {
+			issue_number: meta.issue_number,
+			detected_at: Timestamp::now(),
+			pr_url: String::new(), // No PR in new workflow
+			reason: "Both local and remote have changes since last sync".to_string(),
+		};
 
-	save_conflict(owner, repo, &conflict)?;
+		save_conflict(owner, repo, &conflict)?;
 
-	Err(eyre!(
-		"Divergence detected: remote issue #{} changed since you last fetched.\n\
-		 \n\
-		 A PR has been created to merge the remote changes: {}\n\
-		 \n\
-		 To resolve:\n\
-		 1. Review and merge the PR\n\
-		 2. Pull the merged changes\n\
-		 3. The conflict marker will be cleared automatically on next successful sync",
-		meta.issue_number,
-		pr_url
-	))
+		return Err(eyre!(
+			"Conflict detected: both local and remote have changes for issue #{}.\n\
+			 \n\
+			 Git merge has been initiated. Resolve the conflicts in:\n\
+			   {}\n\
+			 \n\
+			 To resolve:\n\
+			 1. Edit the file to resolve conflict markers (<<<<<<< ======= >>>>>>>)\n\
+			 2. Run: git add {} && git commit\n\
+			 3. Re-run this command to sync your changes\n\
+			 \n\
+			 To abort the merge: git merge --abort",
+			meta.issue_number,
+			issue_file_path.display(),
+			issue_file_path.display()
+		));
+	}
+
+	// Some other error during merge
+	Err(eyre!("Failed to merge remote changes:\n{}\n{}", merge_stdout.trim(), merge_stderr.trim()))
 }
 
 /// Open a local issue file, let user edit, then sync changes back to GitHub.
@@ -375,6 +421,9 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		project_meta.issues.remove(&meta.issue_number);
 		super::meta::save_project_meta(&project_meta)?;
 
+		// Commit the removal to git
+		commit_synced_changes(&owner, &repo, meta.issue_number);
+
 		println!("Duplicate issue removed from local storage.");
 		return Ok(());
 	}
@@ -408,7 +457,7 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 			(0, None)
 		}
 	} else {
-		// Normal flow: check divergence first
+		// Normal flow: use consensus-based sync
 		let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
 			gh.fetch_authenticated_user(),
 			gh.fetch_issue(&owner, &repo, meta.issue_number),
@@ -419,16 +468,47 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		// Build Issue from current GitHub state
 		let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, &owner, &repo, &current_user);
 
-		// Build Issue from what we originally saw (stored in meta)
+		// Build Issue from what we originally saw (stored in meta) - this is the consensus
 		let original_issue = Issue::from_meta(&meta, &owner, &repo);
 
-		// Check if remote diverged from what we originally saw
-		if remote_issue != original_issue {
-			// Remote changed since we last fetched - divergence detected!
-			return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
+		// Use consensus-based sync: compare local and remote against the original (consensus)
+		let local_changed = issue != original_issue;
+		let remote_changed = remote_issue != original_issue;
+
+		match (local_changed, remote_changed) {
+			(false, false) => {
+				// Neither changed - nothing to do
+				tracing::debug!("[sync] No changes detected");
+			}
+			(true, false) => {
+				// Only local changed - push to remote (normal sync flow)
+				tracing::debug!("[sync] Only local changed, pushing to remote");
+			}
+			(false, true) => {
+				// Only remote changed - accept remote as new truth
+				// Update local file to match remote state
+				tracing::debug!("[sync] Only remote changed, accepting remote state");
+				let remote_content = remote_issue.serialize();
+				std::fs::write(issue_file_path, &remote_content)?;
+				// Update metadata to reflect new original state
+				let mut updated_meta = meta.clone();
+				updated_meta.original_issue_body = remote_issue.body().into();
+				updated_meta.original_close_state = remote_issue.meta.close_state.clone();
+				// Note: comments and sub-issues would need similar updates for full implementation
+				super::meta::save_issue_meta(&owner, &repo, updated_meta)?;
+				// Commit the remote state update to git
+				commit_synced_changes(&owner, &repo, meta.issue_number);
+				println!("Remote changed, local file updated.");
+				return Ok(());
+			}
+			(true, true) => {
+				// Both changed - conflict!
+				tracing::debug!("[sync] Both local and remote changed, conflict detected");
+				return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
+			}
 		}
 
-		// No divergence - collect and execute actions
+		// Collect and execute actions (for local changes being pushed)
 		let actions = issue.collect_actions(&meta.original_sub_issues);
 		let has_actions = actions.iter().any(|level| !level.is_empty());
 
@@ -465,15 +545,18 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		};
 
 		// Determine parent issue info if this is a sub-issue
-		let parent_issue = meta
-			.parent_issue
-			.and_then(|parent_num| get_issue_meta(&owner, &repo, parent_num).map(|parent_meta| (parent_num, parent_meta.title)));
+		// Convert to Vec<FetchedIssue> for the new API
+		let ancestors: Option<Vec<FetchedIssue>> = meta.parent_issue.and_then(|parent_num| {
+			let parent_meta = get_issue_meta(&owner, &repo, parent_num)?;
+			let fetched = FetchedIssue::from_parts(&owner, &repo, parent_num, &parent_meta.title)?;
+			Some(vec![fetched])
+		});
 
 		// Store the old path before re-fetching
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
-		let new_path = fetch_and_store_issue(gh, &owner, &repo, issue_number, &extension, false, parent_issue).await?;
+		let new_path = fetch_and_store_issue(gh, &owner, &repo, issue_number, &extension, false, ancestors).await?;
 
 		// If the path changed (title/state changed), delete the old file
 		if old_path != new_path && old_path.exists() {
@@ -499,6 +582,9 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		if actions_executed > 0 {
 			println!("Synced {actions_executed} actions to GitHub.");
 		}
+
+		// Commit the synced changes to local git
+		commit_synced_changes(&owner, &repo, issue_number);
 	} else {
 		println!("No changes made.");
 	}
