@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use clap::Args;
+use todo::Extension;
 use v_utils::prelude::*;
 
 use super::{
@@ -11,7 +12,6 @@ use super::{
 	meta::is_virtual_project,
 	sync::open_local_issue,
 	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
-	util::Extension,
 };
 use crate::{
 	config::LiveSettings,
@@ -92,7 +92,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	// Handle --blocker mode: use current blocker issue file if no pattern provided
 	let input = if args.blocker && args.url_or_pattern.is_none() {
 		// Get current blocker issue path
-		let blocker_path = crate::blocker::integration::get_current_blocker_issue().ok_or_else(|| eyre!("No blocker issue set. Use `todo blocker set <pattern>` first."))?;
+		let blocker_path = crate::blocker_interactions::integration::get_current_blocker_issue().ok_or_else(|| eyre!("No blocker issue set. Use `todo blocker set <pattern>` first."))?;
 		blocker_path.to_string_lossy().to_string()
 	} else {
 		args.url_or_pattern.as_deref().unwrap_or("").trim().to_string()

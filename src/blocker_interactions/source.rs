@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
 
-use super::operations::BlockerSequence;
+use super::BlockerSequence;
 
 /// Trait for blocker data sources.
 /// Implementations handle reading/writing blocker content from different backends.

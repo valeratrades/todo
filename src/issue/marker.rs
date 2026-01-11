@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use todo::{Extension, Header};
+use crate::{Extension, Header};
 
 /// A marker that can appear in issue files.
 /// All markers normalize whitespace on decode and encode with consistent spacing.

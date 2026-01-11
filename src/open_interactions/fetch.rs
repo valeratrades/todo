@@ -2,14 +2,13 @@
 
 use std::path::PathBuf;
 
+use todo::{CloseState, Extension};
 use v_utils::prelude::*;
 
 use super::{
 	files::get_issue_file_path,
 	format::format_issue,
-	issue::CloseState,
 	meta::{IssueMetaEntry, save_issue_meta},
-	util::Extension,
 };
 use crate::github::{BoxedGitHubClient, OriginalComment, OriginalSubIssue};
 

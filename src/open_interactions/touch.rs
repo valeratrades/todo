@@ -2,13 +2,12 @@
 
 use std::path::PathBuf;
 
+use todo::{CloseState, Extension};
 use v_utils::prelude::*;
 
 use super::{
 	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
-	issue::CloseState,
 	meta::{IssueMetaEntry, allocate_virtual_issue_number, ensure_virtual_project, save_issue_meta},
-	util::Extension,
 };
 
 /// Parsed touch path components

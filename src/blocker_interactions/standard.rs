@@ -1,143 +1,17 @@
-//! Parsing primitives and formatting for blocker content.
+//! Extended parsing primitives and formatting for blocker content.
 //!
-//! This module provides the core types and functions for understanding blocker file syntax:
-//! - `HeaderLevel`: Represents heading depth (1-5)
-//! - `Line`: Classifies lines as headers, items, or comments (with content)
-//! - `classify_line`: Parse a single line into its type
+//! This module provides additional functions for understanding blocker file syntax:
 //! - `format_blocker_content`: Normalize blocker content to standard format
+//! - `normalize_content_by_extension`: Handle different file types (md, typst)
+//! - `typst_to_markdown`: Convert Typst syntax to markdown
+//!
+//! Core types (HeaderLevel, Line, classify_line) are in the library crate.
 
 use std::path::Path;
 
 use color_eyre::eyre::{Result, eyre};
-
-/// Header level (1-5), where 1 is the highest/largest.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum HeaderLevel {
-	One,
-	Two,
-	Three,
-	Four,
-	Five,
-}
-
-impl HeaderLevel {
-	/// Get the numeric level (1-5)
-	pub fn to_usize(self) -> usize {
-		match self {
-			HeaderLevel::One => 1,
-			HeaderLevel::Two => 2,
-			HeaderLevel::Three => 3,
-			HeaderLevel::Four => 4,
-			HeaderLevel::Five => 5,
-		}
-	}
-
-	/// Create from numeric level (1-5)
-	pub fn from_usize(level: usize) -> Option<Self> {
-		match level {
-			1 => Some(HeaderLevel::One),
-			2 => Some(HeaderLevel::Two),
-			3 => Some(HeaderLevel::Three),
-			4 => Some(HeaderLevel::Four),
-			5 => Some(HeaderLevel::Five),
-			_ => None,
-		}
-	}
-}
-
-/// A parsed line in a blocker file.
-/// This is the boundary format between raw text and structured blocker data.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Line {
-	/// Header with level and text (without # prefix)
-	Header { level: HeaderLevel, text: String },
-	/// List item content (without - prefix)
-	Item(String),
-	/// Comment line - tab-indented explanatory text (without leading tab)
-	Comment(String),
-}
-
-impl Line {
-	/// Check if this line is a header
-	pub fn is_header(&self) -> bool {
-		matches!(self, Line::Header { .. })
-	}
-
-	/// Check if this line contributes to the blocker list (headers and items)
-	pub fn is_content(&self) -> bool {
-		!matches!(self, Line::Comment(_))
-	}
-
-	/// Serialize to raw text format
-	pub fn to_raw(&self) -> String {
-		match self {
-			Line::Header { level, text } => format!("{} {text}", "#".repeat(level.to_usize())),
-			Line::Item(text) => format!("- {text}"),
-			Line::Comment(text) => format!("\t{text}"),
-		}
-	}
-}
-
-/// Parse a line into a structured Line.
-/// - Lines starting with tab are Comments (content without leading tab)
-/// - Lines starting with 2+ spaces (likely editor-converted tabs) are Comments
-/// - Lines starting with # are Headers (levels 1-5, text without # prefix)
-/// - Lines starting with - are Items (content without - prefix)
-/// - All other non-empty lines are Items (raw content)
-/// - Returns None for empty lines
-pub fn classify_line(line: &str) -> Option<Line> {
-	if line.is_empty() {
-		return None;
-	}
-
-	// Comment: tab-indented
-	if let Some(content) = line.strip_prefix('\t') {
-		return Some(Line::Comment(content.to_string()));
-	}
-
-	// Comment: 2+ spaces (likely editor tab-to-space conversion)
-	// But not if it looks like an indented list item
-	if line.starts_with("  ") && !line.trim_start().starts_with('-') {
-		let content = line.trim_start();
-		return Some(Line::Comment(content.to_string()));
-	}
-
-	let trimmed = line.trim();
-
-	// Header: # with space after
-	if trimmed.starts_with('#') {
-		let mut count = 0;
-		for ch in trimmed.chars() {
-			if ch == '#' {
-				count += 1;
-			} else {
-				break;
-			}
-		}
-
-		// Valid header must have space after the # characters
-		if count > 0 && trimmed.len() > count {
-			let next_char = trimmed.chars().nth(count);
-			if next_char == Some(' ') {
-				let text = trimmed[count + 1..].to_string();
-
-				// Warn if header is nested too deeply (level > 5)
-				if count > 5 {
-					eprintln!("Warning: Header level {count} is too deep (max 5 supported). Treating as regular item: {trimmed}");
-					return Some(Line::Item(trimmed.to_string()));
-				}
-
-				if let Some(level) = HeaderLevel::from_usize(count) {
-					return Some(Line::Header { level, text });
-				}
-			}
-		}
-	}
-
-	// Item: strip - prefix if present
-	let content = trimmed.strip_prefix("- ").unwrap_or(trimmed);
-	Some(Line::Item(content.to_string()))
-}
+// Re-export from library for internal use
+pub use todo::{HeaderLevel, Line, classify_line};
 
 /// Check if the content is semantically empty (only comments or whitespace, no actual content)
 pub fn is_semantically_empty(content: &str) -> bool {

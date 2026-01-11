@@ -1,5 +1,12 @@
 use clap::ValueEnum;
 
+pub mod issue;
+
+// Re-export all public types from issue module at crate root for convenience
+pub use issue::{
+	BlockerItem, BlockerSequence, CloseState, Comment, HeaderLevel, Issue, IssueMeta, Line, Marker, ParseContext, ParseError, classify_line, is_blockers_marker, normalize_issue_indentation,
+};
+
 /// File extension/type for issue files.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum Extension {

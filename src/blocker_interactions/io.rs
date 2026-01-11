@@ -11,8 +11,9 @@ use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, eyre};
 
 use super::{
+	BlockerSequence,
 	clockify::{self, HaltArgs, ResumeArgs},
-	operations::{BlockerSequence, DisplayFormat},
+	operations::{BlockerSequenceExt, DisplayFormat},
 	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension},
 };
 use crate::milestones::SPRINT_HEADER_REL_PATH;

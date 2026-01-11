@@ -1,13 +1,12 @@
 //! Issue formatting for rendering GitHub issues to local files.
 
+use todo::{Extension, Marker};
+
 use super::{
 	files::{find_sub_issue_file, read_sub_issue_body_from_file},
-	util::{Extension, convert_markdown_to_typst, extract_checkbox_title},
+	util::{convert_markdown_to_typst, extract_checkbox_title},
 };
-use crate::{
-	github::{GitHubComment, GitHubIssue},
-	marker::Marker,
-};
+use crate::github::{GitHubComment, GitHubIssue};
 
 #[expect(clippy::too_many_arguments)]
 pub fn format_issue(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str, render_closed: bool, ext: Extension) -> String {

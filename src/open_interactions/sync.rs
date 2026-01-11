@@ -11,16 +11,17 @@
 use std::path::Path;
 
 use jiff::Timestamp;
+use todo::{Extension, Issue, ParseContext};
 use v_utils::prelude::*;
 
 use super::{
 	conflict::{ConflictState, save_conflict},
 	fetch::fetch_and_store_issue,
-	issue::Issue,
+	github_sync::IssueGitHubExt,
 	meta::{IssueMetaEntry, get_issue_meta, load_issue_meta_from_path},
-	util::{Extension, expand_blocker_shorthand},
+	util::expand_blocker_shorthand,
 };
-use crate::{error::ParseContext, github::BoxedGitHubClient};
+use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
 
 //=============================================================================
 // Sync implementation

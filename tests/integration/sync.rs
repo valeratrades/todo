@@ -5,11 +5,16 @@
 //! - Only conflict if BOTH local and remote changed since last sync
 //! - Single-side changes auto-resolve
 //!
-//! Tests work with serialized Issue content (markdown) - our canonical representation.
-//! The mock GitHub layer translates to/from API format at the boundary.
+//! Tests work with `Issue` directly - our canonical representation.
+//! The mock GitHub layer translates to API format at the boundary.
 
-use std::{io::Write, path::PathBuf, process::Command};
+use std::{
+	io::Write,
+	path::{Path, PathBuf},
+	process::Command,
+};
 
+use todo::{Issue, ParseContext};
 use v_fixtures::{Fixture, fs_standards::xdg::Xdg};
 
 /// Default test repository coordinates (only needed for file paths and mock setup)
@@ -17,14 +22,19 @@ const DEFAULT_OWNER: &str = "testowner";
 const DEFAULT_REPO: &str = "testrepo";
 const DEFAULT_NUMBER: u64 = 1;
 
-/// Create serialized Issue content for testing.
-/// This is the canonical markdown format used by the application.
-fn issue(title: &str, body: &str) -> String {
-	format!("- [ ] {title} <!-- https://github.com/{DEFAULT_OWNER}/{DEFAULT_REPO}/issues/{DEFAULT_NUMBER} -->\n\t{body}\n")
+/// Parse an Issue from markdown content.
+fn parse_issue(content: &str) -> Issue {
+	let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
+	Issue::parse(content, &ctx).expect("failed to parse test issue")
+}
+
+/// Create a simple test issue with given title and body.
+fn issue(title: &str, body: &str) -> Issue {
+	let content = format!("- [ ] {title} <!-- https://github.com/{DEFAULT_OWNER}/{DEFAULT_REPO}/issues/{DEFAULT_NUMBER} -->\n\t{body}\n");
+	parse_issue(&content)
 }
 
 /// Test context for sync operations.
-/// Uses v_fixtures for XDG layout and provides helpers for mock GitHub and editor control.
 struct SyncTestContext {
 	xdg: Xdg,
 	mock_state_path: PathBuf,
@@ -42,28 +52,32 @@ impl SyncTestContext {
 		Self { xdg, mock_state_path, pipe_path }
 	}
 
-	/// Set up a local issue file from serialized content.
-	/// Also initializes metadata with given body as "original" (last synced state).
-	fn setup_local(&self, content: &str, title: &str, original_body: &str) -> PathBuf {
+	/// Set up a local issue file and metadata.
+	/// `local` is the current local state, `original` is the last synced state.
+	fn setup_local(&self, local: &Issue, original: &Issue) -> PathBuf {
 		let issues_dir = format!("issues/{DEFAULT_OWNER}/{DEFAULT_REPO}");
-		let sanitized_title = title.replace(' ', "_");
+		let sanitized_title = local.meta.title.replace(' ', "_");
 		let issue_filename = format!("{DEFAULT_NUMBER}_-_{sanitized_title}.md");
 
-		self.xdg.write_data(&format!("{issues_dir}/{issue_filename}"), content);
-		self.write_meta(title, original_body);
+		// Write the local issue file
+		self.xdg.write_data(&format!("{issues_dir}/{issue_filename}"), &local.serialize());
+
+		// Write metadata with original as the consensus state
+		self.write_meta(original);
 
 		self.xdg.data_dir().join(&issues_dir).join(&issue_filename)
 	}
 
 	/// Set up mock GitHub to return an issue.
-	/// This is the API boundary - translates our Issue concept to mock format.
-	fn setup_remote(&self, title: &str, body: &str) {
+	/// This is the API boundary - translates Issue to mock format.
+	fn setup_remote(&self, issue: &Issue) {
+		let body = issue.body();
 		let state = serde_json::json!({
 			"issues": [{
 				"owner": DEFAULT_OWNER,
 				"repo": DEFAULT_REPO,
 				"number": DEFAULT_NUMBER,
-				"title": title,
+				"title": issue.meta.title,
 				"body": body,
 				"state": "open",
 				"owner_login": "mock_user"
@@ -72,21 +86,18 @@ impl SyncTestContext {
 		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
 	}
 
-	/// Update metadata to set a different "original" (last synced) state.
-	fn set_original(&self, title: &str, body: &str) {
-		self.write_meta(title, body);
-	}
-
-	fn write_meta(&self, title: &str, original_body: &str) {
+	/// Write metadata file with the given issue as the "original" (last synced) state.
+	fn write_meta(&self, original: &Issue) {
+		let body = original.body();
 		let meta_content = serde_json::json!({
 			"owner": DEFAULT_OWNER,
 			"repo": DEFAULT_REPO,
 			"issues": {
 				DEFAULT_NUMBER.to_string(): {
 					"issue_number": DEFAULT_NUMBER,
-					"title": title,
+					"title": original.meta.title,
 					"extension": "md",
-					"original_issue_body": original_body,
+					"original_issue_body": body,
 					"original_comments": [],
 					"original_sub_issues": [],
 					"parent_issue": null,
@@ -102,7 +113,7 @@ impl SyncTestContext {
 		);
 	}
 
-	fn run_open(&self, issue_path: &PathBuf) -> std::process::Output {
+	fn run_open(&self, issue_path: &Path) -> std::process::Output {
 		crate::ensure_binary_compiled();
 
 		let mut binary_path = std::env::current_exe().unwrap();
@@ -153,10 +164,12 @@ impl SyncTestContext {
 fn test_both_diverged_triggers_conflict() {
 	let ctx = SyncTestContext::new();
 
-	// Three-way state: original, local (changed), remote (changed differently)
-	let local_content = issue("Test Issue", "local body");
-	let issue_path = ctx.setup_local(&local_content, "Test Issue", "original body");
-	ctx.setup_remote("Test Issue", "remote changed body");
+	let original = issue("Test Issue", "original body");
+	let local = issue("Test Issue", "local body");
+	let remote = issue("Test Issue", "remote changed body");
+
+	let issue_path = ctx.setup_local(&local, &original);
+	ctx.setup_remote(&remote);
 
 	let output = ctx.run_open(&issue_path);
 
@@ -179,9 +192,12 @@ fn test_both_diverged_triggers_conflict() {
 fn test_both_diverged_with_git_initiates_merge() {
 	let ctx = SyncTestContext::new();
 
-	let local_content = issue("Test Issue", "local body");
-	let issue_path = ctx.setup_local(&local_content, "Test Issue", "original body");
-	ctx.setup_remote("Test Issue", "remote changed body");
+	let original = issue("Test Issue", "original body");
+	let local = issue("Test Issue", "local body");
+	let remote = issue("Test Issue", "remote changed body");
+
+	let issue_path = ctx.setup_local(&local, &original);
+	ctx.setup_remote(&remote);
 
 	ctx.init_git();
 	ctx.git_commit("Initial commit");
@@ -206,10 +222,12 @@ fn test_both_diverged_with_git_initiates_merge() {
 fn test_only_remote_changed_takes_remote() {
 	let ctx = SyncTestContext::new();
 
-	// Local matches original, only remote changed
-	let content = issue("Test Issue", "original body");
-	let issue_path = ctx.setup_local(&content, "Test Issue", "original body");
-	ctx.setup_remote("Test Issue", "remote changed body");
+	let original = issue("Test Issue", "original body");
+	let remote = issue("Test Issue", "remote changed body");
+
+	// Local matches original
+	let issue_path = ctx.setup_local(&original, &original);
+	ctx.setup_remote(&remote);
 
 	let output = ctx.run_open(&issue_path);
 	let stderr = String::from_utf8_lossy(&output.stderr);
@@ -227,10 +245,11 @@ fn test_only_remote_changed_takes_remote() {
 fn test_only_local_changed_pushes_local() {
 	let ctx = SyncTestContext::new();
 
-	// Local changed, remote still matches original
-	let local_content = issue("Test Issue", "local changed body");
-	let issue_path = ctx.setup_local(&local_content, "Test Issue", "original body");
-	ctx.setup_remote("Test Issue", "original body");
+	let original = issue("Test Issue", "original body");
+	let local = issue("Test Issue", "local changed body");
+
+	let issue_path = ctx.setup_local(&local, &original);
+	ctx.setup_remote(&original); // Remote still has original
 
 	let output = ctx.run_open(&issue_path);
 	let stderr = String::from_utf8_lossy(&output.stderr);
