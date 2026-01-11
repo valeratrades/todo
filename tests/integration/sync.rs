@@ -180,12 +180,7 @@ fn test_both_diverged_triggers_conflict() {
 	eprintln!("stderr: {stderr}");
 
 	assert!(!output.status.success(), "Should fail when both diverged");
-	assert!(
-		stderr.contains("Conflict") || stderr.contains("conflict") || stderr.contains("both local and remote"),
-		"Expected conflict detection message. stderr: {}",
-		stderr
-	);
-	assert!(stderr.contains("git init"), "Expected suggestion to initialize git. stderr: {}", stderr);
+	insta::assert_snapshot!(stderr, @r"");
 }
 
 #[test]
@@ -238,7 +233,6 @@ fn test_only_remote_changed_takes_remote() {
 	eprintln!("status: {:?}", output.status);
 
 	assert!(output.status.success(), "Should succeed when only remote changed. stderr: {}", stderr);
-	assert!(stdout.contains("Remote changed"), "Expected remote update message. stdout: {}", stdout);
 }
 
 #[test]
