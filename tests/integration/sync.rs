@@ -5,15 +5,37 @@
 //! - Only conflict if BOTH local and remote changed since last sync
 //! - Single-side changes auto-resolve
 
-use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf, process::Command};
+use std::{io::Write, path::PathBuf, process::Command};
 
-use tempfile::TempDir;
+use v_fixtures::{Fixture, fs_standards::xdg::Xdg};
+
+/// Default test repository coordinates
+const DEFAULT_OWNER: &str = "testowner";
+const DEFAULT_REPO: &str = "testrepo";
+const DEFAULT_NUMBER: u64 = 1;
+
+/// Minimal issue representation for testing.
+/// Contains only what matters for sync: title and body.
+#[derive(Clone)]
+struct MockIssue {
+	title: String,
+	body: String,
+}
+
+impl MockIssue {
+	fn new(title: &str, body: &str) -> Self {
+		Self {
+			title: title.to_string(),
+			body: body.to_string(),
+		}
+	}
+}
 
 /// Test context for sync operations.
-/// Sets up XDG directories, mock GitHub state, and named pipe for editor control.
+/// Uses v_fixtures for XDG layout and provides helpers for mock GitHub and editor control.
 struct SyncTestContext {
-	/// Temp directory for XDG paths
-	temp_dir: TempDir,
+	/// XDG-aware fixture
+	xdg: Xdg,
 	/// Path to mock state JSON file
 	mock_state_path: PathBuf,
 	/// Path to named pipe for editor control
@@ -22,60 +44,43 @@ struct SyncTestContext {
 
 impl SyncTestContext {
 	fn new() -> Self {
-		let temp_dir = TempDir::new().unwrap();
-		let mock_state_path = temp_dir.path().join("mock_state.json");
-		let pipe_path = temp_dir.path().join("editor_pipe");
+		let fixture = Fixture::parse("");
+		let xdg = Xdg::new(fixture.write_to_tempdir(), "todo");
 
-		// Create named pipe
-		nix::unistd::mkfifo(&pipe_path, nix::sys::stat::Mode::S_IRWXU).unwrap();
+		// Create mock state file and named pipe in the temp root
+		let mock_state_path = xdg.inner.root.join("mock_state.json");
+		let pipe_path = xdg.inner.create_pipe("editor_pipe");
 
-		Self {
-			temp_dir,
-			mock_state_path,
-			pipe_path,
-		}
+		Self { xdg, mock_state_path, pipe_path }
 	}
 
-	/// Get XDG_DATA_HOME path
-	fn data_home(&self) -> PathBuf {
-		self.temp_dir.path().join("data")
-	}
-
-	/// Get XDG_STATE_HOME path
-	fn state_home(&self) -> PathBuf {
-		self.temp_dir.path().join("state")
-	}
-
-	/// Get XDG_CACHE_HOME path
-	fn cache_home(&self) -> PathBuf {
-		self.temp_dir.path().join("cache")
-	}
-
-	/// Set up an issue file with metadata.
+	/// Set up a local issue file with metadata.
+	/// Uses default owner/repo/number.
 	/// Returns the path to the issue file.
-	fn setup_issue(&self, owner: &str, repo: &str, number: u64, title: &str, body: &str) -> PathBuf {
-		let issues_dir = self.data_home().join("todo/issues").join(owner).join(repo);
-		std::fs::create_dir_all(&issues_dir).unwrap();
+	fn setup_local(&self, issue: &MockIssue) -> PathBuf {
+		self.setup_local_full(DEFAULT_OWNER, DEFAULT_REPO, DEFAULT_NUMBER, issue)
+	}
+
+	/// Set up a local issue with explicit coordinates.
+	fn setup_local_full(&self, owner: &str, repo: &str, number: u64, issue: &MockIssue) -> PathBuf {
+		let issues_dir = format!("issues/{owner}/{repo}");
+		let sanitized_title = issue.title.replace(' ', "_");
+		let issue_filename = format!("{number}_-_{sanitized_title}.md");
 
 		// Create issue file
-		let sanitized_title = title.replace(' ', "_");
-		let issue_filename = format!("{number}_-_{sanitized_title}.md");
-		let issue_path = issues_dir.join(&issue_filename);
+		let issue_content = format!("- [ ] {} <!-- https://github.com/{owner}/{repo}/issues/{number} -->\n\t{}\n", issue.title, issue.body);
+		self.xdg.write_data(&format!("{issues_dir}/{issue_filename}"), &issue_content);
 
-		let issue_content = format!("- [ ] {title} <!-- https://github.com/{owner}/{repo}/issues/{number} -->\n\t{body}\n");
-		std::fs::write(&issue_path, &issue_content).unwrap();
-
-		// Create metadata file
-		let meta_path = issues_dir.join(".meta.json");
+		// Create metadata file with same body as local (they match at "original" state)
 		let meta_content = serde_json::json!({
 			"owner": owner,
 			"repo": repo,
 			"issues": {
 				number.to_string(): {
 					"issue_number": number,
-					"title": title,
+					"title": issue.title,
 					"extension": "md",
-					"original_issue_body": body,
+					"original_issue_body": issue.body,
 					"original_comments": [],
 					"original_sub_issues": [],
 					"parent_issue": null,
@@ -85,17 +90,61 @@ impl SyncTestContext {
 			"virtual_project": false,
 			"next_virtual_issue_number": 0
 		});
-		std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_content).unwrap()).unwrap();
+		self.xdg.write_data(&format!("{issues_dir}/.meta.json"), &serde_json::to_string_pretty(&meta_content).unwrap());
 
-		issue_path
+		self.xdg.data_dir().join(&issues_dir).join(&issue_filename)
 	}
 
-	/// Set up mock GitHub state
-	fn setup_mock_github(&self, issues: Vec<serde_json::Value>) {
+	/// Set up mock GitHub to return a remote issue.
+	/// Uses default owner/repo/number.
+	fn setup_remote(&self, issue: &MockIssue) {
+		self.setup_remote_full(DEFAULT_OWNER, DEFAULT_REPO, DEFAULT_NUMBER, issue);
+	}
+
+	/// Set up mock GitHub with explicit coordinates.
+	fn setup_remote_full(&self, owner: &str, repo: &str, number: u64, issue: &MockIssue) {
 		let state = serde_json::json!({
-			"issues": issues
+			"issues": [{
+				"owner": owner,
+				"repo": repo,
+				"number": number,
+				"title": issue.title,
+				"body": issue.body,
+				"state": "open",
+				"owner_login": "mock_user"
+			}]
 		});
 		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+	}
+
+	/// Set the "original" (last synced) state in metadata.
+	/// This is what both local and remote are compared against.
+	fn set_original(&self, issue: &MockIssue) {
+		self.set_original_full(DEFAULT_OWNER, DEFAULT_REPO, DEFAULT_NUMBER, issue);
+	}
+
+	/// Set original state with explicit coordinates.
+	fn set_original_full(&self, owner: &str, repo: &str, number: u64, issue: &MockIssue) {
+		let meta_content = serde_json::json!({
+			"owner": owner,
+			"repo": repo,
+			"issues": {
+				number.to_string(): {
+					"issue_number": number,
+					"title": issue.title,
+					"extension": "md",
+					"original_issue_body": issue.body,
+					"original_comments": [],
+					"original_sub_issues": [],
+					"parent_issue": null,
+					"original_close_state": "Open"
+				}
+			},
+			"virtual_project": false,
+			"next_virtual_issue_number": 0
+		});
+		self.xdg
+			.write_data(&format!("issues/{owner}/{repo}/.meta.json"), &serde_json::to_string_pretty(&meta_content).unwrap());
 	}
 
 	/// Run todo open command.
@@ -108,26 +157,24 @@ impl SyncTestContext {
 		binary_path.pop(); // Remove 'deps'
 		binary_path.push("todo");
 
-		let pipe_path = self.pipe_path.clone();
+		// Build env vars from XDG
+		let mut cmd = Command::new(&binary_path);
+		cmd.args(["--dbg", "open", issue_path.to_str().unwrap()]);
+		for (key, value) in self.xdg.env_vars() {
+			cmd.env(key, value);
+		}
+		cmd.env("TODO_MOCK_STATE", &self.mock_state_path);
+		cmd.env("TODO_MOCK_PIPE", &self.pipe_path);
+		cmd.stdout(std::process::Stdio::piped());
+		cmd.stderr(std::process::Stdio::piped());
 
-		// Spawn command in background
-		let mut child = Command::new(&binary_path)
-			.args(["--dbg", "open", issue_path.to_str().unwrap()])
-			.env("XDG_DATA_HOME", self.data_home())
-			.env("XDG_STATE_HOME", self.state_home())
-			.env("XDG_CACHE_HOME", self.cache_home())
-			.env("TODO_MOCK_STATE", &self.mock_state_path)
-			.env("TODO_MOCK_PIPE", &self.pipe_path)
-			.stdout(std::process::Stdio::piped())
-			.stderr(std::process::Stdio::piped())
-			.spawn()
-			.unwrap();
+		let child = cmd.spawn().unwrap();
 
 		// Give the command time to start and reach the pipe wait
 		std::thread::sleep(std::time::Duration::from_millis(100));
 
 		// Signal editor to "close" by writing to the pipe
-		let mut pipe = std::fs::OpenOptions::new().write(true).open(&pipe_path).unwrap();
+		let mut pipe = std::fs::OpenOptions::new().write(true).open(&self.pipe_path).unwrap();
 		pipe.write_all(b"x").unwrap();
 		drop(pipe);
 
@@ -135,15 +182,23 @@ impl SyncTestContext {
 		child.wait_with_output().unwrap()
 	}
 
-	/// Read the issue file content
-	fn read_issue(&self, issue_path: &PathBuf) -> String {
-		std::fs::read_to_string(issue_path).unwrap()
+	/// Initialize git in the issues directory
+	fn init_git(&self) {
+		let issues_dir = self.xdg.data_dir().join("issues");
+		std::fs::create_dir_all(&issues_dir).unwrap();
+
+		let output = Command::new("git").args(["init"]).current_dir(&issues_dir).output().unwrap();
+		assert!(output.status.success(), "Failed to init git");
+
+		Command::new("git").args(["config", "user.email", "test@test.local"]).current_dir(&issues_dir).status().unwrap();
+		Command::new("git").args(["config", "user.name", "Test User"]).current_dir(&issues_dir).status().unwrap();
 	}
 
-	/// Check if a conflict state file exists
-	fn has_conflict(&self, owner: &str, repo: &str, issue_number: u64) -> bool {
-		let conflict_path = self.state_home().join("todo/conflicts").join(owner).join(repo).join(format!("{issue_number}.json"));
-		conflict_path.exists()
+	/// Make a git commit in the issues directory
+	fn git_commit(&self, message: &str) {
+		let issues_dir = self.xdg.data_dir().join("issues");
+		Command::new("git").args(["add", "-A"]).current_dir(&issues_dir).status().unwrap();
+		Command::new("git").args(["commit", "-m", message]).current_dir(&issues_dir).status().unwrap();
 	}
 }
 
@@ -151,44 +206,14 @@ impl SyncTestContext {
 fn test_both_diverged_triggers_conflict() {
 	let ctx = SyncTestContext::new();
 
-	// Setup: local issue has "local body"
-	let issue_path = ctx.setup_issue(
-		"testowner", "testrepo", 42, "Test Issue", "local body", // This is different from original AND remote
-	);
+	let original = MockIssue::new("Test Issue", "original body");
+	let local = MockIssue::new("Test Issue", "local body");
+	let remote = MockIssue::new("Test Issue", "remote changed body");
 
-	// Mock GitHub returns different body (remote changed)
-	ctx.setup_mock_github(vec![serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"number": 42,
-		"title": "Test Issue",
-		"body": "remote changed body", // Different from original
-		"state": "open",
-		"owner_login": "mock_user"
-	})]);
-
-	// The metadata says original was "original body" (different from both local and remote)
-	// Update metadata to reflect original state
-	let meta_path = ctx.data_home().join("todo/issues/testowner/testrepo/.meta.json");
-	let meta_content = serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"issues": {
-			"42": {
-				"issue_number": 42,
-				"title": "Test Issue",
-				"extension": "md",
-				"original_issue_body": "original body", // The consensus point
-				"original_comments": [],
-				"original_sub_issues": [],
-				"parent_issue": null,
-				"original_close_state": "Open"
-			}
-		},
-		"virtual_project": false,
-		"next_virtual_issue_number": 0
-	});
-	std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_content).unwrap()).unwrap();
+	// Setup: local has changed, remote has changed, original is different from both
+	let issue_path = ctx.setup_local(&local);
+	ctx.set_original(&original);
+	ctx.setup_remote(&remote);
 
 	let output = ctx.run_open(&issue_path);
 
@@ -216,54 +241,18 @@ fn test_both_diverged_triggers_conflict() {
 fn test_both_diverged_with_git_initiates_merge() {
 	let ctx = SyncTestContext::new();
 
-	// Setup: local issue has "local body"
-	let issue_path = ctx.setup_issue("testowner", "testrepo", 42, "Test Issue", "local body");
+	let original = MockIssue::new("Test Issue", "original body");
+	let local = MockIssue::new("Test Issue", "local body");
+	let remote = MockIssue::new("Test Issue", "remote changed body");
 
-	// Mock GitHub returns different body (remote changed)
-	ctx.setup_mock_github(vec![serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"number": 42,
-		"title": "Test Issue",
-		"body": "remote changed body",
-		"state": "open",
-		"owner_login": "mock_user"
-	})]);
+	// Setup: local has changed, remote has changed, original is different from both
+	let issue_path = ctx.setup_local(&local);
+	ctx.set_original(&original);
+	ctx.setup_remote(&remote);
 
-	// Update metadata to set original as different from both
-	let meta_path = ctx.data_home().join("todo/issues/testowner/testrepo/.meta.json");
-	let meta_content = serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"issues": {
-			"42": {
-				"issue_number": 42,
-				"title": "Test Issue",
-				"extension": "md",
-				"original_issue_body": "original body",
-				"original_comments": [],
-				"original_sub_issues": [],
-				"parent_issue": null,
-				"original_close_state": "Open"
-			}
-		},
-		"virtual_project": false,
-		"next_virtual_issue_number": 0
-	});
-	std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_content).unwrap()).unwrap();
-
-	// Initialize git in the issues directory
-	let issues_dir = ctx.data_home().join("todo/issues");
-	let git_init = Command::new("git").args(["init"]).current_dir(&issues_dir).output().unwrap();
-	assert!(git_init.status.success(), "Failed to init git");
-
-	// Configure git user for commits
-	let _ = Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&issues_dir).status();
-	let _ = Command::new("git").args(["config", "user.name", "Test User"]).current_dir(&issues_dir).status();
-
-	// Make initial commit so we have a base
-	let _ = Command::new("git").args(["add", "-A"]).current_dir(&issues_dir).status();
-	let _ = Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(&issues_dir).status();
+	// Initialize git and make initial commit
+	ctx.init_git();
+	ctx.git_commit("Initial commit");
 
 	let output = ctx.run_open(&issue_path);
 
@@ -274,8 +263,6 @@ fn test_both_diverged_with_git_initiates_merge() {
 	eprintln!("stderr: {stderr}");
 
 	// With git initialized, the merge should be attempted
-	// The merge might succeed (if no actual conflict) or fail with conflict markers
-	// Either way, we should see merge-related output
 	assert!(
 		stdout.contains("Merging") || stdout.contains("merged") || stderr.contains("CONFLICT") || stderr.contains("Conflict"),
 		"Expected merge activity or conflict. stdout: {}, stderr: {}",
@@ -288,74 +275,38 @@ fn test_both_diverged_with_git_initiates_merge() {
 fn test_only_remote_changed_takes_remote() {
 	let ctx = SyncTestContext::new();
 
-	// Setup: local issue has same content as original (unchanged)
-	let issue_path = ctx.setup_issue("testowner", "testrepo", 42, "Test Issue", "original body");
+	// Both local and original are the same; only remote changed
+	let original = MockIssue::new("Test Issue", "original body");
+	let remote = MockIssue::new("Test Issue", "remote changed body");
 
-	// Mock GitHub returns different body (remote changed)
-	ctx.setup_mock_github(vec![serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"number": 42,
-		"title": "Test Issue",
-		"body": "remote changed body",
-		"state": "open",
-		"owner_login": "mock_user"
-	})]);
+	let issue_path = ctx.setup_local(&original);
+	// original is already set to match local by setup_local
+	ctx.setup_remote(&remote);
 
 	let output = ctx.run_open(&issue_path);
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	let stdout = String::from_utf8_lossy(&output.stdout);
 
-	// Current behavior: triggers divergence even for one-sided change
-	// New behavior should: accept remote silently
-	// For now, we document current behavior
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
 	eprintln!("status: {:?}", output.status);
 
-	// TODO: After implementing consensus-based sync, this should succeed
-	// and the local file should be updated to remote content
+	// Should succeed - only remote changed, accept it
+	assert!(output.status.success(), "Should succeed when only remote changed. stderr: {}", stderr);
+	assert!(stdout.contains("Remote changed"), "Expected remote update message. stdout: {}", stdout);
 }
 
 #[test]
 fn test_only_local_changed_pushes_local() {
 	let ctx = SyncTestContext::new();
 
-	// Setup: local issue has changed content (different from original)
-	let issue_path = ctx.setup_issue("testowner", "testrepo", 42, "Test Issue", "local changed body");
+	// Local has changed, remote still matches original
+	let original = MockIssue::new("Test Issue", "original body");
+	let local = MockIssue::new("Test Issue", "local changed body");
 
-	// Override metadata to set original as different from local
-	let meta_path = ctx.data_home().join("todo/issues/testowner/testrepo/.meta.json");
-	let meta_content = serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"issues": {
-			"42": {
-				"issue_number": 42,
-				"title": "Test Issue",
-				"extension": "md",
-				"original_issue_body": "original body", // Different from local
-				"original_comments": [],
-				"original_sub_issues": [],
-				"parent_issue": null,
-				"original_close_state": "Open"
-			}
-		},
-		"virtual_project": false,
-		"next_virtual_issue_number": 0
-	});
-	std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_content).unwrap()).unwrap();
-
-	// Mock GitHub returns same as original (remote unchanged)
-	ctx.setup_mock_github(vec![serde_json::json!({
-		"owner": "testowner",
-		"repo": "testrepo",
-		"number": 42,
-		"title": "Test Issue",
-		"body": "original body", // Same as original
-		"state": "open",
-		"owner_login": "mock_user"
-	})]);
+	let issue_path = ctx.setup_local(&local);
+	ctx.set_original(&original);
+	ctx.setup_remote(&original); // Remote still has original
 
 	let output = ctx.run_open(&issue_path);
 	let stderr = String::from_utf8_lossy(&output.stderr);
@@ -366,7 +317,6 @@ fn test_only_local_changed_pushes_local() {
 	eprintln!("status: {:?}", output.status);
 
 	// Expected behavior: only local changed, so we should push local to remote
-	// This should NOT trigger conflict/divergence workflow
 	assert!(output.status.success(), "Should succeed when only local changed. stderr: {}", stderr);
 	assert!(
 		stdout.contains("Updating") || stdout.contains("Synced") || stdout.contains("No changes"),
