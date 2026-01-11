@@ -11,7 +11,7 @@
 use std::{path::Path, process::Command};
 
 use jiff::Timestamp;
-use todo::{Extension, Issue, ParseContext};
+use todo::{Extension, FetchedIssue, Issue, ParseContext};
 use v_utils::prelude::*;
 
 use super::{
@@ -545,15 +545,18 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		};
 
 		// Determine parent issue info if this is a sub-issue
-		let parent_issue = meta
-			.parent_issue
-			.and_then(|parent_num| get_issue_meta(&owner, &repo, parent_num).map(|parent_meta| (parent_num, parent_meta.title)));
+		// Convert to Vec<FetchedIssue> for the new API
+		let ancestors: Option<Vec<FetchedIssue>> = meta.parent_issue.and_then(|parent_num| {
+			let parent_meta = get_issue_meta(&owner, &repo, parent_num)?;
+			let fetched = FetchedIssue::from_parts(&owner, &repo, parent_num, &parent_meta.title)?;
+			Some(vec![fetched])
+		});
 
 		// Store the old path before re-fetching
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
-		let new_path = fetch_and_store_issue(gh, &owner, &repo, issue_number, &extension, false, parent_issue).await?;
+		let new_path = fetch_and_store_issue(gh, &owner, &repo, issue_number, &extension, false, ancestors).await?;
 
 		// If the path changed (title/state changed), delete the old file
 		if old_path != new_path && old_path.exists() {

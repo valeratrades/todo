@@ -2,19 +2,116 @@
 //!
 //! This module contains the pure Issue type with parsing and serialization.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
 
-/// Minimal issue identifier for building file paths and tracking ancestry.
-/// Contains just enough info to construct directory names.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IssueLink {
-	pub number: u64,
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+/// A GitHub issue identifier. Wraps a URL and derives all properties on demand.
+/// Format: `https://github.com/{owner}/{repo}/issues/{number}`
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct IssueLink(Url);
+
+impl IssueLink {
+	/// Create from a URL. Returns None if not a valid GitHub issue URL.
+	pub fn new(url: Url) -> Option<Self> {
+		// Validate it's a GitHub issue URL
+		if url.host_str() != Some("github.com") {
+			return None;
+		}
+		let segments: Vec<_> = url.path_segments()?.collect();
+		// Must be: owner/repo/issues/number
+		if segments.len() < 4 || segments[2] != "issues" {
+			return None;
+		}
+		// Number must be valid
+		segments[3].parse::<u64>().ok()?;
+		Some(Self(url))
+	}
+
+	/// Parse from a URL string.
+	pub fn parse(url: &str) -> Option<Self> {
+		let url = Url::parse(url).ok()?;
+		Self::new(url)
+	}
+
+	/// Get the underlying URL.
+	pub fn url(&self) -> &Url {
+		&self.0
+	}
+
+	/// Get the owner (first path segment).
+	pub fn owner(&self) -> &str {
+		self.0.path_segments().unwrap().next().unwrap()
+	}
+
+	/// Get the repo (second path segment).
+	pub fn repo(&self) -> &str {
+		self.0.path_segments().unwrap().nth(1).unwrap()
+	}
+
+	/// Get the issue number (fourth path segment).
+	pub fn number(&self) -> u64 {
+		self.0.path_segments().unwrap().nth(3).unwrap().parse().unwrap()
+	}
+
+	/// Build URL string.
+	pub fn as_str(&self) -> &str {
+		self.0.as_str()
+	}
+}
+
+impl fmt::Display for IssueLink {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
+
+impl From<IssueLink> for Url {
+	fn from(link: IssueLink) -> Url {
+		link.0
+	}
+}
+
+impl AsRef<Url> for IssueLink {
+	fn as_ref(&self) -> &Url {
+		&self.0
+	}
+}
+
+/// An issue with its title - used when we need both identity and display name.
+/// This is what we have after fetching an issue from GitHub.
+#[derive(Clone, Debug)]
+pub struct FetchedIssue {
+	pub link: IssueLink,
 	pub title: String,
 }
 
-impl IssueLink {
-	pub fn new(number: u64, title: impl Into<String>) -> Self {
-		Self { number, title: title.into() }
+impl FetchedIssue {
+	pub fn new(link: IssueLink, title: impl Into<String>) -> Self {
+		Self { link, title: title.into() }
+	}
+
+	/// Create from owner, repo, number, and title (constructs the URL internally).
+	pub fn from_parts(owner: &str, repo: &str, number: u64, title: impl Into<String>) -> Option<Self> {
+		let url_str = format!("https://github.com/{owner}/{repo}/issues/{number}");
+		let link = IssueLink::parse(&url_str)?;
+		Some(Self { link, title: title.into() })
+	}
+
+	/// Convenience: get the issue number
+	pub fn number(&self) -> u64 {
+		self.link.number()
+	}
+
+	/// Convenience: get owner
+	pub fn owner(&self) -> &str {
+		self.link.owner()
+	}
+
+	/// Convenience: get repo
+	pub fn repo(&self) -> &str {
+		self.link.repo()
 	}
 }
 

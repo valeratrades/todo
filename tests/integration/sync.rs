@@ -180,7 +180,17 @@ fn test_both_diverged_triggers_conflict() {
 	eprintln!("stderr: {stderr}");
 
 	assert!(!output.status.success(), "Should fail when both diverged");
-	insta::assert_snapshot!(stderr, @r"");
+	insta::assert_snapshot!(stderr, @"
+	[mock] Loaded state from /tmp/v_fixture_J4FiBt/mock_state.json
+	[mock] Waiting for signal on pipe: /tmp/v_fixture_J4FiBt/editor_pipe
+	[mock] Signal received, continuing...
+	Error: Conflict detected: both local and remote have changes since last sync.
+
+	To enable conflict resolution, initialize git in your issues directory:
+	cd /tmp/v_fixture_J4FiBt/data/todo/issues && git init
+
+	Then re-run the command.
+	");
 }
 
 #[test]

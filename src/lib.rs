@@ -4,7 +4,8 @@ pub mod issue;
 
 // Re-export all public types from issue module at crate root for convenience
 pub use issue::{
-	BlockerItem, BlockerSequence, CloseState, Comment, HeaderLevel, Issue, IssueMeta, Line, Marker, ParseContext, ParseError, classify_line, is_blockers_marker, normalize_issue_indentation,
+	BlockerItem, BlockerSequence, CloseState, Comment, FetchedIssue, HeaderLevel, Issue, IssueLink, IssueMeta, Line, Marker, ParseContext, ParseError, classify_line, is_blockers_marker,
+	normalize_issue_indentation,
 };
 
 /// File extension/type for issue files.
