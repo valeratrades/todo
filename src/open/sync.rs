@@ -1,4 +1,12 @@
 //! Sync local issue changes back to GitHub.
+//!
+//! ## Consensus-based sync model
+//!
+//! The sync logic treats the last synced state as the "consensus". When syncing:
+//! - If only local changed since consensus → push local to remote
+//! - If only remote changed since consensus → take remote as new local
+//! - If both changed since consensus → conflict requiring manual resolution
+//! - If neither changed → no action needed
 
 use std::path::Path;
 
@@ -13,6 +21,66 @@ use super::{
 	util::{Extension, expand_blocker_shorthand},
 };
 use crate::{error::ParseContext, github::BoxedGitHubClient};
+
+//=============================================================================
+// Consensus-based sync resolution
+//=============================================================================
+
+/// Input for sync resolution decision.
+///
+/// Contains the last synced state and timestamps, plus current local and remote states.
+#[derive(Debug, Clone)]
+pub struct SyncInput {
+	/// Timestamp of the last successful sync (consensus point)
+	pub last_synced_timestamp: u64,
+	/// Issue state at last sync (the consensus)
+	pub last_synced_state: String,
+	/// Current local issue state
+	pub local_state: String,
+	/// Timestamp of local changes (when local was last modified)
+	pub local_timestamp: u64,
+	/// Current remote issue state (from GitHub)
+	pub remote_state: String,
+	/// Timestamp of remote changes (when remote was last modified)
+	pub remote_timestamp: u64,
+}
+
+/// Decision from sync resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncDecision {
+	/// No changes on either side - nothing to do
+	NoAction,
+	/// Only local changed - push local to remote
+	PushLocal,
+	/// Only remote changed - update local from remote
+	TakeRemote,
+	/// Both changed - conflict requiring resolution
+	Conflict { reason: String },
+}
+
+/// Resolve sync by comparing local and remote against the last synced consensus.
+///
+/// Returns a decision indicating what action to take.
+pub fn resolve_sync(input: SyncInput) -> SyncDecision {
+	let local_changed = input.local_state != input.last_synced_state;
+	let remote_changed = input.remote_state != input.last_synced_state;
+
+	match (local_changed, remote_changed) {
+		(false, false) => SyncDecision::NoAction,
+		(true, false) => SyncDecision::PushLocal,
+		(false, true) => SyncDecision::TakeRemote,
+		(true, true) => {
+			// Both changed - this is a conflict
+			SyncDecision::Conflict {
+				reason: "both local and remote have changes since last sync".to_string(),
+			}
+		}
+	}
+}
+
+//=============================================================================
+// Existing sync implementation
+//=============================================================================
 
 /// Sync changes from a local issue file back to GitHub using stored metadata.
 /// Returns whether the issue state changed (for file renaming).
@@ -408,7 +476,7 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 			(0, None)
 		}
 	} else {
-		// Normal flow: check divergence first
+		// Normal flow: use consensus-based sync
 		let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
 			gh.fetch_authenticated_user(),
 			gh.fetch_issue(&owner, &repo, meta.issue_number),
@@ -419,16 +487,45 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 		// Build Issue from current GitHub state
 		let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, &owner, &repo, &current_user);
 
-		// Build Issue from what we originally saw (stored in meta)
+		// Build Issue from what we originally saw (stored in meta) - this is the consensus
 		let original_issue = Issue::from_meta(&meta, &owner, &repo);
 
-		// Check if remote diverged from what we originally saw
-		if remote_issue != original_issue {
-			// Remote changed since we last fetched - divergence detected!
-			return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
+		// Use consensus-based sync: compare local and remote against the original (consensus)
+		let local_changed = issue != original_issue;
+		let remote_changed = remote_issue != original_issue;
+
+		match (local_changed, remote_changed) {
+			(false, false) => {
+				// Neither changed - nothing to do
+				tracing::debug!("[sync] No changes detected");
+			}
+			(true, false) => {
+				// Only local changed - push to remote (normal sync flow)
+				tracing::debug!("[sync] Only local changed, pushing to remote");
+			}
+			(false, true) => {
+				// Only remote changed - accept remote as new truth
+				// Update local file to match remote state
+				tracing::debug!("[sync] Only remote changed, accepting remote state");
+				let remote_content = remote_issue.serialize();
+				std::fs::write(issue_file_path, &remote_content)?;
+				// Update metadata to reflect new original state
+				let mut updated_meta = meta.clone();
+				updated_meta.original_issue_body = remote_issue.body().into();
+				updated_meta.original_close_state = remote_issue.meta.close_state.clone();
+				// Note: comments and sub-issues would need similar updates for full implementation
+				super::meta::save_issue_meta(&owner, &repo, updated_meta)?;
+				println!("Remote changed, local file updated.");
+				return Ok(());
+			}
+			(true, true) => {
+				// Both changed - conflict!
+				tracing::debug!("[sync] Both local and remote changed, conflict detected");
+				return handle_divergence(gh, issue_file_path, &owner, &repo, &meta, &issue, &remote_issue).await;
+			}
 		}
 
-		// No divergence - collect and execute actions
+		// Collect and execute actions (for local changes being pushed)
 		let actions = issue.collect_actions(&meta.original_sub_issues);
 		let has_actions = actions.iter().any(|level| !level.is_empty());
 

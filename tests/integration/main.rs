@@ -7,7 +7,10 @@ static BINARY_COMPILED: OnceLock<()> = OnceLock::new();
 /// Compile the binary before running any tests
 pub fn ensure_binary_compiled() {
 	BINARY_COMPILED.get_or_init(|| {
-		let status = std::process::Command::new("cargo").args(["build"]).status().expect("Failed to execute cargo build");
+		let status = std::process::Command::new("cargo")
+			.args(["build", "--features", "is_integration_test"])
+			.status()
+			.expect("Failed to execute cargo build");
 
 		if !status.success() {
 			panic!("Failed to build binary");
@@ -17,3 +20,4 @@ pub fn ensure_binary_compiled() {
 
 mod blocker_project_resolution;
 mod fixtures;
+mod sync;
