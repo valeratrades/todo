@@ -192,17 +192,93 @@ fn test_both_diverged_triggers_conflict() {
 
 	let output = ctx.run_open(&issue_path);
 
-	// The command should fail because both diverged
-	// (Current implementation triggers conflict when remote != original)
-	// This test documents current behavior and will need updating when we implement new logic
 	let stderr = String::from_utf8_lossy(&output.stderr);
 	let stdout = String::from_utf8_lossy(&output.stdout);
 
-	// For now, just check that divergence was detected
-	// The exact behavior (PR creation vs local branch) will depend on implementation
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	// Should fail because both diverged and git is not initialized
+	assert!(!output.status.success(), "Should fail when both diverged");
+
+	// Should detect conflict and suggest initializing git
 	assert!(
-		!output.status.success() || stderr.contains("diverge") || stderr.contains("conflict") || stdout.contains("diverge"),
-		"Expected divergence detection. stdout: {}, stderr: {}",
+		stderr.contains("Conflict") || stderr.contains("conflict") || stderr.contains("both local and remote"),
+		"Expected conflict detection message. stderr: {}",
+		stderr
+	);
+
+	// Should suggest git init (since git is not initialized in temp dir)
+	assert!(stderr.contains("git init"), "Expected suggestion to initialize git. stderr: {}", stderr);
+}
+
+#[test]
+fn test_both_diverged_with_git_initiates_merge() {
+	let ctx = SyncTestContext::new();
+
+	// Setup: local issue has "local body"
+	let issue_path = ctx.setup_issue("testowner", "testrepo", 42, "Test Issue", "local body");
+
+	// Mock GitHub returns different body (remote changed)
+	ctx.setup_mock_github(vec![serde_json::json!({
+		"owner": "testowner",
+		"repo": "testrepo",
+		"number": 42,
+		"title": "Test Issue",
+		"body": "remote changed body",
+		"state": "open",
+		"owner_login": "mock_user"
+	})]);
+
+	// Update metadata to set original as different from both
+	let meta_path = ctx.data_home().join("todo/issues/testowner/testrepo/.meta.json");
+	let meta_content = serde_json::json!({
+		"owner": "testowner",
+		"repo": "testrepo",
+		"issues": {
+			"42": {
+				"issue_number": 42,
+				"title": "Test Issue",
+				"extension": "md",
+				"original_issue_body": "original body",
+				"original_comments": [],
+				"original_sub_issues": [],
+				"parent_issue": null,
+				"original_close_state": "Open"
+			}
+		},
+		"virtual_project": false,
+		"next_virtual_issue_number": 0
+	});
+	std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_content).unwrap()).unwrap();
+
+	// Initialize git in the issues directory
+	let issues_dir = ctx.data_home().join("todo/issues");
+	let git_init = Command::new("git").args(["init"]).current_dir(&issues_dir).output().unwrap();
+	assert!(git_init.status.success(), "Failed to init git");
+
+	// Configure git user for commits
+	let _ = Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(&issues_dir).status();
+	let _ = Command::new("git").args(["config", "user.name", "Test User"]).current_dir(&issues_dir).status();
+
+	// Make initial commit so we have a base
+	let _ = Command::new("git").args(["add", "-A"]).current_dir(&issues_dir).status();
+	let _ = Command::new("git").args(["commit", "-m", "Initial commit"]).current_dir(&issues_dir).status();
+
+	let output = ctx.run_open(&issue_path);
+
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	let stdout = String::from_utf8_lossy(&output.stdout);
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	// With git initialized, the merge should be attempted
+	// The merge might succeed (if no actual conflict) or fail with conflict markers
+	// Either way, we should see merge-related output
+	assert!(
+		stdout.contains("Merging") || stdout.contains("merged") || stderr.contains("CONFLICT") || stderr.contains("Conflict"),
+		"Expected merge activity or conflict. stdout: {}, stderr: {}",
 		stdout,
 		stderr
 	);
