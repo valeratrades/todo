@@ -36,10 +36,6 @@ pub struct OpenArgs {
 	#[arg(short = 'e', long)]
 	pub extension: Option<Extension>,
 
-	/// Render full contents even for closed issues (by default, closed issues show only title with <!-- omitted -->)
-	#[arg(long)]
-	pub render_closed: bool,
-
 	/// Create or open an issue from a path. Path format: workspace/project/issue[.md|.typ]
 	/// For sub-issues: workspace/project/parent/child (parent must exist on GitHub)
 	/// If issue already exists locally, opens it. Otherwise creates on GitHub first.
@@ -156,7 +152,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		println!("Fetching issue #{issue_number} from {owner}/{repo}...");
 
 		// Fetch and store issue (and sub-issues) in XDG_DATA
-		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, args.render_closed, None).await?;
+		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, None).await?;
 
 		println!("Stored issue at: {:?}", issue_file_path);
 

@@ -10,7 +10,6 @@ use crate::github::{GitHubComment, GitHubIssue};
 
 /// Format an issue for local file storage.
 /// `ancestors` is the chain of parent issues (for sub-issue file lookup).
-#[expect(clippy::too_many_arguments)]
 pub fn format_issue(
 	issue: &GitHubIssue,
 	comments: &[GitHubComment],
@@ -18,7 +17,6 @@ pub fn format_issue(
 	owner: &str,
 	repo: &str,
 	current_user: &str,
-	render_closed: bool,
 	ext: Extension,
 	ancestors: &[FetchedIssue],
 ) -> String {
@@ -42,10 +40,9 @@ pub fn format_issue(
 	};
 	content.push_str(&format!("- [{checked}] {labels_part}{} {}\n", issue.title, title_marker.encode(ext)));
 
-	// If issue is closed and render_closed is false, omit contents
-	if issue_closed && !render_closed {
-		content.push_str(&format!("\t{}\n", Marker::Omitted.encode(ext)));
-		return content;
+	// If issue is closed, wrap contents in vim fold markers
+	if issue_closed {
+		content.push_str(&format!("\t{}\n", Marker::OmittedStart.encode(ext)));
 	}
 
 	// Body (description - indented under the issue)
@@ -125,7 +122,7 @@ pub fn format_issue(
 
 	// Sub-issues at the very end - embed their body content
 	// Prefer local file contents over GitHub body when available
-	// Closed sub-issues show `<!-- omitted -->` instead of body content
+	// Closed sub-issues wrap body content in vim fold markers
 	for sub in sub_issues {
 		// Add empty line (with indent for LSP) before each sub-issue if previous line has content (markdown only)
 		if ext == Extension::Md && content.lines().last().is_some_and(|l| !l.trim().is_empty()) {
@@ -138,10 +135,9 @@ pub fn format_issue(
 		let sub_marker = Marker::SubIssue { url: sub_url };
 		content.push_str(&format!("\t- [{sub_checked}] {} {}\n", sub.title, sub_marker.encode(ext)));
 
-		// Closed sub-issues show omitted marker instead of content
+		// Closed sub-issues wrap body in vim fold markers
 		if sub_closed {
-			content.push_str(&format!("\t\t{}\n", Marker::Omitted.encode(ext)));
-			continue;
+			content.push_str(&format!("\t\t{}\n", Marker::OmittedStart.encode(ext)));
 		}
 
 		// Try to read local file contents for this sub-issue
@@ -166,6 +162,16 @@ pub fn format_issue(
 				content.push_str(&format!("\t\t{line}\n"));
 			}
 		}
+
+		// Close the vim fold for closed sub-issues
+		if sub_closed {
+			content.push_str(&format!("\t\t{}\n", Marker::OmittedEnd.encode(ext)));
+		}
+	}
+
+	// Close the vim fold for closed main issue
+	if issue_closed {
+		content.push_str(&format!("\t{}\n", Marker::OmittedEnd.encode(ext)));
 	}
 
 	content
@@ -197,7 +203,7 @@ mod tests {
 	fn test_format_issue_md_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec!["bug", "help wanted"], "me", "open");
 
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md, &[]);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] [bug, help wanted] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -208,7 +214,7 @@ mod tests {
 	fn test_format_issue_md_not_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md, &[]);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -216,27 +222,12 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_md_closed_omitted() {
+	fn test_format_issue_md_closed_with_vim_folds() {
 		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
 
-		// Default: closed issues have omitted contents
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Md, &[]);
-		assert_snapshot!(md, @"
-		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
-			<!-- omitted -->
-		");
-	}
-
-	#[test]
-	fn test_format_issue_md_closed_rendered() {
-		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
-
-		// With render_closed: full contents shown
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", true, Extension::Md, &[]);
-		assert_snapshot!(md, @"
-		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
-			Issue body text
-		");
+		// Closed issues wrap contents in vim fold markers
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
+		assert_snapshot!(md, @"");
 	}
 
 	#[test]
@@ -244,20 +235,11 @@ mod tests {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "me", "open");
 		let sub_issues = vec![
 			make_issue(124, "Open sub-issue", Some("Sub-issue body content"), vec![], "me", "open"),
-			make_issue(125, "Closed sub-issue", None, vec![], "me", "closed"),
+			make_issue(125, "Closed sub-issue", Some("Closed body"), vec![], "me", "closed"),
 		];
 
-		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", false, Extension::Md, &[]);
-		assert_snapshot!(md, @"
-		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
-			Issue body text
-			
-			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124 -->
-				Sub-issue body content
-			
-			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125 -->
-				<!-- omitted -->
-		");
+		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", Extension::Md, &[]);
+		assert_snapshot!(md, @"");
 	}
 
 	#[test]
@@ -276,7 +258,7 @@ mod tests {
 			},
 		];
 
-		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", false, Extension::Md, &[]);
+		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", Extension::Md, &[]);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -293,7 +275,7 @@ mod tests {
 	fn test_format_issue_typ_owned() {
 		let issue = make_issue(123, "Test Issue", Some("## Subheading\nBody text"), vec!["enhancement"], "me", "open");
 
-		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ, &[]);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[]);
 		assert_snapshot!(typ, @"
 		- [ ] [enhancement] Test Issue // https://github.com/owner/repo/issues/123
 			== Subheading
@@ -310,7 +292,7 @@ mod tests {
 			user: make_user("other"),
 		}];
 
-		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", false, Extension::Typ, &[]);
+		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", Extension::Typ, &[]);
 		assert_snapshot!(typ, @"
 		- [ ] Typst Issue // immutable https://github.com/testowner/testrepo/issues/456
 				Body
@@ -320,14 +302,11 @@ mod tests {
 	}
 
 	#[test]
-	fn test_format_issue_typ_closed_omitted() {
+	fn test_format_issue_typ_closed_with_vim_folds() {
 		let issue = make_issue(123, "Closed Issue", Some("Body text"), vec![], "me", "closed");
 
-		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", false, Extension::Typ, &[]);
-		assert_snapshot!(typ, @"
-		- [x] Closed Issue // https://github.com/owner/repo/issues/123
-			// omitted
-		");
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[]);
+		assert_snapshot!(typ, @"");
 	}
 
 	/// Test the correct rendering order for issues:
@@ -353,31 +332,10 @@ mod tests {
 		];
 		let sub_issues = vec![
 			make_issue(124, "Sub Issue One", Some("Sub issue body"), vec![], "me", "open"),
-			make_issue(125, "Sub Issue Two", None, vec![], "me", "closed"),
+			make_issue(125, "Sub Issue Two", Some("Closed sub body"), vec![], "me", "closed"),
 		];
 
-		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", false, Extension::Md, &[]);
-
-		// Expected order:
-		// 1. Title line with labels: `- [ ] [label1, label2] Title <!-- url -->`
-		// 2. Body (description + comments + blockers)
-		// 3. Sub-issues at the very end
-		assert_snapshot!(md, @"
-		- [ ] [bug, priority] Main Issue <!-- https://github.com/owner/repo/issues/123 -->
-			This is the body text.
-			With multiple lines.
-			
-			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
-			First comment from me
-			
-			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
-				Second comment from other
-			
-			- [ ] Sub Issue One <!--sub https://github.com/owner/repo/issues/124 -->
-				Sub issue body
-			
-			- [x] Sub Issue Two <!--sub https://github.com/owner/repo/issues/125 -->
-				<!-- omitted -->
-		");
+		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", Extension::Md, &[]);
+		assert_snapshot!(md, @"");
 	}
 }

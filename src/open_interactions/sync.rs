@@ -523,7 +523,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
-		let new_path = fetch_and_store_issue(gh, owner, repo, issue_number, &extension, false, ancestors).await?;
+		let new_path = fetch_and_store_issue(gh, owner, repo, issue_number, &extension, ancestors).await?;
 
 		// If the path changed (title/state changed), delete the old file
 		if old_path != new_path && old_path.exists() {

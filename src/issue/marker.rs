@@ -24,10 +24,10 @@ pub enum Marker {
 	/// Uses the Header type for format-aware encoding/decoding.
 	/// Legacy formats (`// blockers`, `<!-- blockers -->`) are still decoded but encode to Header format.
 	BlockersSection(Header),
-	/// Omitted content marker: `<!-- omitted -->`
-	Omitted,
-	/// Omitted with hint: `<!-- omitted (use --render-closed to unfold) -->`
-	OmittedWithHint,
+	/// Omitted start marker: `<!--omitted {{{always-->` (vim fold start)
+	OmittedStart,
+	/// Omitted end marker: `<!--,}}}-->` (vim fold end)
+	OmittedEnd,
 }
 
 impl Marker {
@@ -54,6 +54,11 @@ impl Marker {
 			return Some(Marker::BlockersSection(Header::new(1, "Blockers")));
 		}
 
+		// Check for typst vim fold end marker: `//,}}}` (no space after //)
+		if ext == Extension::Typ && trimmed == "//,}}}" {
+			return Some(Marker::OmittedEnd);
+		}
+
 		// Check for typst comment markers: `// url`, `// immutable url`, `// sub url`, etc.
 		if ext == Extension::Typ
 			&& let Some(inner) = trimmed.strip_prefix("// ")
@@ -66,12 +71,9 @@ impl Marker {
 				return Some(Marker::NewComment);
 			}
 
-			// Omitted variants
-			if lower == "omitted" {
-				return Some(Marker::Omitted);
-			}
-			if lower.starts_with("omitted") && lower.contains("render-closed") {
-				return Some(Marker::OmittedWithHint);
+			// Omitted vim fold markers
+			if lower.starts_with("omitted") && lower.contains("{{{") {
+				return Some(Marker::OmittedStart);
 			}
 
 			// Check for immutable prefix
@@ -128,12 +130,12 @@ impl Marker {
 			return Some(Marker::NewComment);
 		}
 
-		// Omitted variants
-		if lower == "omitted" {
-			return Some(Marker::Omitted);
+		// Omitted vim fold markers
+		if lower.starts_with("omitted") && lower.contains("{{{") {
+			return Some(Marker::OmittedStart);
 		}
-		if lower.starts_with("omitted") && lower.contains("render-closed") {
-			return Some(Marker::OmittedWithHint);
+		if lower.starts_with(",}}}") || lower == ",}}}" {
+			return Some(Marker::OmittedEnd);
 		}
 
 		// Check for immutable prefix
@@ -190,8 +192,8 @@ impl Marker {
 					},
 				Marker::NewComment => "<!-- new comment -->".to_string(),
 				Marker::BlockersSection(header) => header.encode(Extension::Md),
-				Marker::Omitted => "<!-- omitted -->".to_string(),
-				Marker::OmittedWithHint => "<!-- omitted (use --render-closed to unfold) -->".to_string(),
+				Marker::OmittedStart => "<!--omitted {{{always-->".to_string(),
+				Marker::OmittedEnd => "<!--,}}}-->".to_string(),
 			},
 			Extension::Typ => match self {
 				Marker::IssueUrl { url, immutable } =>
@@ -209,8 +211,8 @@ impl Marker {
 					},
 				Marker::NewComment => "// new comment".to_string(),
 				Marker::BlockersSection(header) => header.encode(Extension::Typ),
-				Marker::Omitted => "// omitted".to_string(),
-				Marker::OmittedWithHint => "// omitted (use --render-closed to unfold)".to_string(),
+				Marker::OmittedStart => "// omitted {{{always".to_string(),
+				Marker::OmittedEnd => "//,}}}".to_string(),
 			},
 		}
 	}
@@ -351,9 +353,11 @@ mod tests {
 
 	#[test]
 	fn test_decode_omitted() {
-		assert_eq!(Marker::decode("<!-- omitted -->", Extension::Md), Some(Marker::Omitted));
-		assert_eq!(Marker::decode("<!--omitted-->", Extension::Md), Some(Marker::Omitted));
-		assert_eq!(Marker::decode("<!-- omitted (use --render-closed to unfold) -->", Extension::Md), Some(Marker::OmittedWithHint));
+		assert_eq!(Marker::decode("<!--omitted {{{always-->", Extension::Md), Some(Marker::OmittedStart));
+		assert_eq!(Marker::decode("<!-- omitted {{{always -->", Extension::Md), Some(Marker::OmittedStart));
+		assert_eq!(Marker::decode("<!--,}}}-->", Extension::Md), Some(Marker::OmittedEnd));
+		assert_eq!(Marker::decode("// omitted {{{always", Extension::Typ), Some(Marker::OmittedStart));
+		assert_eq!(Marker::decode("//,}}}", Extension::Typ), Some(Marker::OmittedEnd));
 	}
 
 	#[test]
@@ -386,7 +390,10 @@ mod tests {
 		assert_eq!(Marker::BlockersSection(Header::new(2, "Blockers")).encode(Extension::Md), "## Blockers");
 		assert_eq!(Marker::BlockersSection(Header::new(2, "Blockers")).encode(Extension::Typ), "== Blockers");
 		assert_eq!(Marker::NewComment.encode(Extension::Md), "<!-- new comment -->");
-		assert_eq!(Marker::Omitted.encode(Extension::Md), "<!-- omitted -->");
+		assert_eq!(Marker::OmittedStart.encode(Extension::Md), "<!--omitted {{{always-->");
+		assert_eq!(Marker::OmittedEnd.encode(Extension::Md), "<!--,}}}-->");
+		assert_eq!(Marker::OmittedStart.encode(Extension::Typ), "// omitted {{{always");
+		assert_eq!(Marker::OmittedEnd.encode(Extension::Typ), "//,}}}");
 	}
 
 	#[test]
@@ -409,8 +416,8 @@ mod tests {
 				immutable: false,
 			},
 			Marker::NewComment,
-			Marker::Omitted,
-			Marker::OmittedWithHint,
+			Marker::OmittedStart,
+			Marker::OmittedEnd,
 		];
 
 		for marker in markers {

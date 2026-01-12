@@ -34,18 +34,10 @@ async fn find_ancestry_chain(gh: &BoxedGitHubClient, owner: &str, repo: &str, is
 /// If the issue is a sub-issue, first traverses up to find the root and stores
 /// the entire hierarchy from root down.
 /// Returns the path to the requested issue file.
-pub async fn fetch_and_store_issue(
-	gh: &BoxedGitHubClient,
-	owner: &str,
-	repo: &str,
-	issue_number: u64,
-	extension: &Extension,
-	render_closed: bool,
-	ancestors: Option<Vec<FetchedIssue>>,
-) -> Result<PathBuf> {
+pub async fn fetch_and_store_issue(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue_number: u64, extension: &Extension, ancestors: Option<Vec<FetchedIssue>>) -> Result<PathBuf> {
 	// If we already have ancestor info, this is a recursive call - use it directly
 	if let Some(ancestors) = ancestors {
-		return fetch_issue_with_ancestors(gh, owner, repo, issue_number, extension, render_closed, ancestors).await;
+		return fetch_issue_with_ancestors(gh, owner, repo, issue_number, extension, ancestors).await;
 	}
 
 	// First, check if this issue has any parents (is a sub-issue)
@@ -53,7 +45,7 @@ pub async fn fetch_and_store_issue(
 
 	if ancestry.is_empty() {
 		// This is a root issue, fetch normally (and recursively fetch sub-issues)
-		return fetch_issue_with_ancestors(gh, owner, repo, issue_number, extension, render_closed, vec![]).await;
+		return fetch_issue_with_ancestors(gh, owner, repo, issue_number, extension, vec![]).await;
 	}
 
 	// This is a sub-issue - fetch from the root down
@@ -61,7 +53,7 @@ pub async fn fetch_and_store_issue(
 
 	// Fetch the entire tree starting from root
 	let root_number = ancestry[0].number();
-	fetch_issue_with_ancestors(gh, owner, repo, root_number, extension, render_closed, vec![]).await?;
+	fetch_issue_with_ancestors(gh, owner, repo, root_number, extension, vec![]).await?;
 
 	// Now find and return the path to the originally requested issue
 	// Get the issue info to determine file path
@@ -73,15 +65,7 @@ pub async fn fetch_and_store_issue(
 }
 
 /// Fetch an issue with known ancestors, storing it and recursively fetching sub-issues.
-async fn fetch_issue_with_ancestors(
-	gh: &BoxedGitHubClient,
-	owner: &str,
-	repo: &str,
-	issue_number: u64,
-	extension: &Extension,
-	render_closed: bool,
-	ancestors: Vec<FetchedIssue>,
-) -> Result<PathBuf> {
+async fn fetch_issue_with_ancestors(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue_number: u64, extension: &Extension, ancestors: Vec<FetchedIssue>) -> Result<PathBuf> {
 	// Fetch the issue data
 	let (current_user, issue, comments, sub_issues) = tokio::try_join!(
 		gh.fetch_authenticated_user(),
@@ -100,7 +84,7 @@ async fn fetch_issue_with_ancestors(
 	}
 
 	// Format content
-	let content = format_issue(&issue, &comments, &sub_issues, owner, repo, &current_user, render_closed, *extension, &ancestors);
+	let content = format_issue(&issue, &comments, &sub_issues, owner, repo, &current_user, *extension, &ancestors);
 
 	// Write issue file
 	std::fs::write(&issue_file_path, &content)?;
@@ -125,10 +109,7 @@ async fn fetch_issue_with_ancestors(
 
 	// Recursively fetch all sub-issues
 	for sub_issue in &sub_issues {
-		// Only recurse into open issues, or all if render_closed is true
-		if (render_closed || sub_issue.state != "closed")
-			&& let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, render_closed, child_ancestors.clone()).await
-		{
+		if let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, child_ancestors.clone()).await {
 			eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
 		}
 	}
@@ -143,7 +124,6 @@ fn fetch_sub_issue_tree<'a>(
 	repo: &'a str,
 	issue: &'a GitHubIssue,
 	extension: &'a Extension,
-	render_closed: bool,
 	ancestors: Vec<FetchedIssue>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf>> + Send + 'a>> {
 	Box::pin(async move {
@@ -164,7 +144,7 @@ fn fetch_sub_issue_tree<'a>(
 		}
 
 		// Format content
-		let content = format_issue(issue, &comments, &sub_issues, owner, repo, &current_user, render_closed, *extension, &ancestors);
+		let content = format_issue(issue, &comments, &sub_issues, owner, repo, &current_user, *extension, &ancestors);
 
 		// Write issue file
 		std::fs::write(&issue_file_path, &content)?;
@@ -189,9 +169,7 @@ fn fetch_sub_issue_tree<'a>(
 
 		// Recursively fetch all sub-issues
 		for sub_issue in &sub_issues {
-			if (render_closed || sub_issue.state != "closed")
-				&& let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, render_closed, child_ancestors.clone()).await
-			{
+			if let Err(e) = fetch_sub_issue_tree(gh, owner, repo, sub_issue, extension, child_ancestors.clone()).await {
 				eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
 			}
 		}

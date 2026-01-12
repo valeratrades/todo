@@ -342,7 +342,11 @@ impl Issue {
 
 				if inner == "new comment" {
 					current_comment_meta = Some((None, true));
-				} else if inner == "omitted" {
+				} else if inner.starts_with("omitted") && inner.contains("{{{") {
+					// vim fold start marker - skip it
+					continue;
+				} else if inner.starts_with(",}}}") {
+					// vim fold end marker - skip it
 					continue;
 				} else if inner.contains("#issuecomment-") {
 					let (is_immutable, url) = if let Some(rest) = inner.strip_prefix("immutable ") {
@@ -385,6 +389,13 @@ impl Issue {
 						let _ = lines.next();
 						// Strip the child body indent to get actual content
 						let body_content = next_line.strip_prefix(&child_body_indent).unwrap_or("");
+						// Skip vim fold markers (they're just display markers)
+						if body_content.starts_with("<!--omitted") && body_content.contains("{{{") {
+							continue;
+						}
+						if body_content.starts_with("<!--,}}}") {
+							continue;
+						}
 						child_body_lines.push(body_content.to_string());
 					} else {
 						// Not a child body line - break
@@ -615,7 +626,7 @@ impl Issue {
 		}
 
 		// Children (sub-issues) at the very end
-		// Closed sub-issues show `<!-- omitted -->` instead of body content
+		// Closed sub-issues wrap body content in vim fold markers
 		for child in &self.children {
 			let child_checked = child.meta.close_state.to_checkbox();
 			let child_content_indent = "\t".repeat(depth + 2);
@@ -632,10 +643,9 @@ impl Issue {
 				out.push_str(&format!("{content_indent}- [{child_checked}] {}\n", child.meta.title));
 			}
 
-			// Closed sub-issues: show omitted marker instead of content
+			// Closed sub-issues: wrap content in vim fold markers
 			if child.meta.close_state.is_closed() {
-				out.push_str(&format!("{child_content_indent}<!-- omitted -->\n"));
-				continue;
+				out.push_str(&format!("{child_content_indent}<!--omitted {{{{{{always-->\n"));
 			}
 
 			// Output child body (first comment is body)
@@ -645,6 +655,11 @@ impl Issue {
 				for line in body_comment.body.lines() {
 					out.push_str(&format!("{child_content_indent}{line}\n"));
 				}
+			}
+
+			// Close vim fold for closed sub-issues
+			if child.meta.close_state.is_closed() {
+				out.push_str(&format!("{child_content_indent}<!--,}}}}}}-->\n"));
 			}
 		}
 
@@ -810,20 +825,22 @@ mod tests {
 	Body
 
 	- [x] Closed sub <!--sub https://github.com/owner/repo/issues/2 -->
-		<!-- omitted -->
+		<!--omitted {{{always-->
+		closed body
+		<!--,}}}-->
 
 	- [-] Not planned sub <!--sub https://github.com/owner/repo/issues/3 -->
-		<!-- omitted -->
+		<!--omitted {{{always-->
+		not planned body
+		<!--,}}}-->
 
 	- [42] Duplicate sub <!--sub https://github.com/owner/repo/issues/4 -->
-		<!-- omitted -->
+		<!--omitted {{{always-->
+		duplicate body
+		<!--,}}}-->
 "#;
 		let ctx = ParseContext::new(content.to_string(), "test".to_string());
 		let issue = Issue::parse(content, &ctx).unwrap();
-
-		assert_eq!(issue.children.len(), 3);
-		assert_eq!(issue.children[0].meta.close_state, CloseState::Closed);
-		assert_eq!(issue.children[1].meta.close_state, CloseState::NotPlanned);
-		assert_eq!(issue.children[2].meta.close_state, CloseState::Duplicate(42));
+		insta::assert_snapshot!(issue.serialize(), @"");
 	}
 }
