@@ -1,16 +1,12 @@
-//! Conflict state management for merge sync semantics.
+//! Conflict detection and blocking for merge sync semantics.
 //!
-//! When remote GitHub state diverges from what we last saw, we create a PR
-//! and record a conflict state. Until resolved, the issue cannot be edited.
-
-// False positive: fields ARE used via thiserror's #[error] format string expansion
-#![allow(unused_assignments)]
+//! When local and remote diverge, git merge leaves conflict markers in the file.
+//! We record which files have conflicts, and block ALL operations until resolved.
+//! Resolution is detected automatically by checking for conflict markers in the file.
 
 use std::path::PathBuf;
 
-use jiff::Timestamp;
 use miette::Diagnostic;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use v_utils::prelude::*;
 
@@ -19,81 +15,95 @@ fn conflicts_dir() -> PathBuf {
 	v_utils::xdg_state_dir!("todo/conflicts")
 }
 
-/// Get the conflict state file path for a specific issue
-fn conflict_file_path(owner: &str, repo: &str, issue_number: u64) -> PathBuf {
-	conflicts_dir().join(owner).join(repo).join(format!("{issue_number}.json"))
-}
-
-/// State of a conflict that needs resolution
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ConflictState {
-	/// Issue number on GitHub
-	pub issue_number: u64,
-	/// When the conflict was detected
-	pub detected_at: Timestamp,
-	/// URL of the PR created to merge remote changes
-	pub pr_url: String,
-	/// Brief description of what diverged
-	pub reason: String,
-}
-
-/// Error returned when trying to open an issue with unresolved conflicts
+/// Error returned when there are unresolved conflicts blocking operations
 #[derive(Debug, Diagnostic, Error)]
-#[error("Issue #{issue_number} has unresolved merge conflicts (detected {detected_at})")]
+#[error("Unresolved conflict blocks all operations")]
 #[diagnostic(
 	code(todo::conflict::unresolved),
-	help("Resolve the conflict by reviewing and merging the PR, then delete the conflict marker.\nPR: {pr_url}")
+	help("Resolve the conflict markers (<<<<<<< ======= >>>>>>>), then stage and commit.\n\n{}", file_path.display())
 )]
-pub struct ConflictError {
-	pub issue_number: u64,
-	pub pr_url: String,
-	pub detected_at: Timestamp,
+pub struct ConflictBlockedError {
+	pub file_path: PathBuf,
 }
 
-impl From<ConflictState> for ConflictError {
-	fn from(state: ConflictState) -> Self {
-		Self {
-			issue_number: state.issue_number,
-			pr_url: state.pr_url,
-			detected_at: state.detected_at,
+/// Record that a file has conflicts that need resolution.
+pub fn mark_conflict(file_path: &std::path::Path) -> Result<()> {
+	let conflicts_dir = conflicts_dir();
+	std::fs::create_dir_all(&conflicts_dir)?;
+
+	// Use a hash of the path as filename to avoid nested directories
+	let hash = {
+		use std::hash::{Hash, Hasher};
+		let mut hasher = std::collections::hash_map::DefaultHasher::new();
+		file_path.hash(&mut hasher);
+		hasher.finish()
+	};
+
+	let marker_path = conflicts_dir.join(format!("{hash:x}.conflict"));
+	std::fs::write(&marker_path, file_path.to_string_lossy().as_bytes())?;
+	Ok(())
+}
+
+/// Check if file content contains git conflict markers.
+fn has_conflict_markers(content: &str) -> bool {
+	// Git conflict markers: <<<<<<< (ours), ======= (separator), >>>>>>> (theirs)
+	// All three must be present for it to be a real conflict
+	let has_ours = content.contains("<<<<<<<");
+	let has_separator = content.contains("=======");
+	let has_theirs = content.contains(">>>>>>>");
+	has_ours && has_separator && has_theirs
+}
+
+/// Check for any unresolved conflicts. Call this before any operation.
+/// Returns Ok(()) if no conflicts, or Err with the first unresolved conflict file.
+/// Automatically clears resolved conflicts (files without markers).
+pub fn check_any_conflicts() -> Result<(), ConflictBlockedError> {
+	let conflicts_dir = conflicts_dir();
+	if !conflicts_dir.exists() {
+		return Ok(());
+	}
+
+	let entries = match std::fs::read_dir(&conflicts_dir) {
+		Ok(e) => e,
+		Err(_) => return Ok(()),
+	};
+
+	for entry in entries.flatten() {
+		let marker_path = entry.path();
+		if marker_path.extension().map(|e| e == "conflict").unwrap_or(false) {
+			// Read the file path from the marker
+			let file_path_str = match std::fs::read_to_string(&marker_path) {
+				Ok(s) => s,
+				Err(_) => {
+					// Can't read marker, remove it
+					let _ = std::fs::remove_file(&marker_path);
+					continue;
+				}
+			};
+
+			let file_path = PathBuf::from(&file_path_str);
+
+			// Check if the file still has conflict markers
+			let content = match std::fs::read_to_string(&file_path) {
+				Ok(c) => c,
+				Err(_) => {
+					// File doesn't exist anymore, remove marker
+					let _ = std::fs::remove_file(&marker_path);
+					continue;
+				}
+			};
+
+			if has_conflict_markers(&content) {
+				// Still has conflicts - block
+				return Err(ConflictBlockedError { file_path });
+			} else {
+				// Resolved! Remove the marker
+				let _ = std::fs::remove_file(&marker_path);
+			}
 		}
 	}
-}
 
-/// Load conflict state for an issue, if any exists
-pub fn load_conflict(owner: &str, repo: &str, issue_number: u64) -> Option<ConflictState> {
-	let path = conflict_file_path(owner, repo, issue_number);
-	std::fs::read_to_string(&path).ok().and_then(|content| serde_json::from_str(&content).ok())
-}
-
-/// Save conflict state for an issue
-pub fn save_conflict(owner: &str, repo: &str, state: &ConflictState) -> Result<()> {
-	let path = conflict_file_path(owner, repo, state.issue_number);
-	if let Some(parent) = path.parent() {
-		std::fs::create_dir_all(parent)?;
-	}
-	let content = serde_json::to_string_pretty(state)?;
-	std::fs::write(&path, content)?;
 	Ok(())
-}
-
-/// Clear conflict state for an issue (after resolution)
-pub fn clear_conflict(owner: &str, repo: &str, issue_number: u64) -> Result<()> {
-	let path = conflict_file_path(owner, repo, issue_number);
-	if path.exists() {
-		std::fs::remove_file(&path)?;
-	}
-	Ok(())
-}
-
-/// Check if an issue has unresolved conflicts
-/// Returns Err with miette diagnostic if conflict exists
-pub fn check_conflict(owner: &str, repo: &str, issue_number: u64) -> Result<(), ConflictError> {
-	if let Some(state) = load_conflict(owner, repo, issue_number) {
-		Err(state.into())
-	} else {
-		Ok(())
-	}
 }
 
 #[cfg(test)]
@@ -101,18 +111,25 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn test_conflict_state_roundtrip() {
-		let state = ConflictState {
-			issue_number: 42,
-			detected_at: Timestamp::now(),
-			pr_url: "https://github.com/owner/repo/pull/123".to_string(),
-			reason: "Remote body changed".to_string(),
-		};
+	fn test_has_conflict_markers() {
+		// No markers
+		assert!(!has_conflict_markers("# Normal issue\n\nSome body text."));
 
-		let json = serde_json::to_string(&state).unwrap();
-		let parsed: ConflictState = serde_json::from_str(&json).unwrap();
+		// All three markers
+		let content = r#"# Issue title
 
-		assert_eq!(parsed.issue_number, 42);
-		assert_eq!(parsed.pr_url, "https://github.com/owner/repo/pull/123");
+<<<<<<< HEAD
+Local changes
+=======
+Remote changes
+>>>>>>> remote-state
+"#;
+		assert!(has_conflict_markers(content));
+
+		// Just separator (like markdown divider)
+		assert!(!has_conflict_markers("# Issue\n\n=======\n\nSome divider"));
+
+		// Two of three markers
+		assert!(!has_conflict_markers("<<<<<<< HEAD\nSome text\n======="));
 	}
 }

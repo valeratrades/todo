@@ -10,12 +10,11 @@
 
 use std::{path::Path, process::Command};
 
-use jiff::Timestamp;
 use todo::{Extension, FetchedIssue, Issue, ParseContext};
 use v_utils::prelude::*;
 
 use super::{
-	conflict::{ConflictState, save_conflict},
+	conflict::mark_conflict,
 	fetch::fetch_and_store_issue,
 	github_sync::IssueGitHubExt,
 	meta::{IssueMetaEntry, get_issue_meta, load_issue_meta_from_path},
@@ -319,15 +318,8 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 
 	// Check if it's actually a conflict (vs other error)
 	if merge_stdout.contains("CONFLICT") || merge_stderr.contains("CONFLICT") || merge_stdout.contains("Automatic merge failed") {
-		// Save conflict state
-		let conflict = ConflictState {
-			issue_number: meta.issue_number,
-			detected_at: Timestamp::now(),
-			pr_url: String::new(), // No PR in new workflow
-			reason: "Both local and remote have changes since last sync".to_string(),
-		};
-
-		save_conflict(owner, repo, &conflict)?;
+		// Mark this file as having conflicts - blocks all operations until resolved
+		let _ = mark_conflict(issue_file_path);
 
 		return Err(eyre!(
 			"Conflict detected: both local and remote have changes for issue #{}.\n\
@@ -556,9 +548,6 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 		println!("No changes made.");
 	}
 
-	// Clear any conflict state on successful sync
-	let _ = super::conflict::clear_conflict(owner, repo, meta.issue_number);
-
 	Ok(())
 }
 
@@ -571,7 +560,10 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 /// Modify a local issue file using the given modifier, then sync changes back to GitHub.
 /// This is the core workflow for all issue modifications.
 pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier) -> Result<ModifyResult> {
-	use super::{conflict::check_conflict, files::extract_owner_repo_from_path, meta::is_virtual_project};
+	use super::{conflict::check_any_conflicts, files::extract_owner_repo_from_path, meta::is_virtual_project};
+
+	// Check for any unresolved conflicts first - blocks all operations
+	check_any_conflicts()?;
 
 	// Extract owner and repo from path
 	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
@@ -581,11 +573,6 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 	// Load metadata
 	let meta = load_issue_meta_from_path(issue_file_path)?;
-
-	// Check for unresolved conflicts before allowing edits (skip for virtual projects)
-	if !offline {
-		check_conflict(&owner, &repo, meta.issue_number)?;
-	}
 
 	// Determine extension for shorthand expansion
 	let extension = match meta.extension.as_str() {

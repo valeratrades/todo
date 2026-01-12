@@ -80,7 +80,7 @@ vim.opt.foldtext = [[substitute(getline(v:foldstart),'{{{]] .. [[always\s*$','{{
 vim.api.nvim_create_autocmd("BufReadPost", {
 	callback = function()
 		vim.defer_fn(function()
-			vim.cmd([[silent! g/{{]] .. [[{always\s*$/normal! zc]])
+			vim.cmd([[silent! g/{{]] .. [[{always$/normal! zc]])
 		end, 10)
 	end,
 })
