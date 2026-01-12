@@ -132,8 +132,9 @@ fn get_current_source() -> Result<IssueSource> {
 
 /// Main entry point for integrated blocker commands (works with issue files).
 /// This is the default mode for blocker commands.
-pub async fn main_integrated(_settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat) -> Result<()> {
+pub async fn main_integrated(settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat, offline: bool) -> Result<()> {
 	use super::{io::Command, source::BlockerSource};
+	use crate::open_interactions::{Modifier, modify_and_sync_issue};
 
 	match command {
 		Command::Set { pattern, touch: _ } => {
@@ -224,26 +225,28 @@ pub async fn main_integrated(_settings: &crate::config::LiveSettings, command: s
 		}
 
 		Command::Pop => {
-			let source = get_current_source()?;
-			let mut blockers = source.load()?;
+			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker set <pattern>` first."))?;
 
+			// Check if blockers section exists before attempting pop
+			let source = IssueSource::new(issue_path.clone());
+			let blockers = source.load()?;
 			if blockers.is_empty() {
 				let marker = Marker::BlockersSection(todo::Header::new(1, "Blockers"));
 				bail!("No `{marker}` marker found in issue body.");
 			}
 
-			let popped = blockers.pop();
-
-			// Only save if something was actually popped
-			if popped.is_some() {
-				source.save(&blockers)?;
-			}
+			// Use the unified modify_and_sync workflow
+			let gh = crate::github::create_client(settings)?;
+			let result = modify_and_sync_issue(&gh, &issue_path, offline, Modifier::BlockerPop).await?;
 
 			// Output results
-			if let Some(text) = popped {
-				println!("Popped: {text}");
+			if let Some(output) = result.output {
+				println!("{output}");
 			}
 
+			// Show new current blocker
+			let source = IssueSource::new(issue_path);
+			let blockers = source.load()?;
 			if let Some(new_current) = blockers.current_with_context(&[]) {
 				println!("Current: {new_current}");
 			} else {
@@ -299,7 +302,14 @@ mod tests {
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		assert!(!issue.blockers.is_empty());
-		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"");
+		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
+		# Phase 1
+		- First task
+			comment on first task
+		- Second task
+		# Phase 2
+		- Third task
+		");
 	}
 
 	#[test]
@@ -337,7 +347,10 @@ mod tests {
 
 		issue.blockers.pop();
 
-		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"");
+		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
+		- First task
+		- Second task
+		");
 	}
 
 	#[test]
@@ -386,7 +399,10 @@ mod tests {
 		let issue = Issue::parse(content, &ctx).unwrap();
 
 		// Blockers should only contain the blocker items, not the sub-issue
-		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"");
+		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
+		- Blocker one
+		- Blocker two
+		");
 
 		// Sub-issue should be in children
 		assert_eq!(issue.children.len(), 1);

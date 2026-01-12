@@ -529,6 +529,12 @@ impl GitHubClient for RealGitHubClient {
 
 pub type BoxedGitHubClient = Arc<dyn GitHubClient>;
 
+/// Create a GitHub client from settings.
+/// Returns an error if GitHub token is not configured.
+pub fn create_client(settings: &LiveSettings) -> Result<BoxedGitHubClient> {
+	Ok(Arc::new(RealGitHubClient::new(settings)?))
+}
+
 //==============================================================================
 // Utility functions (URL parsing, etc.) - These don't need the trait
 //==============================================================================

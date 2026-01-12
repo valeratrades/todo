@@ -44,6 +44,10 @@ pub struct BlockerArgs {
 	/// Output format for list command
 	#[arg(short, long, default_value = "nested")]
 	pub format: DisplayFormat,
+	/// Skip all network operations - edit locally only, don't sync to GitHub.
+	/// (Integrated mode only - individual files mode is always offline)
+	#[arg(long)]
+	pub offline: bool,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -346,7 +350,7 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 	// Use individual files mode only if --individual-files flag is set OR if urgent flag is set
 	// (urgent operations always use file-based source - no issue equivalent)
 	if !args.individual_files && !command_has_urgent_flag(&args.command) {
-		return super::integration::main_integrated(settings, args.command, args.format).await;
+		return super::integration::main_integrated(settings, args.command, args.format, args.offline).await;
 	}
 
 	let relative_path = match args.relative_path {

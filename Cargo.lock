@@ -4644,7 +4644,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "todo"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ask_llm",
  "async-trait",
@@ -5510,6 +5510,8 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "v_fixtures"
 version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be7807b2d396c3b57cf6ffbe9ce36b4070cf7faa350287861aeef9981e4a1dee"
 dependencies = [
  "derive-new",
  "nix",

@@ -264,7 +264,12 @@ mod tests {
 	fn test_serialize_roundtrip() {
 		let input = "# Header 1\n- task 1\n# Header 2\n- task 2";
 		let seq = BlockerSequence::parse(input);
-		insta::assert_snapshot!(seq.serialize(DisplayFormat::Headers), @"");
+		insta::assert_snapshot!(seq.serialize(DisplayFormat::Headers), @"
+		# Header 1
+		- task 1
+		# Header 2
+		- task 2
+		");
 	}
 
 	#[test]
