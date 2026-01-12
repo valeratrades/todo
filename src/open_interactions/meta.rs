@@ -95,23 +95,37 @@ pub fn save_issue_meta(owner: &str, repo: &str, entry: IssueMetaEntry) -> Result
 	save_project_meta(&project_meta)
 }
 
-/// Load metadata from an issue file path by extracting the issue number
+/// Load metadata from an issue file path by extracting the issue number.
+/// Handles both flat format ({number}_-_{title}.ext) and directory format ({number}_-_{title}/__main__.ext).
 pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<IssueMetaEntry> {
-	use super::files::extract_owner_repo_from_path;
+	use super::files::{MAIN_ISSUE_FILENAME, extract_owner_repo_from_path};
 
 	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
 
-	// Extract issue number from filename
+	// Extract issue number from filename or parent directory name
 	let filename = issue_file_path.file_name().and_then(|n| n.to_str()).ok_or_else(|| eyre!("Invalid issue file path"))?;
 
 	// Handle .bak suffix for closed issues
 	let filename = filename.strip_suffix(".bak").unwrap_or(filename);
 
-	// Extract issue number from filename format: {number}_-_{title}.{ext}
-	let issue_number: u64 = filename
+	// Check if this is a __main__ file (directory format)
+	let name_to_parse = if filename.starts_with(MAIN_ISSUE_FILENAME) {
+		// Get issue number from parent directory name instead
+		// Parent directory format: {number}_-_{title}
+		issue_file_path
+			.parent()
+			.and_then(|p| p.file_name())
+			.and_then(|n| n.to_str())
+			.ok_or_else(|| eyre!("Could not extract parent directory for __main__ file"))?
+	} else {
+		filename
+	};
+
+	// Extract issue number from name format: {number}_-_{title} or {number}.{ext}
+	let issue_number: u64 = name_to_parse
 		.split("_-_")
 		.next()
-		.or_else(|| filename.split('.').next())
+		.or_else(|| name_to_parse.split('.').next())
 		.ok_or_else(|| eyre!("Could not extract issue number from filename"))?
 		.parse()?;
 

@@ -6,7 +6,7 @@ use todo::{CloseState, Extension, FetchedIssue};
 use v_utils::prelude::*;
 
 use super::{
-	files::get_issue_file_path,
+	files::{find_issue_file, get_issue_dir_path, get_issue_file_path, get_main_file_path},
 	format::format_issue,
 	meta::{IssueMetaEntry, save_issue_meta},
 };
@@ -58,8 +58,10 @@ pub async fn fetch_and_store_issue(gh: &BoxedGitHubClient, owner: &str, repo: &s
 	// Now find and return the path to the originally requested issue
 	// Get the issue info to determine file path
 	let issue = gh.fetch_issue(owner, repo, issue_number).await?;
-	let issue_closed = issue.state == "closed";
-	let issue_file_path = get_issue_file_path(owner, repo, Some(issue_number), &issue.title, extension, issue_closed, &ancestry);
+
+	// Find the issue file (could be in flat or directory format)
+	let issue_file_path =
+		find_issue_file(owner, repo, Some(issue_number), &issue.title, extension, &ancestry).ok_or_else(|| eyre!("Failed to find issue file after fetching. This is a bug."))?;
 
 	Ok(issue_file_path)
 }
@@ -74,9 +76,24 @@ async fn fetch_issue_with_ancestors(gh: &BoxedGitHubClient, owner: &str, repo: &
 		gh.fetch_sub_issues(owner, repo, issue_number),
 	)?;
 
-	// Determine file path
 	let issue_closed = issue.state == "closed";
-	let issue_file_path = get_issue_file_path(owner, repo, Some(issue_number), &issue.title, extension, issue_closed, &ancestors);
+	let has_sub_issues = !sub_issues.is_empty();
+
+	// Determine file path - use directory format if there are sub-issues
+	let issue_file_path = if has_sub_issues {
+		// Use directory format: {dir}/__main__.{ext}
+		let issue_dir = get_issue_dir_path(owner, repo, Some(issue_number), &issue.title, &ancestors);
+		std::fs::create_dir_all(&issue_dir)?;
+		get_main_file_path(&issue_dir, extension, issue_closed)
+	} else {
+		// Check if there's an existing file (might be in either format)
+		if let Some(existing) = find_issue_file(owner, repo, Some(issue_number), &issue.title, extension, &ancestors) {
+			existing
+		} else {
+			// No existing file, use flat format
+			get_issue_file_path(owner, repo, Some(issue_number), &issue.title, extension, issue_closed, &ancestors)
+		}
+	};
 
 	// Create parent directories
 	if let Some(parent) = issue_file_path.parent() {
@@ -134,9 +151,24 @@ fn fetch_sub_issue_tree<'a>(
 			gh.fetch_sub_issues(owner, repo, issue.number),
 		)?;
 
-		// Determine file path
 		let issue_closed = issue.state == "closed";
-		let issue_file_path = get_issue_file_path(owner, repo, Some(issue.number), &issue.title, extension, issue_closed, &ancestors);
+		let has_sub_issues = !sub_issues.is_empty();
+
+		// Determine file path - use directory format if there are sub-issues
+		let issue_file_path = if has_sub_issues {
+			// Use directory format: {dir}/__main__.{ext}
+			let issue_dir = get_issue_dir_path(owner, repo, Some(issue.number), &issue.title, &ancestors);
+			std::fs::create_dir_all(&issue_dir)?;
+			get_main_file_path(&issue_dir, extension, issue_closed)
+		} else {
+			// Check if there's an existing file (might be in either format)
+			if let Some(existing) = find_issue_file(owner, repo, Some(issue.number), &issue.title, extension, &ancestors) {
+				existing
+			} else {
+				// No existing file, use flat format
+				get_issue_file_path(owner, repo, Some(issue.number), &issue.title, extension, issue_closed, &ancestors)
+			}
+		};
 
 		// Create parent directories
 		if let Some(parent) = issue_file_path.parent() {

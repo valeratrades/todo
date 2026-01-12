@@ -517,24 +517,34 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
 		let new_path = fetch_and_store_issue(gh, owner, repo, issue_number, &extension, ancestors).await?;
 
-		// If the path changed (title/state changed), delete the old file
+		// If the path changed (title/state changed or format changed), delete the old file
 		if old_path != new_path && old_path.exists() {
 			if created_issue_number.is_some() {
 				println!("Issue created on GitHub, updating local file...");
 			} else if state_changed {
 				println!("Issue state changed, renaming file...");
 			} else {
-				println!("Issue renamed, removing old file: {:?}", old_path);
+				println!("Issue renamed/moved, removing old file: {:?}", old_path);
 			}
 			std::fs::remove_file(&old_path)?;
 
-			// For state changes, we might also need to rename the sub-issues directory
-			// The directory name doesn't include .bak, so this only matters for title changes
+			// For title changes, we might also need to remove the old sub-issues directory
+			// Only do this if the old directory is different from where the new file lives
+			// (i.e., don't delete the new directory when moving from flat to directory format)
 			let old_sub_dir = old_path.with_extension("");
-			if old_sub_dir.is_dir()
-				&& let Err(e) = std::fs::remove_dir_all(&old_sub_dir)
-			{
-				eprintln!("Warning: could not remove old sub-issues directory: {e}");
+			let old_sub_dir = if old_sub_dir.extension().is_some() {
+				// Handle .md.bak case - strip .md too
+				old_sub_dir.with_extension("")
+			} else {
+				old_sub_dir
+			};
+
+			// Only delete old sub-issues dir if it's not where the new file lives
+			let new_parent = new_path.parent();
+			if old_sub_dir.is_dir() && new_parent != Some(old_sub_dir.as_path()) {
+				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
+					eprintln!("Warning: could not remove old sub-issues directory: {e}");
+				}
 			}
 		}
 

@@ -841,6 +841,24 @@ mod tests {
 "#;
 		let ctx = ParseContext::new(content.to_string(), "test".to_string());
 		let issue = Issue::parse(content, &ctx).unwrap();
-		insta::assert_snapshot!(issue.serialize(), @"");
+		insta::assert_snapshot!(issue.serialize(), @"
+		- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
+			Body
+			
+			- [x] Closed sub <!--sub https://github.com/owner/repo/issues/2 -->
+				<!--omitted {{{always-->
+				closed body
+				<!--,}}}-->
+			
+			- [-] Not planned sub <!--sub https://github.com/owner/repo/issues/3 -->
+				<!--omitted {{{always-->
+				not planned body
+				<!--,}}}-->
+			
+			- [42] Duplicate sub <!--sub https://github.com/owner/repo/issues/4 -->
+				<!--omitted {{{always-->
+				duplicate body
+				<!--,}}}-->
+		");
 	}
 }

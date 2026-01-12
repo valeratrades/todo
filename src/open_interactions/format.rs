@@ -227,7 +227,12 @@ mod tests {
 
 		// Closed issues wrap contents in vim fold markers
 		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
-		assert_snapshot!(md, @"");
+		assert_snapshot!(md, @"
+		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
+			<!--omitted {{{always-->
+			Issue body text
+			<!--,}}}-->
+		");
 	}
 
 	#[test]
@@ -239,7 +244,18 @@ mod tests {
 		];
 
 		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", Extension::Md, &[]);
-		assert_snapshot!(md, @"");
+		assert_snapshot!(md, @"
+		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
+			Issue body text
+			
+			- [ ] Open sub-issue <!--sub https://github.com/owner/repo/issues/124 -->
+				Sub-issue body content
+			
+			- [x] Closed sub-issue <!--sub https://github.com/owner/repo/issues/125 -->
+				<!--omitted {{{always-->
+				Closed body
+				<!--,}}}-->
+		");
 	}
 
 	#[test]
@@ -306,7 +322,12 @@ mod tests {
 		let issue = make_issue(123, "Closed Issue", Some("Body text"), vec![], "me", "closed");
 
 		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[]);
-		assert_snapshot!(typ, @"");
+		assert_snapshot!(typ, @"
+		- [x] Closed Issue // https://github.com/owner/repo/issues/123
+			// omitted {{{always
+			Body text
+			//,}}}
+		");
 	}
 
 	/// Test the correct rendering order for issues:
@@ -336,6 +357,24 @@ mod tests {
 		];
 
 		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", Extension::Md, &[]);
-		assert_snapshot!(md, @"");
+		assert_snapshot!(md, @"
+		- [ ] [bug, priority] Main Issue <!-- https://github.com/owner/repo/issues/123 -->
+			This is the body text.
+			With multiple lines.
+			
+			<!-- https://github.com/owner/repo/issues/123#issuecomment-1001 -->
+			First comment from me
+			
+			<!--immutable https://github.com/owner/repo/issues/123#issuecomment-1002 -->
+				Second comment from other
+			
+			- [ ] Sub Issue One <!--sub https://github.com/owner/repo/issues/124 -->
+				Sub issue body
+			
+			- [x] Sub Issue Two <!--sub https://github.com/owner/repo/issues/125 -->
+				<!--omitted {{{always-->
+				Closed sub body
+				<!--,}}}-->
+		");
 	}
 }

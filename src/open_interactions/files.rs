@@ -7,6 +7,11 @@ use v_utils::prelude::*;
 
 use super::util::Extension;
 
+/// The filename used for the main issue file when it has a directory for sub-issues.
+/// When an issue has sub-issues, instead of `123_-_title.md` being a file, it becomes
+/// `123_-_title/__main__.md` with sub-issues stored alongside.
+pub const MAIN_ISSUE_FILENAME: &str = "__main__";
+
 /// Returns the base directory for issue storage: XDG_DATA_HOME/todo/issues/
 pub fn issues_dir() -> PathBuf {
 	v_utils::xdg_data_dir!("issues")
@@ -76,7 +81,9 @@ pub fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
 }
 
 /// Find the local file path for a sub-issue given its number.
-/// Searches in the ancestors' nested directory for files matching the pattern {number}_-_*.{ext}[.bak]
+/// Searches in the ancestors' nested directory for files matching either:
+/// - The flat pattern: {number}_-_*.{ext}[.bak]
+/// - The directory pattern: {number}_-_*/__main__.{ext}[.bak]
 /// `ancestors` is the chain from root to immediate parent of the sub-issue.
 /// Returns None if no matching file is found.
 pub fn find_sub_issue_file(owner: &str, repo: &str, ancestors: &[FetchedIssue], sub_issue_number: u64) -> Option<PathBuf> {
@@ -91,18 +98,137 @@ pub fn find_sub_issue_file(owner: &str, repo: &str, ancestors: &[FetchedIssue], 
 		return None;
 	}
 
-	// Look for files matching the sub-issue number pattern
-	// This matches both regular files and .bak files (closed issues)
+	// Look for files/directories matching the sub-issue number pattern
 	let prefix = format!("{sub_issue_number}_-_");
 	if let Ok(entries) = std::fs::read_dir(&sub_dir) {
 		for entry in entries.flatten() {
 			let path = entry.path();
-			if path.is_file()
-				&& let Some(name) = path.file_name().and_then(|n| n.to_str())
-				&& name.starts_with(&prefix)
-			{
+			let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+				continue;
+			};
+
+			if !name.starts_with(&prefix) {
+				continue;
+			}
+
+			// Check for flat file pattern: {number}_-_{title}.{ext}[.bak]
+			if path.is_file() {
 				return Some(path);
 			}
+
+			// Check for directory pattern: {number}_-_{title}/__main__.{ext}[.bak]
+			if path.is_dir() {
+				if let Some(main_file) = find_main_file_in_dir(&path) {
+					return Some(main_file);
+				}
+			}
+		}
+	}
+
+	None
+}
+
+/// Find a `__main__` file in a directory (any supported extension).
+/// Returns the path to the __main__ file if found.
+fn find_main_file_in_dir(dir: &Path) -> Option<PathBuf> {
+	let Ok(entries) = std::fs::read_dir(dir) else {
+		return None;
+	};
+
+	for entry in entries.flatten() {
+		let path = entry.path();
+		if !path.is_file() {
+			continue;
+		}
+
+		let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+			continue;
+		};
+
+		// Handle .bak suffix: __main__.md.bak -> stem is "md" after first file_stem
+		// We need to check the stem or the stem of the stem
+		if stem == MAIN_ISSUE_FILENAME {
+			return Some(path);
+		}
+
+		// For .bak files: __main__.md.bak -> file_stem gives "__main__.md"
+		// So we need to check if it starts with __main__
+		if stem.starts_with(MAIN_ISSUE_FILENAME) && (stem == format!("{MAIN_ISSUE_FILENAME}.md") || stem == format!("{MAIN_ISSUE_FILENAME}.typ")) {
+			return Some(path);
+		}
+	}
+
+	None
+}
+
+/// Get the directory name for an issue (used when it has sub-issues).
+/// Format: {number}_-_{sanitized_title}
+pub fn get_issue_dir_name(issue_number: Option<u64>, title: &str) -> String {
+	let sanitized = sanitize_title_for_filename(title);
+	match issue_number {
+		Some(num) if sanitized.is_empty() => format!("{num}"),
+		Some(num) => format!("{num}_-_{sanitized}"),
+		None if sanitized.is_empty() => "untitled".to_string(),
+		None => sanitized,
+	}
+}
+
+/// Get the path to the issue directory (where sub-issues would be stored).
+/// This is the same as the file path but without the extension.
+pub fn get_issue_dir_path(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, ancestors: &[FetchedIssue]) -> PathBuf {
+	let mut path = issues_dir().join(owner).join(repo);
+
+	// Build nested directory structure for all ancestors
+	for ancestor in ancestors {
+		path = path.join(format_issue_dir_name(ancestor));
+	}
+
+	path.join(get_issue_dir_name(issue_number, title))
+}
+
+/// Get the path for the main issue file when stored inside a directory.
+/// Format: {dir}/__main__.{ext}[.bak]
+pub fn get_main_file_path(issue_dir: &Path, extension: &Extension, closed: bool) -> PathBuf {
+	let filename = if closed {
+		format!("{MAIN_ISSUE_FILENAME}.{}.bak", extension.as_str())
+	} else {
+		format!("{MAIN_ISSUE_FILENAME}.{}", extension.as_str())
+	};
+	issue_dir.join(filename)
+}
+
+/// Find the actual file path for an issue, checking both flat and directory formats.
+/// This handles the case where we need to find an existing issue file regardless of format.
+///
+/// Checks in order:
+/// 1. Flat format: {parent}/{number}_-_{title}.{ext}[.bak]
+/// 2. Directory format: {parent}/{number}_-_{title}/__main__.{ext}[.bak]
+///
+/// Returns None if no file is found in either format.
+pub fn find_issue_file(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, extension: &Extension, ancestors: &[FetchedIssue]) -> Option<PathBuf> {
+	// Try flat format first (both open and closed)
+	let flat_path = get_issue_file_path(owner, repo, issue_number, title, extension, false, ancestors);
+	if flat_path.exists() {
+		return Some(flat_path);
+	}
+
+	let flat_closed_path = get_issue_file_path(owner, repo, issue_number, title, extension, true, ancestors);
+	if flat_closed_path.exists() {
+		return Some(flat_closed_path);
+	}
+
+	// Try directory format
+	let issue_dir = get_issue_dir_path(owner, repo, issue_number, title, ancestors);
+	if issue_dir.is_dir() {
+		// Check for __main__ file (both open and closed)
+		let main_path = get_main_file_path(&issue_dir, extension, false);
+		if main_path.exists() {
+			return Some(main_path);
+		}
+
+		let main_closed_path = get_main_file_path(&issue_dir, extension, true);
+		if main_closed_path.exists() {
+			return Some(main_closed_path);
 		}
 	}
 
@@ -246,4 +372,67 @@ pub fn extract_owner_repo_from_path(issue_file_path: &Path) -> Result<(String, S
 		.to_string();
 
 	Ok((owner, repo))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_main_issue_filename_constant() {
+		assert_eq!(MAIN_ISSUE_FILENAME, "__main__");
+	}
+
+	#[test]
+	fn test_get_issue_dir_name() {
+		// With number and title
+		assert_eq!(get_issue_dir_name(Some(123), "My Issue"), "123_-_My_Issue");
+
+		// With number only
+		assert_eq!(get_issue_dir_name(Some(123), ""), "123");
+
+		// Without number
+		assert_eq!(get_issue_dir_name(None, "My Issue"), "My_Issue");
+
+		// Without number and title
+		assert_eq!(get_issue_dir_name(None, ""), "untitled");
+	}
+
+	#[test]
+	fn test_get_main_file_path() {
+		let dir = PathBuf::from("/tmp/issues/123_-_title");
+
+		// Open issue
+		assert_eq!(get_main_file_path(&dir, &Extension::Md, false), PathBuf::from("/tmp/issues/123_-_title/__main__.md"));
+
+		// Closed issue
+		assert_eq!(get_main_file_path(&dir, &Extension::Md, true), PathBuf::from("/tmp/issues/123_-_title/__main__.md.bak"));
+
+		// Typst extension
+		assert_eq!(get_main_file_path(&dir, &Extension::Typ, false), PathBuf::from("/tmp/issues/123_-_title/__main__.typ"));
+	}
+
+	#[test]
+	fn test_find_main_file_in_dir() {
+		use std::fs;
+		let temp_dir = tempfile::tempdir().unwrap();
+		let dir = temp_dir.path();
+
+		// No __main__ file
+		assert!(find_main_file_in_dir(dir).is_none());
+
+		// Create __main__.md
+		fs::write(dir.join("__main__.md"), "test").unwrap();
+		assert_eq!(find_main_file_in_dir(dir), Some(dir.join("__main__.md")));
+
+		// Clean up and test .bak version
+		fs::remove_file(dir.join("__main__.md")).unwrap();
+		fs::write(dir.join("__main__.md.bak"), "test").unwrap();
+		assert_eq!(find_main_file_in_dir(dir), Some(dir.join("__main__.md.bak")));
+
+		// Test typst
+		fs::remove_file(dir.join("__main__.md.bak")).unwrap();
+		fs::write(dir.join("__main__.typ"), "test").unwrap();
+		assert_eq!(find_main_file_in_dir(dir), Some(dir.join("__main__.typ")));
+	}
 }
