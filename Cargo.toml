@@ -1,6 +1,6 @@
 [package]
 name = "todo"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 
 [features]
@@ -46,8 +46,8 @@ pulldown-cmark = "0.13.0"
 rstest = "0.26"
 v_fixtures = { version = "^0.3.1" }
 
-[patch.crates-io]
-v_fixtures = { path = "../v_fixtures" }
+#[patch.crates-io]
+#v_fixtures = { path = "../v_fixtures" }
 
 [[test]]
 name = "integration"
