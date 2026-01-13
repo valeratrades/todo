@@ -8,14 +8,12 @@
 //! Tests work with `Issue` directly - our canonical representation.
 //! The mock GitHub layer translates to API format at the boundary.
 
-use std::{
-	io::Write,
-	path::{Path, PathBuf},
-	process::Command,
-};
+use std::path::PathBuf;
 
 use todo::{Issue, ParseContext};
-use v_fixtures::{Fixture, fs_standards::xdg::Xdg};
+use v_fixtures::fs_standards::git::Git;
+
+use crate::common::TestContext;
 
 /// Default test repository coordinates (only needed for file paths and mock setup)
 const DEFAULT_OWNER: &str = "testowner";
@@ -34,26 +32,23 @@ fn issue(title: &str, body: &str) -> Issue {
 	parse_issue(&content)
 }
 
-/// Test context for sync operations.
-struct SyncTestContext {
-	xdg: Xdg,
-	mock_state_path: PathBuf,
-	pipe_path: PathBuf,
-}
-
-impl SyncTestContext {
-	fn new() -> Self {
-		let fixture = Fixture::parse("");
-		let xdg = Xdg::new(fixture.write_to_tempdir(), "todo");
-
-		let mock_state_path = xdg.inner.root.join("mock_state.json");
-		let pipe_path = xdg.inner.create_pipe("editor_pipe");
-
-		Self { xdg, mock_state_path, pipe_path }
-	}
-
+/// Extension trait for sync-specific test setup.
+trait SyncTestExt {
 	/// Set up a local issue file and metadata.
 	/// `local` is the current local state, `original` is the last synced state.
+	fn setup_local(&self, local: &Issue, original: &Issue) -> PathBuf;
+
+	/// Set up mock GitHub to return an issue.
+	fn setup_remote(&self, issue: &Issue);
+
+	/// Write metadata file with the given issue as the "original" (last synced) state.
+	fn write_meta(&self, original: &Issue);
+
+	/// Initialize git in the issues directory.
+	fn init_git(&self) -> Git;
+}
+
+impl SyncTestExt for TestContext {
 	fn setup_local(&self, local: &Issue, original: &Issue) -> PathBuf {
 		let issues_dir = format!("issues/{DEFAULT_OWNER}/{DEFAULT_REPO}");
 		let sanitized_title = local.meta.title.replace(' ', "_");
@@ -68,8 +63,6 @@ impl SyncTestContext {
 		self.xdg.data_dir().join(&issues_dir).join(&issue_filename)
 	}
 
-	/// Set up mock GitHub to return an issue.
-	/// This is the API boundary - translates Issue to mock format.
 	fn setup_remote(&self, issue: &Issue) {
 		let body = issue.body();
 		let state = serde_json::json!({
@@ -83,10 +76,9 @@ impl SyncTestContext {
 				"owner_login": "mock_user"
 			}]
 		});
-		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+		self.setup_mock_state(&state);
 	}
 
-	/// Write metadata file with the given issue as the "original" (last synced) state.
 	fn write_meta(&self, original: &Issue) {
 		let body = original.body();
 		let meta_content = serde_json::json!({
@@ -113,56 +105,15 @@ impl SyncTestContext {
 		);
 	}
 
-	fn run_open(&self, issue_path: &Path) -> std::process::Output {
-		crate::ensure_binary_compiled();
-
-		let mut binary_path = std::env::current_exe().unwrap();
-		binary_path.pop();
-		binary_path.pop();
-		binary_path.push("todo");
-
-		let mut cmd = Command::new(&binary_path);
-		cmd.args(["--dbg", "open", issue_path.to_str().unwrap()]);
-		for (key, value) in self.xdg.env_vars() {
-			cmd.env(key, value);
-		}
-		cmd.env("TODO_MOCK_STATE", &self.mock_state_path);
-		cmd.env("TODO_MOCK_PIPE", &self.pipe_path);
-		cmd.stdout(std::process::Stdio::piped());
-		cmd.stderr(std::process::Stdio::piped());
-
-		let child = cmd.spawn().unwrap();
-
-		std::thread::sleep(std::time::Duration::from_millis(100));
-
-		let mut pipe = std::fs::OpenOptions::new().write(true).open(&self.pipe_path).unwrap();
-		pipe.write_all(b"x").unwrap();
-		drop(pipe);
-
-		child.wait_with_output().unwrap()
-	}
-
-	fn init_git(&self) {
+	fn init_git(&self) -> Git {
 		let issues_dir = self.xdg.data_dir().join("issues");
-		std::fs::create_dir_all(&issues_dir).unwrap();
-
-		let output = Command::new("git").args(["init"]).current_dir(&issues_dir).output().unwrap();
-		assert!(output.status.success(), "Failed to init git");
-
-		Command::new("git").args(["config", "user.email", "test@test.local"]).current_dir(&issues_dir).status().unwrap();
-		Command::new("git").args(["config", "user.name", "Test User"]).current_dir(&issues_dir).status().unwrap();
-	}
-
-	fn git_commit(&self, message: &str) {
-		let issues_dir = self.xdg.data_dir().join("issues");
-		Command::new("git").args(["add", "-A"]).current_dir(&issues_dir).status().unwrap();
-		Command::new("git").args(["commit", "-m", message]).current_dir(&issues_dir).status().unwrap();
+		Git::init(issues_dir)
 	}
 }
 
 #[test]
 fn test_both_diverged_triggers_conflict() {
-	let ctx = SyncTestContext::new();
+	let ctx = TestContext::new("");
 
 	let original = issue("Test Issue", "original body");
 	let local = issue("Test Issue", "local body");
@@ -171,15 +122,12 @@ fn test_both_diverged_triggers_conflict() {
 	let issue_path = ctx.setup_local(&local, &original);
 	ctx.setup_remote(&remote);
 
-	let output = ctx.run_open(&issue_path);
-
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let stdout = String::from_utf8_lossy(&output.stdout);
+	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
 
-	assert!(!output.status.success(), "Should fail when both diverged");
+	assert!(!status.success(), "Should fail when both diverged");
 	assert!(
 		stderr.contains("Conflict detected") || stderr.contains("both local and remote have changes"),
 		"Expected conflict message. stdout: {stdout}, stderr: {stderr}"
@@ -188,7 +136,7 @@ fn test_both_diverged_triggers_conflict() {
 
 #[test]
 fn test_both_diverged_with_git_initiates_merge() {
-	let ctx = SyncTestContext::new();
+	let ctx = TestContext::new("");
 
 	let original = issue("Test Issue", "original body");
 	let local = issue("Test Issue", "local body");
@@ -197,16 +145,15 @@ fn test_both_diverged_with_git_initiates_merge() {
 	let issue_path = ctx.setup_local(&local, &original);
 	ctx.setup_remote(&remote);
 
-	ctx.init_git();
-	ctx.git_commit("Initial commit");
+	let git = ctx.init_git();
+	git.add_all();
+	git.commit("Initial commit");
 
-	let output = ctx.run_open(&issue_path);
-
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let stdout = String::from_utf8_lossy(&output.stdout);
+	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
+	eprintln!("status: {status:?}");
 
 	assert!(
 		stdout.contains("Merging") || stdout.contains("merged") || stderr.contains("CONFLICT") || stderr.contains("Conflict"),
@@ -216,7 +163,7 @@ fn test_both_diverged_with_git_initiates_merge() {
 
 #[test]
 fn test_only_remote_changed_takes_remote() {
-	let ctx = SyncTestContext::new();
+	let ctx = TestContext::new("");
 
 	let original = issue("Test Issue", "original body");
 	let remote = issue("Test Issue", "remote changed body");
@@ -225,20 +172,18 @@ fn test_only_remote_changed_takes_remote() {
 	let issue_path = ctx.setup_local(&original, &original);
 	ctx.setup_remote(&remote);
 
-	let output = ctx.run_open(&issue_path);
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let stdout = String::from_utf8_lossy(&output.stdout);
+	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
-	eprintln!("status: {:?}", output.status);
+	eprintln!("status: {status:?}");
 
-	assert!(output.status.success(), "Should succeed when only remote changed. stderr: {stderr}");
+	assert!(status.success(), "Should succeed when only remote changed. stderr: {stderr}");
 }
 
 #[test]
 fn test_only_local_changed_pushes_local() {
-	let ctx = SyncTestContext::new();
+	let ctx = TestContext::new("");
 
 	let original = issue("Test Issue", "original body");
 	let local = issue("Test Issue", "local changed body");
@@ -246,15 +191,13 @@ fn test_only_local_changed_pushes_local() {
 	let issue_path = ctx.setup_local(&local, &original);
 	ctx.setup_remote(&original); // Remote still has original
 
-	let output = ctx.run_open(&issue_path);
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	let stdout = String::from_utf8_lossy(&output.stdout);
+	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
-	eprintln!("status: {:?}", output.status);
+	eprintln!("status: {status:?}");
 
-	assert!(output.status.success(), "Should succeed when only local changed. stderr: {stderr}");
+	assert!(status.success(), "Should succeed when only local changed. stderr: {stderr}");
 	assert!(
 		stdout.contains("Updating") || stdout.contains("Synced") || stdout.contains("No changes"),
 		"Expected sync activity. stdout: {stdout}, stderr: {stderr}"
