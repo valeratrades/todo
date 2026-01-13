@@ -109,7 +109,7 @@ async fn fetch_issue_with_ancestors(gh: &BoxedGitHubClient, owner: &str, repo: &
 
 	// Build ancestors for children (current issue becomes part of ancestors)
 	let mut child_ancestors = ancestors;
-	let this_issue = FetchedIssue::from_parts(owner, repo, issue_number, &issue.title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for #{}", issue_number))?;
+	let this_issue = FetchedIssue::from_parts(owner, repo, issue_number, &issue.title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for #{issue_number}"))?;
 	child_ancestors.push(this_issue);
 
 	// Recursively fetch all sub-issues

@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 // Re-export from library for internal use
 pub use todo::{Line, classify_line};
 
@@ -44,17 +44,14 @@ pub fn format_blocker_content(content: &str) -> Result<String> {
 		if let Some(Line::Comment(_)) = classify_line(line) {
 			// Check if previous line was empty
 			if idx > 0 && lines[idx - 1].is_empty() {
-				return Err(eyre!(
+				bail!(
 					"Comment line at position {} cannot follow an empty line. Comments must follow content or other comments.",
 					idx + 1
-				));
+				);
 			}
 			// Check if it's the first line
 			if idx == 0 {
-				return Err(eyre!(
-					"Comment line at position {} cannot be first line. Comments must follow content or other comments.",
-					idx + 1
-				));
+				bail!("Comment line at position {} cannot be first line. Comments must follow content or other comments.", idx + 1);
 			}
 		}
 	}

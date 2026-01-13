@@ -180,7 +180,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to fetch authenticated user: {} - {}", status, body));
+			bail!("Failed to fetch authenticated user: {status} - {body}");
 		}
 
 		let user = res.json::<GitHubUser>().await?;
@@ -201,7 +201,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to fetch issue: {} - {}", status, body));
+			bail!("Failed to fetch issue: {status} - {body}");
 		}
 
 		let issue = res.json::<GitHubIssue>().await?;
@@ -222,7 +222,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to fetch comments: {} - {}", status, body));
+			bail!("Failed to fetch comments: {status} - {body}");
 		}
 
 		let comments = res.json::<Vec<GitHubComment>>().await?;
@@ -266,7 +266,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to update issue body: {} - {}", status, body));
+			bail!("Failed to update issue body: {status} - {body}");
 		}
 
 		Ok(())
@@ -288,7 +288,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to update issue state: {} - {}", status, body));
+			bail!("Failed to update issue state: {status} - {body}");
 		}
 
 		Ok(())
@@ -310,7 +310,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to update comment: {} - {}", status, body));
+			bail!("Failed to update comment: {status} - {body}");
 		}
 
 		Ok(())
@@ -332,7 +332,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to create comment: {} - {}", status, body));
+			bail!("Failed to create comment: {status} - {body}");
 		}
 
 		Ok(())
@@ -352,7 +352,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to delete comment: {} - {}", status, body));
+			bail!("Failed to delete comment: {status} - {body}");
 		}
 
 		Ok(())
@@ -404,7 +404,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to create issue: {} - {}", status, body));
+			bail!("Failed to create issue: {status} - {body}");
 		}
 
 		let issue = res.json::<CreatedIssue>().await?;
@@ -427,7 +427,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to add sub-issue: {} - {}", status, body));
+			bail!("Failed to add sub-issue: {status} - {body}");
 		}
 
 		Ok(())
@@ -505,7 +505,7 @@ impl GitHubClient for RealGitHubClient {
 		if !res.status().is_success() {
 			let status = res.status();
 			let body = res.text().await.unwrap_or_default();
-			return Err(eyre!("Failed to fetch parent issue: {} - {}", status, body));
+			bail!("Failed to fetch parent issue: {status} - {body}");
 		}
 
 		let parent = res.json::<GitHubIssue>().await?;
@@ -542,31 +542,31 @@ pub fn parse_github_issue_url(url: &str) -> Result<(String, String, u64)> {
 	// SSH URLs don't support issue numbers directly, but we parse them for consistency
 	if let Some(path) = url.strip_prefix("git@github.com:") {
 		// SSH format doesn't have issue numbers - this is an error for issue URLs
-		return Err(eyre!(
+		bail!(
 			"SSH URL format doesn't support issue numbers. Use HTTPS format: https://github.com/{}/issues/NUMBER",
 			path.strip_suffix(".git").unwrap_or(path)
-		));
+		);
 	}
 
 	// Try ssh:// format: ssh://git@github.com/owner/repo.git
 	if let Some(path) = url.strip_prefix("ssh://git@github.com/") {
-		return Err(eyre!(
+		bail!(
 			"SSH URL format doesn't support issue numbers. Use HTTPS format: https://github.com/{}/issues/NUMBER",
 			path.strip_suffix(".git").unwrap_or(path)
-		));
+		);
 	}
 
 	// Remove protocol prefix if present (https://, http://)
 	let path = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
 
 	// Remove github.com prefix
-	let path = path.strip_prefix("github.com/").ok_or_else(|| eyre!("URL must be a GitHub URL: {}", url))?;
+	let path = path.strip_prefix("github.com/").ok_or_else(|| eyre!("URL must be a GitHub URL: {url}"))?;
 
 	// Split by /
 	let parts: Vec<&str> = path.split('/').collect();
 
 	if parts.len() < 4 || parts[2] != "issues" {
-		return Err(eyre!("Invalid GitHub issue URL format. Expected: https://github.com/owner/repo/issues/123"));
+		bail!("Invalid GitHub issue URL format. Expected: https://github.com/owner/repo/issues/123");
 	}
 
 	let owner = parts[0].to_string();

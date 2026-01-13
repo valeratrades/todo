@@ -30,7 +30,7 @@ fn main() {
 	let parser = Parser::new_ext(&markdown, options);
 	let events: Vec<_> = parser.collect();
 	let pulldown_parse = start.elapsed();
-	println!("Parse time: {:?}", pulldown_parse);
+	println!("Parse time: {pulldown_parse:?}");
 	println!("Events: {}", events.len());
 
 	// Benchmark pulldown-cmark → typst conversion
@@ -38,7 +38,7 @@ fn main() {
 	let start = Instant::now();
 	let typst_output = md_to_typst_pulldown(&markdown);
 	let pulldown_to_typst = start.elapsed();
-	println!("Convert time: {:?}", pulldown_to_typst);
+	println!("Convert time: {pulldown_to_typst:?}");
 	println!("Output (first 500 chars):\n{}\n", &typst_output[..500.min(typst_output.len())]);
 
 	// Benchmark pandoc md → typst
@@ -46,7 +46,7 @@ fn main() {
 	let start = Instant::now();
 	let typst = pandoc_convert(&markdown, "markdown", "typst");
 	let pandoc_to_typst = start.elapsed();
-	println!("Convert time: {:?}", pandoc_to_typst);
+	println!("Convert time: {pandoc_to_typst:?}");
 
 	if let Ok(ref t) = typst {
 		println!("Output (first 500 chars):\n{}\n", &t[..500.min(t.len())]);
@@ -54,9 +54,9 @@ fn main() {
 
 	// Summary
 	println!("=== Summary for {line_count} lines ===");
-	println!("pulldown-cmark parse:     {:?}", pulldown_parse);
-	println!("pulldown-cmark → typst:   {:?}", pulldown_to_typst);
-	println!("pandoc md → typst:        {:?}", pandoc_to_typst);
+	println!("pulldown-cmark parse:     {pulldown_parse:?}");
+	println!("pulldown-cmark → typst:   {pulldown_to_typst:?}"st);
+	println!("pandoc md → typst:        {pandoc_to_typst:?}"st);
 	println!("Speedup (pulldown/pandoc): {:.1}x", pandoc_to_typst.as_secs_f64() / pulldown_to_typst.as_secs_f64());
 }
 

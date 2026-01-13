@@ -316,14 +316,14 @@ impl Issue {
 				// Check if this is a sub-issue line - if so, exit blockers mode and process it below
 				if content.starts_with("- [") && Self::parse_child_title_line(content).is_some() {
 					in_blockers = false;
-					tracing::debug!("[parse] exiting blockers section due to sub-issue: {:?}", content);
+					tracing::debug!("[parse] exiting blockers section due to sub-issue: {content:?}");
 					// Fall through to sub-issue processing below
 				} else {
 					if let Some(line) = classify_line(content) {
-						tracing::debug!("[parse] blocker line: {:?} -> {:?}", content, line);
+						tracing::debug!("[parse] blocker line: {content:?} -> {line:?}");
 						blocker_lines.push(line);
 					} else {
-						tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {:?}", content);
+						tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {content:?}");
 					}
 					continue;
 				}
@@ -470,7 +470,7 @@ impl Issue {
 		let (close_state, rest) = Self::parse_checkbox_prefix(line).ok_or_else(|| ParseError::InvalidTitle {
 			src: ctx.named_source(),
 			span: ctx.line_span(line_num),
-			detail: format!("got: {:?}", line),
+			detail: format!("got: {line:?}"),
 		})?;
 
 		// Check for labels: [label1, label2] at the start

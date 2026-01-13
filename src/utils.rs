@@ -50,7 +50,7 @@ pub fn fd(args: &[&str], dir: &Path) -> Result<String> {
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
 			panic!("fd is not installed. Install it: https://github.com/sharkdp/fd")
 		}
-		Err(e) => bail!("Failed to run fd: {}", e),
+		Err(e) => bail!("Failed to run fd: {e}"),
 	}
 }
 
@@ -66,7 +66,7 @@ pub fn rg(args: &[&str], dir: &Path) -> Result<String> {
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
 			panic!("rg (ripgrep) is not installed. Install it: https://github.com/BurntSushi/ripgrep")
 		}
-		Err(e) => bail!("Failed to run rg: {}", e),
+		Err(e) => bail!("Failed to run rg: {e}"),
 	}
 }
 

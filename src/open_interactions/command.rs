@@ -119,7 +119,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	if args.last {
 		let all_files = search_issue_files("")?;
 		if all_files.is_empty() {
-			return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
+			bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
 		}
 		// Files are already sorted by modification time (most recent first)
 		open_local_issue(&gh, &all_files[0], offline, base_sync_opts.clone()).await?;
@@ -138,7 +138,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		// First, try to find an existing local issue file
 		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
-			println!("Found existing issue: {:?}", existing_path);
+			println!("Found existing issue: {existing_path:?}");
 			let effective_offline = offline || project_is_virtual;
 			open_local_issue(&gh, &existing_path, effective_offline, base_sync_opts.clone()).await?;
 			return Ok(());
@@ -175,7 +175,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		// This fetch IS the "take remote" action for --force/--reset with remote source
 		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, None).await?;
 
-		println!("Stored issue at: {:?}", issue_file_path);
+		println!("Stored issue at: {issue_file_path:?}");
 
 		// For remote source, force/reset already applied during fetch above.
 		// After editor, sync normally (don't re-apply force/reset which would undo user edits).
@@ -204,11 +204,11 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			// No matches - open fzf with all files and use input as initial query
 			let all_files = search_issue_files("")?;
 			if all_files.is_empty() {
-				return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
+				bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
 			}
 			match choose_issue_with_fzf(&all_files, input)? {
 				Some(path) => path,
-				None => return Err(eyre!("No issue selected")),
+				None => bail!("No issue selected"),
 			}
 		}
 		1 => matches[0].clone(),
@@ -216,7 +216,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			// Multiple matches - open fzf to choose
 			match choose_issue_with_fzf(&matches, input)? {
 				Some(path) => path,
-				None => return Err(eyre!("No issue selected")),
+				None => bail!("No issue selected"),
 			}
 		}
 	};

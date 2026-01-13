@@ -356,19 +356,19 @@ pub fn extract_owner_repo_from_path(issue_file_path: &Path) -> Result<(String, S
 	// Get relative path from issues base
 	let rel_path = issue_file_path
 		.strip_prefix(&issues_base)
-		.map_err(|_| eyre!("Issue file is not in issues directory: {:?}", issue_file_path))?;
+		.map_err(|_| eyre!("Issue file is not in issues directory: {issue_file_path:?}"))?;
 
 	// Extract first two components as owner/repo
 	let mut components = rel_path.components();
 	let owner = components
 		.next()
 		.and_then(|c| c.as_os_str().to_str())
-		.ok_or_else(|| eyre!("Could not extract owner from path: {:?}", issue_file_path))?
+		.ok_or_else(|| eyre!("Could not extract owner from path: {issue_file_path:?}"))?
 		.to_string();
 	let repo = components
 		.next()
 		.and_then(|c| c.as_os_str().to_str())
-		.ok_or_else(|| eyre!("Could not extract repo from path: {:?}", issue_file_path))?
+		.ok_or_else(|| eyre!("Could not extract repo from path: {issue_file_path:?}"))?
 		.to_string();
 
 	Ok((owner, repo))

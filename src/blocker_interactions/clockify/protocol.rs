@@ -1,7 +1,7 @@
 use std::{env, io::Write};
 
 use clap::{Args, Parser, Subcommand};
-use color_eyre::eyre::{Result, WrapErr, eyre};
+use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use jiff::Timestamp;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -189,9 +189,7 @@ pub async fn start_time_entry_with_defaults(workspace: Option<&str>, project: Op
 				processed.as_str()
 			}
 			None => {
-				return Err(eyre!(
-					"--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'"
-				));
+				bail!("--project is required for starting time entries. You can set a default with 'todo blocker project <project-name>'");
 			}
 		},
 	};
@@ -427,7 +425,7 @@ async fn resolve_project(client: &reqwest::Client, ws: &str, input: &str) -> Res
 		println!("Created new project '{input}' with ID: {project_id}");
 		Ok(project_id)
 	} else {
-		Err(eyre!("Project not found and user declined to create: {}", input))
+		Err(eyre!("Project not found and user declined to create: {input}"))
 	}
 }
 
@@ -453,7 +451,7 @@ async fn resolve_task(client: &reqwest::Client, ws: &str, project_id: &str, inpu
 	if let Some(t) = tasks.iter().find(|t| t.name.eq_ignore_ascii_case(input) || t.name.contains(input)) {
 		return Ok(t.id.clone());
 	}
-	Err(eyre!("Task not found in project {}: {}", project_id, input))
+	Err(eyre!("Task not found in project {project_id}: {input}"))
 }
 
 async fn fetch_task_by_id(client: &reqwest::Client, ws: &str, project_id: &str, id: &str) -> Result<String> {
@@ -486,7 +484,7 @@ async fn resolve_tags(client: &reqwest::Client, ws: &str, input: &str) -> Result
 		let all = fetch_tags(client, ws).await?;
 		for id in ids.clone() {
 			if !all.iter().any(|t| t.id == id) {
-				return Err(eyre!("Tag ID not found: {}", id));
+				bail!("Tag ID not found: {id}");
 			}
 		}
 	}
@@ -500,7 +498,7 @@ async fn resolve_tags(client: &reqwest::Client, ws: &str, input: &str) -> Result
 			} else if let Some(t) = all.iter().find(|t| t.name.eq_ignore_ascii_case(&n) || t.name.contains(&n)) {
 				ids.push(t.id.clone());
 			} else {
-				return Err(eyre!("Tag not found: {}", n));
+				bail!("Tag not found: {n}");
 			}
 		}
 	}
@@ -601,7 +599,7 @@ async fn resolve_workspace(client: &reqwest::Client, input: &str) -> Result<Stri
 		}
 	}
 
-	Err(eyre!("Workspace not found: {}", input))
+	Err(eyre!("Workspace not found: {input}"))
 }
 
 async fn stop_current_entry_by_id(workspace_id: &str) -> Result<()> {

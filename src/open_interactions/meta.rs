@@ -120,7 +120,7 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 		(number, title)
 	} else {
 		// Just a number, no title separator
-		let number: u64 = name_to_parse.parse().map_err(|_| eyre!("Could not parse issue number from: {}", name_to_parse))?;
+		let number: u64 = name_to_parse.parse().map_err(|_| eyre!("Could not parse issue number from: {name_to_parse}"))?;
 		(number, String::new())
 	};
 
@@ -186,7 +186,7 @@ pub fn is_virtual_project(owner: &str, repo: &str) -> bool {
 pub fn allocate_virtual_issue_number(owner: &str, repo: &str) -> Result<u64> {
 	let mut project_meta = load_project_meta(owner, repo);
 	if !project_meta.virtual_project {
-		return Err(eyre!("Cannot allocate virtual issue number for non-virtual project {owner}/{repo}"));
+		bail!("Cannot allocate virtual issue number for non-virtual project {owner}/{repo}");
 	}
 
 	// Ensure we start from 1
@@ -208,7 +208,7 @@ pub fn ensure_virtual_project(owner: &str, repo: &str) -> Result<ProjectMeta> {
 	if meta_path.exists() {
 		let project_meta = load_project_meta(owner, repo);
 		if !project_meta.virtual_project {
-			return Err(eyre!("Project {owner}/{repo} exists but is not a virtual project"));
+			bail!("Project {owner}/{repo} exists but is not a virtual project");
 		}
 		Ok(project_meta)
 	} else {

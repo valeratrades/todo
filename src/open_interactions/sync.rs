@@ -215,7 +215,7 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 
 	// Check if git is initialized
 	if !is_git_initialized() {
-		return Err(eyre!(
+		bail!(
 			"Conflict detected: both local and remote have changes since last sync.\n\
 			 \n\
 			 To enable conflict resolution, initialize git in your issues directory:\n\
@@ -223,7 +223,7 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 			 \n\
 			 Then re-run the command.",
 			data_dir.display()
-		));
+		);
 	}
 
 	// Get current branch name
@@ -260,14 +260,14 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 	let branch_status = Command::new("git").args(["-C", data_dir_str, "branch", &branch_name, &base_commit]).status()?;
 
 	if !branch_status.success() {
-		return Err(eyre!("Failed to create branch for remote state"));
+		bail!("Failed to create branch for remote state");
 	}
 
 	// Checkout the remote-state branch
 	let checkout_status = Command::new("git").args(["-C", data_dir_str, "checkout", &branch_name]).status()?;
 
 	if !checkout_status.success() {
-		return Err(eyre!("Failed to checkout remote-state branch"));
+		bail!("Failed to checkout remote-state branch");
 	}
 
 	// Write remote state to the issue file
@@ -284,7 +284,7 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 		// Restore original branch
 		let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
 		let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).status();
-		return Err(eyre!("Failed to commit remote state"));
+		bail!("Failed to commit remote state");
 	}
 
 	// Switch back to original branch
@@ -312,7 +312,7 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 		// Mark this file as having conflicts - blocks all operations until resolved
 		let _ = mark_conflict(issue_file_path);
 
-		return Err(eyre!(
+		bail!(
 			"Conflict detected: both local and remote have changes for issue #{issue_number}.\n\
 			 \n\
 			 Git merge has been initiated. Resolve the conflicts in:\n\
@@ -326,7 +326,7 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 			 To abort the merge: git merge --abort",
 			issue_file_path.display(),
 			issue_file_path.display()
-		));
+		);
 	}
 
 	// Some other error during merge
@@ -535,7 +535,7 @@ async fn sync_issue_to_github_inner(
 			} else if state_changed {
 				println!("Issue state changed, renaming file...");
 			} else {
-				println!("Issue renamed/moved, removing old file: {:?}", old_path);
+				println!("Issue renamed/moved, removing old file: {old_path:?}");
 			}
 			std::fs::remove_file(&old_path)?;
 

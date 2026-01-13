@@ -423,7 +423,7 @@ mod tests {
 		for marker in markers {
 			let encoded = marker.encode(Extension::Md);
 			let decoded = Marker::decode(&encoded, Extension::Md).unwrap_or_else(|| panic!("Failed to decode: {encoded}"));
-			assert_eq!(marker, decoded, "Roundtrip failed for {:?}", marker);
+			assert_eq!(marker, decoded, "Roundtrip failed for {marker:?}");
 		}
 	}
 }

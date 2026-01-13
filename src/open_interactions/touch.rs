@@ -43,7 +43,7 @@ pub fn parse_touch_path(path: &str) -> Result<TouchPath> {
 
 	// Need at least: workspace/project/issue
 	if components.len() < 3 {
-		return Err(eyre!("Path must be in format: workspace/project/issue (got {} components)", components.len()));
+		bail!("Path must be in format: workspace/project/issue (got {} components)", components.len());
 	}
 
 	let owner = components[0].to_string();
@@ -83,10 +83,10 @@ pub fn create_pending_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 
 	// For now, only support single-level issues (no sub-issues for pending)
 	if touch_path.issue_chain.len() > 1 {
-		return Err(eyre!(
+		bail!(
 			"Sub-issues via --touch require the parent to exist on GitHub first.\n\
 			 Create the parent issue first, then use --touch for the sub-issue."
-		));
+		);
 	}
 
 	let issue_title = touch_path.issue_chain.last().unwrap();
@@ -122,7 +122,7 @@ pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 	// For now, only support single-level issues (no sub-issues for virtual projects)
 	if touch_path.issue_chain.len() > 1 {
 		// TODO: Support sub-issues for virtual projects
-		return Err(eyre!("Sub-issues are not yet supported for virtual projects. Use a flat issue structure."));
+		bail!("Sub-issues are not yet supported for virtual projects. Use a flat issue structure.");
 	}
 
 	// Get the issue title (last in chain)
@@ -148,7 +148,7 @@ pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 	// No longer saving metadata - it's derived from file paths
 
 	println!("Created virtual issue #{issue_number}: {issue_title}");
-	println!("Stored at: {:?}", issue_file_path);
+	println!("Stored at: {issue_file_path:?}");
 
 	Ok(issue_file_path)
 }

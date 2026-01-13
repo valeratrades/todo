@@ -50,32 +50,32 @@ pub async fn main(_settings: &LiveSettings, args: PerfEvalArgs) -> Result<()> {
 			if let Ok(elapsed) = modified_time.elapsed()
 				&& elapsed.as_secs() > 61
 			{
-				return Err(color_eyre::eyre::eyre!(
+				bail!(
 					"Most recent screenshot is {} seconds old (found at: {}).\n\
 						The watch-monitors daemon should be running to provide fresh screenshots.\n\
 						Start it with: todo watch-monitors\n\
 						Or enable the systemd service: services.todo-watch-monitors.enable = true;",
 					elapsed.as_secs(),
 					recent_path.display()
-				));
+				);
 			}
 		} else {
-			return Err(color_eyre::eyre::eyre!(
+			bail!(
 				"No screenshots found in {}.\n\
 				The watch-monitors daemon should be running to capture screenshots.\n\
 				Start it with: todo watch-monitors\n\
 				Or enable the systemd service: services.todo-watch-monitors.enable = true;",
 				date_dir.display()
-			));
+			);
 		}
 	} else {
-		return Err(color_eyre::eyre::eyre!(
+		bail!(
 			"Screenshot directory does not exist: {}\n\
 			The watch-monitors daemon should be running to capture screenshots.\n\
 			Start it with: todo watch-monitors\n\
 			Or enable the systemd service: services.todo-watch-monitors.enable = true;",
 			date_dir.display()
-		));
+		);
 	}
 
 	// Load the most recent screenshot(s) instead of capturing new ones
@@ -163,7 +163,7 @@ pub async fn main(_settings: &LiveSettings, args: PerfEvalArgs) -> Result<()> {
 	}
 
 	if screenshot_images.is_empty() {
-		return Err(color_eyre::eyre::eyre!("Failed to load valid screenshots from {}", date_dir.display()));
+		bail!("Failed to load valid screenshots from {}", date_dir.display());
 	}
 
 	let num_captures = capture_groups.len().min(5);
@@ -178,7 +178,7 @@ pub async fn main(_settings: &LiveSettings, args: PerfEvalArgs) -> Result<()> {
 	let current_blocker = String::from_utf8_lossy(&blocker_output.stdout).trim().to_string();
 
 	if current_blocker.is_empty() {
-		return Err(color_eyre::eyre::eyre!("No current blocker found. Set one with: todo blocker add <task>"));
+		bail!("No current blocker found. Set one with: todo blocker add <task>");
 	}
 
 	// Get daily milestones
@@ -253,7 +253,7 @@ Replace N with an integer from 0 to 10."#
 			let score_int: i32 = score_raw.trim().parse().wrap_err(format!("Failed to parse score as integer: '{score_raw}'"))?;
 
 			if !(0..=10).contains(&score_int) {
-				return Err(color_eyre::eyre::eyre!("Score out of range: {}", score_int));
+				bail!("Score out of range: {score_int}");
 			}
 
 			let explanation = response.extract_html_tag("explanation").inspect_err(|_e| {
@@ -267,7 +267,7 @@ Replace N with an integer from 0 to 10."#
 			tracing::info!("Cost: {:.4} cents", response.cost_cents);
 		}
 		Err(e) => {
-			eprintln!("Error calling LLM: {:?}", e);
+			eprintln!("Error calling LLM: {e:?}");
 			return Err(e);
 		}
 	}

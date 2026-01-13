@@ -188,7 +188,7 @@ fn parse_workspace_from_path(relative_path: &str) -> Result<Option<String>> {
 		let parts: Vec<&str> = relative_path.split('/').collect();
 		Ok(Some(parts[0].to_string()))
 	} else {
-		bail!("Relative path can contain at most one slash, found {}: {}", slash_count, relative_path);
+		bail!("Relative path can contain at most one slash, found {slash_count}: {relative_path}");
 	}
 }
 
@@ -383,9 +383,7 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 				let urgent_path = if let Some(workspace) = workspace_from_path.as_ref() {
 					format!("{workspace}/urgent.md")
 				} else {
-					return Err(eyre!(
-						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')"
-					));
+					bail!("Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set-project work/blockers.md')");
 				};
 				// Check if we can create this urgent file
 				check_urgent_creation_allowed(&urgent_path)?;
@@ -493,9 +491,7 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 				let urgent_path = if let Some(workspace) = workspace_from_path.as_ref() {
 					format!("{workspace}/urgent.md")
 				} else {
-					return Err(eyre!(
-						"Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set work/blockers.md')"
-					));
+					bail!("Cannot use --urgent without a workspace. Set a workspace project first (e.g., 'blocker set work/blockers.md')");
 				};
 				// Check if we can create this urgent file (only if touch is enabled)
 				if touch {
@@ -555,7 +551,7 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs) -> 
 			let source = FileSource::new(relative_path.clone());
 			let seq = source.load()?;
 			if seq.current().is_none() {
-				return Err(eyre!("No current blocker task found. Add one with 'todo blocker add <task>'"));
+				bail!("No current blocker task found. Add one with 'todo blocker add <task>'");
 			}
 
 			// Enable tracking state
@@ -734,11 +730,7 @@ fn check_urgent_creation_allowed(target_urgent_path: &str) -> Result<()> {
 	if let Some(existing_urgent) = check_for_urgent_file()
 		&& existing_urgent != target_urgent_path
 	{
-		return Err(eyre!(
-			"Cannot create urgent file '{}': another urgent file '{}' already exists. Complete it first.",
-			target_urgent_path,
-			existing_urgent
-		));
+		bail!("Cannot create urgent file '{target_urgent_path}': another urgent file '{existing_urgent}' already exists. Complete it first.");
 	}
 	Ok(())
 }

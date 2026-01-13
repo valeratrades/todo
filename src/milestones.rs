@@ -102,7 +102,7 @@ fn parse_github_repo(url: &str) -> Result<(String, String)> {
 		return Ok((owner.to_string(), repo.to_string()));
 	}
 
-	Err(eyre!("Could not parse GitHub repo from URL: {}", url))
+	Err(eyre!("Could not parse GitHub repo from URL: {url}"))
 }
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq)]
@@ -238,7 +238,7 @@ async fn edit_milestone(settings: &LiveSettings, tf: Timeframe) -> Result<()> {
 	// Find the milestone matching the timeframe
 	let milestone = retrieved_milestones.iter().find(|m| m.title == tf.to_string()).ok_or_else(|| {
 		let existing = retrieved_milestones.iter().map(|m| m.title.clone()).collect::<Vec<_>>();
-		eyre!("Milestone '{}' not found. Existing milestones: {:?}", tf, existing)
+		eyre!("Milestone '{tf}' not found. Existing milestones: {existing:?}")
 	})?;
 
 	let original_description = milestone.description.clone().unwrap_or_default();
@@ -325,7 +325,7 @@ async fn update_milestone(settings: &LiveSettings, milestone_number: u64, descri
 	if !res.status().is_success() {
 		let status = res.status();
 		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to update milestone: {} - {}", status, body));
+		bail!("Failed to update milestone: {status} - {body}");
 	}
 
 	Ok(())
@@ -358,7 +358,7 @@ async fn create_closed_milestone(settings: &LiveSettings, title: &str, descripti
 	if !res.status().is_success() {
 		let status = res.status();
 		let body = res.text().await.unwrap_or_default();
-		return Err(eyre!("Failed to create closed milestone: {} - {}", status, body));
+		bail!("Failed to create closed milestone: {status} - {body}");
 	}
 
 	Ok(())

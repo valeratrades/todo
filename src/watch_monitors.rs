@@ -67,7 +67,7 @@ pub fn main(_settings: &LiveSettings, _args: WatchMonitorsArgs) -> Result<()> {
 		let wayshot = match WayshotConnection::new() {
 			Ok(w) => w,
 			Err(e) => {
-				tracing::error!("Failed to connect to Wayland compositor: {:?}", e);
+				tracing::error!("Failed to connect to Wayland compositor: {e:?}");
 				thread::sleep(Duration::from_secs(60));
 				continue;
 			}
@@ -92,19 +92,19 @@ pub fn main(_settings: &LiveSettings, _args: WatchMonitorsArgs) -> Result<()> {
 			match wayshot.screenshot_single_output(output, false) {
 				Ok(image_buffer) =>
 					if let Err(e) = save_screenshot_png(&image_buffer, &screenshot_path) {
-						tracing::error!("Failed to save screenshot to {}: {:?}", screenshot_path.display(), e);
+						tracing::error!("Failed to save screenshot to {}: {e:?}", screenshot_path.display());
 					} else {
 						tracing::debug!("Screenshot saved to: {}", screenshot_path.display());
 					},
 				Err(e) => {
-					tracing::error!("Failed to capture screenshot from output {i}: {:?}", e);
+					tracing::error!("Failed to capture screenshot from output {i}: {e:?}");
 				}
 			}
 		}
 
 		// Cleanup old screenshots (run once per loop iteration)
 		if let Err(e) = cleanup_old_screenshots(&cache_dir) {
-			tracing::error!("Failed to cleanup old screenshots: {:?}", e);
+			tracing::error!("Failed to cleanup old screenshots: {e:?}");
 		}
 
 		// Sleep for 60 seconds
