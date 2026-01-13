@@ -5,4 +5,5 @@ pub use common::*;
 
 mod blocker_project_resolution;
 mod file_naming;
+mod issue_preservation;
 mod sync;

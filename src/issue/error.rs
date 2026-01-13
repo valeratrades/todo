@@ -51,6 +51,29 @@ pub enum ParseError {
 		span: SourceSpan,
 		expected_tabs: usize,
 	},
+
+	#[error("invalid checkbox content: '{content}'")]
+	#[diagnostic(
+		code(todo::parse::invalid_checkbox),
+		help("valid checkbox values are: ' ' (open), 'x' (closed), '-' (not planned), or a number like '123' (duplicate of issue #123)")
+	)]
+	InvalidCheckbox {
+		#[source_code]
+		src: NamedSource<String>,
+		#[label("unrecognized checkbox value")]
+		span: SourceSpan,
+		content: String,
+	},
+
+	#[error("duplicate reference to non-existent issue #{issue_number}")]
+	#[diagnostic(code(todo::parse::invalid_duplicate), help("the referenced issue does not exist in this repository"))]
+	InvalidDuplicateReference {
+		#[source_code]
+		src: NamedSource<String>,
+		#[label("issue #{issue_number} not found")]
+		span: SourceSpan,
+		issue_number: u64,
+	},
 }
 
 /// Holds source content and filename for error reporting.

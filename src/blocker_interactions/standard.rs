@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::{Result, bail, eyre};
+use color_eyre::eyre::{Result, bail};
 // Re-export from library for internal use
 pub use todo::{Line, classify_line};
 

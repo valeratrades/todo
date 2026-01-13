@@ -44,26 +44,11 @@ fn preprocess_to_typst(input: &str) -> String {
 	let mut result = String::with_capacity(input.len());
 
 	for line in input.lines() {
-		let preprocessed = preprocess_line(line);
+		//let preprocessed = preprocess_line(line);
+		let preprocessed = line.to_string();
 		result.push_str(&preprocessed);
 		result.push('\n');
 	}
 
 	result
-}
-
-fn preprocess_line(line: &str) -> String {
-	let trimmed = line.trim_start();
-	let indent = &line[..line.len() - trimmed.len()];
-
-	// Markdown checkboxes: `- [ ]` or `- [x]`
-	if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
-		format!("{indent}- #checkbox(false) {rest}")
-	} else if let Some(rest) = trimmed.strip_prefix("- [x] ") {
-		format!("{indent}- #checkbox(true) {rest}")
-	} else if let Some(rest) = trimmed.strip_prefix("- [X] ") {
-		format!("{indent}- #checkbox(true) {rest}")
-	} else {
-		line.to_string()
-	}
 }

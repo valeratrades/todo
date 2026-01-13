@@ -343,10 +343,10 @@ fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 	resolved.labels = remote.labels.clone();
 
 	// Update comments: keep structure but update content
-	if let Some(remote_body) = remote.comments.first() {
-		if let Some(resolved_body) = resolved.comments.first_mut() {
-			resolved_body.body = remote_body.body.clone();
-		}
+	if let Some(remote_body) = remote.comments.first()
+		&& let Some(resolved_body) = resolved.comments.first_mut()
+	{
+		resolved_body.body = remote_body.body.clone();
 	}
 
 	// Replace other comments with remote's

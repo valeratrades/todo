@@ -117,10 +117,10 @@ pub fn find_sub_issue_file(owner: &str, repo: &str, ancestors: &[FetchedIssue], 
 			}
 
 			// Check for directory pattern: {number}_-_{title}/__main__.{ext}[.bak]
-			if path.is_dir() {
-				if let Some(main_file) = find_main_file_in_dir(&path) {
-					return Some(main_file);
-				}
+			if path.is_dir()
+				&& let Some(main_file) = find_main_file_in_dir(&path)
+			{
+				return Some(main_file);
 			}
 		}
 	}

@@ -122,6 +122,26 @@ use super::{
 	util::{is_blockers_marker, normalize_issue_indentation},
 };
 
+/// Result of parsing a checkbox prefix.
+enum CheckboxParseResult<'a> {
+	/// Successfully parsed checkbox
+	Ok(CloseState, &'a str),
+	/// Not a checkbox line (doesn't start with `- [`)
+	NotCheckbox,
+	/// Has checkbox syntax but invalid content (like `[abc]`)
+	InvalidContent(String),
+}
+
+/// Result of parsing a child title line.
+enum ChildTitleParseResult {
+	/// Successfully parsed child/sub-issue
+	Ok(IssueMeta),
+	/// Not a child title line
+	NotChildTitle,
+	/// Has checkbox syntax but invalid content (like `[abc]`)
+	InvalidCheckbox(String),
+}
+
 /// Close state of an issue.
 /// Maps to GitHub's binary open/closed, but locally supports additional variants.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -264,6 +284,7 @@ impl Issue {
 		let mut current_comment_meta: Option<(Option<u64>, bool)> = None; // (id, owned)
 		let mut in_body = true;
 		let mut in_blockers = false;
+		let mut current_line = line_num;
 
 		// Body is first comment (no marker)
 		let mut body_lines: Vec<String> = Vec::new();
@@ -275,6 +296,7 @@ impl Issue {
 			}
 
 			let line = lines.next().unwrap();
+			current_line += 1;
 
 			// Empty line handling
 			if line.is_empty() {
@@ -314,10 +336,31 @@ impl Issue {
 			// But stop at sub-issue lines (they end the blockers section)
 			if in_blockers {
 				// Check if this is a sub-issue line - if so, exit blockers mode and process it below
-				if content.starts_with("- [") && Self::parse_child_title_line(content).is_some() {
-					in_blockers = false;
-					tracing::debug!("[parse] exiting blockers section due to sub-issue: {content:?}");
-					// Fall through to sub-issue processing below
+				if content.starts_with("- [") {
+					match Self::parse_child_title_line_detailed(content) {
+						ChildTitleParseResult::Ok(_) => {
+							in_blockers = false;
+							tracing::debug!("[parse] exiting blockers section due to sub-issue: {content:?}");
+							// Fall through to sub-issue processing below
+						}
+						ChildTitleParseResult::InvalidCheckbox(invalid_content) => {
+							return Err(ParseError::InvalidCheckbox {
+								src: ctx.named_source(),
+								span: ctx.line_span(current_line),
+								content: invalid_content,
+							});
+						}
+						ChildTitleParseResult::NotChildTitle => {
+							// Not a sub-issue, continue parsing as blocker
+							if let Some(line) = classify_line(content) {
+								tracing::debug!("[parse] blocker line: {content:?} -> {line:?}");
+								blocker_lines.push(line);
+							} else {
+								tracing::debug!("[parse] blocker line SKIPPED (classify_line returned None): {content:?}");
+							}
+							continue;
+						}
+					}
 				} else {
 					if let Some(line) = classify_line(content) {
 						tracing::debug!("[parse] blocker line: {content:?} -> {line:?}");
@@ -365,9 +408,27 @@ impl Issue {
 			}
 
 			// Check for sub-issue line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
-			if content.starts_with("- [")
-				&& let Some(child_meta) = Self::parse_child_title_line(content)
-			{
+			if content.starts_with("- [") {
+				let child_meta = match Self::parse_child_title_line_detailed(content) {
+					ChildTitleParseResult::Ok(meta) => meta,
+					ChildTitleParseResult::InvalidCheckbox(invalid_content) => {
+						return Err(ParseError::InvalidCheckbox {
+							src: ctx.named_source(),
+							span: ctx.line_span(current_line),
+							content: invalid_content,
+						});
+					}
+					ChildTitleParseResult::NotChildTitle => {
+						// Not a sub-issue line, treat as regular content
+						let content_line = content.strip_prefix('\t').unwrap_or(content);
+						if in_body {
+							body_lines.push(content_line.to_string());
+						} else if current_comment_meta.is_some() {
+							current_comment_lines.push(content_line.to_string());
+						}
+						continue;
+					}
+				};
 				// Flush current
 				if in_body {
 					in_body = false;
@@ -434,7 +495,7 @@ impl Issue {
 				continue;
 			}
 
-			// Regular content line
+			// Regular content line (doesn't start with "- [")
 			let content_line = content.strip_prefix('\t').unwrap_or(content); // Extra indent for immutable
 			if in_body {
 				body_lines.push(content_line.to_string());
@@ -467,11 +528,23 @@ impl Issue {
 	/// Returns (IssueMeta, labels)
 	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<(IssueMeta, Vec<String>), ParseError> {
 		// Parse checkbox: `- [CONTENT] `
-		let (close_state, rest) = Self::parse_checkbox_prefix(line).ok_or_else(|| ParseError::InvalidTitle {
-			src: ctx.named_source(),
-			span: ctx.line_span(line_num),
-			detail: format!("got: {line:?}"),
-		})?;
+		let (close_state, rest) = match Self::parse_checkbox_prefix_detailed(line) {
+			CheckboxParseResult::Ok(state, rest) => (state, rest),
+			CheckboxParseResult::NotCheckbox => {
+				return Err(ParseError::InvalidTitle {
+					src: ctx.named_source(),
+					span: ctx.line_span(line_num),
+					detail: format!("got: {line:?}"),
+				});
+			}
+			CheckboxParseResult::InvalidContent(content) => {
+				return Err(ParseError::InvalidCheckbox {
+					src: ctx.named_source(),
+					span: ctx.line_span(line_num),
+					content,
+				});
+			}
+		};
 
 		// Check for labels: [label1, label2] at the start
 		let (labels, rest) = if rest.starts_with('[') {
@@ -513,31 +586,43 @@ impl Issue {
 		Ok((IssueMeta { title, url, close_state, owned }, labels))
 	}
 
-	/// Parse checkbox prefix: `- [CONTENT] ` and return (CloseState, rest of line)
-	fn parse_checkbox_prefix(line: &str) -> Option<(CloseState, &str)> {
+	/// Parse checkbox prefix: `- [CONTENT] ` and return result.
+	fn parse_checkbox_prefix_detailed(line: &str) -> CheckboxParseResult<'_> {
 		// Match `- [` prefix
-		let rest = line.strip_prefix("- [")?;
+		let Some(rest) = line.strip_prefix("- [") else {
+			return CheckboxParseResult::NotCheckbox;
+		};
 
 		// Find closing `] `
-		let bracket_end = rest.find("] ")?;
+		let Some(bracket_end) = rest.find("] ") else {
+			return CheckboxParseResult::NotCheckbox;
+		};
+
 		let checkbox_content = &rest[..bracket_end];
 		let rest = &rest[bracket_end + 2..];
 
-		let close_state = CloseState::from_checkbox(checkbox_content)?;
-		Some((close_state, rest))
+		match CloseState::from_checkbox(checkbox_content) {
+			Some(close_state) => CheckboxParseResult::Ok(close_state, rest),
+			None => CheckboxParseResult::InvalidContent(checkbox_content.to_string()),
+		}
 	}
 
-	/// Parse child/sub-issue title line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
-	/// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
-	fn parse_child_title_line(line: &str) -> Option<IssueMeta> {
-		let (close_state, rest) = Self::parse_checkbox_prefix(line)?;
+	/// Parse child/sub-issue title line with detailed result.
+	fn parse_child_title_line_detailed(line: &str) -> ChildTitleParseResult {
+		let (close_state, rest) = match Self::parse_checkbox_prefix_detailed(line) {
+			CheckboxParseResult::Ok(state, rest) => (state, rest),
+			CheckboxParseResult::NotCheckbox => return ChildTitleParseResult::NotChildTitle,
+			CheckboxParseResult::InvalidContent(content) => return ChildTitleParseResult::InvalidCheckbox(content),
+		};
 
 		// Check for sub marker
 		if let Some(marker_start) = rest.find("<!--sub ") {
-			let marker_end = rest.find("-->")?;
+			let Some(marker_end) = rest.find("-->") else {
+				return ChildTitleParseResult::NotChildTitle;
+			};
 			let title = rest[..marker_start].trim().to_string();
 			let url = rest[marker_start + 8..marker_end].trim().to_string();
-			Some(IssueMeta {
+			ChildTitleParseResult::Ok(IssueMeta {
 				title,
 				url: Some(url),
 				close_state,
@@ -546,17 +631,17 @@ impl Issue {
 		} else if !rest.contains("<!--") {
 			let title = rest.trim().to_string();
 			if !title.is_empty() {
-				Some(IssueMeta {
+				ChildTitleParseResult::Ok(IssueMeta {
 					title,
 					url: None,
 					close_state,
 					owned: true,
 				})
 			} else {
-				None
+				ChildTitleParseResult::NotChildTitle
 			}
 		} else {
-			None
+			ChildTitleParseResult::NotChildTitle
 		}
 	}
 
@@ -782,19 +867,60 @@ mod tests {
 
 	#[test]
 	fn test_parse_checkbox_prefix() {
+		// Helper to extract (CloseState, rest) from Ok result
+		fn extract_ok(result: CheckboxParseResult) -> Option<(CloseState, String)> {
+			match result {
+				CheckboxParseResult::Ok(state, rest) => Some((state, rest.to_string())),
+				_ => None,
+			}
+		}
+
 		// Standard cases
-		assert_eq!(Issue::parse_checkbox_prefix("- [ ] rest"), Some((CloseState::Open, "rest")));
-		assert_eq!(Issue::parse_checkbox_prefix("- [x] rest"), Some((CloseState::Closed, "rest")));
-		assert_eq!(Issue::parse_checkbox_prefix("- [X] rest"), Some((CloseState::Closed, "rest")));
+		assert_eq!(extract_ok(Issue::parse_checkbox_prefix_detailed("- [ ] rest")), Some((CloseState::Open, "rest".to_string())));
+		assert_eq!(extract_ok(Issue::parse_checkbox_prefix_detailed("- [x] rest")), Some((CloseState::Closed, "rest".to_string())));
+		assert_eq!(extract_ok(Issue::parse_checkbox_prefix_detailed("- [X] rest")), Some((CloseState::Closed, "rest".to_string())));
 
 		// New close types
-		assert_eq!(Issue::parse_checkbox_prefix("- [-] rest"), Some((CloseState::NotPlanned, "rest")));
-		assert_eq!(Issue::parse_checkbox_prefix("- [123] rest"), Some((CloseState::Duplicate(123), "rest")));
-		assert_eq!(Issue::parse_checkbox_prefix("- [42] Title here"), Some((CloseState::Duplicate(42), "Title here")));
+		assert_eq!(
+			extract_ok(Issue::parse_checkbox_prefix_detailed("- [-] rest")),
+			Some((CloseState::NotPlanned, "rest".to_string()))
+		);
+		assert_eq!(
+			extract_ok(Issue::parse_checkbox_prefix_detailed("- [123] rest")),
+			Some((CloseState::Duplicate(123), "rest".to_string()))
+		);
+		assert_eq!(
+			extract_ok(Issue::parse_checkbox_prefix_detailed("- [42] Title here")),
+			Some((CloseState::Duplicate(42), "Title here".to_string()))
+		);
 
-		// Invalid cases
-		assert_eq!(Issue::parse_checkbox_prefix("no checkbox"), None);
-		assert_eq!(Issue::parse_checkbox_prefix("- [invalid] rest"), None);
+		// Not a checkbox line
+		assert!(matches!(Issue::parse_checkbox_prefix_detailed("no checkbox"), CheckboxParseResult::NotCheckbox));
+
+		// Invalid checkbox content
+		assert!(matches!(
+			Issue::parse_checkbox_prefix_detailed("- [invalid] rest"),
+			CheckboxParseResult::InvalidContent(s) if s == "invalid"
+		));
+		assert!(matches!(
+			Issue::parse_checkbox_prefix_detailed("- [abc] rest"),
+			CheckboxParseResult::InvalidContent(s) if s == "abc"
+		));
+	}
+
+	#[test]
+	fn test_parse_invalid_checkbox_returns_error() {
+		// Invalid checkbox on root issue
+		let content = "- [abc] Invalid issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody\n";
+		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
+		let result = Issue::parse(content, &ctx);
+		assert!(matches!(result, Err(ParseError::InvalidCheckbox { content, .. }) if content == "abc"));
+
+		// Invalid checkbox on sub-issue
+		let content = "- [ ] Parent <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t- [xyz] Bad sub <!--sub https://github.com/owner/repo/issues/2 -->\n";
+		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
+		let result = Issue::parse(content, &ctx);
+		assert!(matches!(result, Err(ParseError::InvalidCheckbox { content, .. }) if content == "xyz"));
 	}
 
 	#[test]

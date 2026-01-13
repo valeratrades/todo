@@ -38,7 +38,7 @@ pub struct SyncOptions {
 
 use std::path::Path;
 
-use todo::{Extension, FetchedIssue, Issue, ParseContext};
+use todo::{CloseState, Extension, FetchedIssue, Issue, ParseContext};
 use v_utils::prelude::*;
 
 use super::{
@@ -94,12 +94,12 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 
 	// Delete comments that were removed
 	for comment in consensus.comments.iter().skip(1) {
-		if let Some(id) = comment.id {
-			if !target_ids.contains(&id) {
-				println!("Deleting comment {id}...");
-				gh.delete_comment(owner, repo, id).await?;
-				deletes += 1;
-			}
+		if let Some(id) = comment.id
+			&& !target_ids.contains(&id)
+		{
+			println!("Deleting comment {id}...");
+			gh.delete_comment(owner, repo, id).await?;
+			deletes += 1;
 		}
 	}
 
@@ -547,10 +547,11 @@ async fn sync_issue_to_github_inner(
 			let old_sub_dir = if old_sub_dir.extension().is_some() { old_sub_dir.with_extension("") } else { old_sub_dir };
 
 			let new_parent = new_path.parent();
-			if old_sub_dir.is_dir() && new_parent != Some(old_sub_dir.as_path()) {
-				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
-					eprintln!("Warning: could not remove old sub-issues directory: {e}");
-				}
+			if old_sub_dir.is_dir()
+				&& new_parent != Some(old_sub_dir.as_path())
+				&& let Err(e) = std::fs::remove_dir_all(&old_sub_dir)
+			{
+				eprintln!("Warning: could not remove old sub-issues directory: {e}");
 			}
 		}
 
@@ -609,8 +610,20 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
 	// Handle duplicate close type: remove from local storage entirely
-	if issue.meta.close_state.should_remove() {
-		println!("Issue marked as duplicate, removing local file...");
+	if let CloseState::Duplicate(dup_number) = issue.meta.close_state {
+		// Validate that the referenced duplicate issue exists
+		if !offline {
+			let exists = gh.fetch_issue(&owner, &repo, dup_number).await.is_ok();
+			if !exists {
+				bail!(
+					"Cannot mark issue as duplicate of #{dup_number}: issue #{dup_number} does not exist in {owner}/{repo}.\n\
+					 \n\
+					 Check that the issue number is correct. The duplicate issue must exist in the same repository."
+				);
+			}
+		}
+
+		println!("Issue marked as duplicate of #{dup_number}, removing local file...");
 
 		// Close on GitHub (if not already closed and not offline)
 		let consensus = load_consensus_issue(issue_file_path);
