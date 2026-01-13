@@ -570,6 +570,8 @@ impl GitHubClient for MockGitHubClient {
 
 #[cfg(test)]
 mod tests {
+	use insta::{assert_debug_snapshot, assert_snapshot};
+
 	use super::*;
 
 	#[tokio::test]
@@ -610,9 +612,7 @@ mod tests {
 
 		// Fetch sub-issues
 		let sub_issues = client.fetch_sub_issues("owner", "repo", 1).await.unwrap();
-		assert_eq!(sub_issues.len(), 1);
-		assert_eq!(sub_issues[0].number, 2);
-		assert_eq!(sub_issues[0].title, "Child Issue");
+		assert_debug_snapshot!(format!("{sub_issues:?}"));
 	}
 
 	#[tokio::test]
@@ -626,7 +626,7 @@ mod tests {
 
 		// Verify it exists
 		let issue = client.fetch_issue("owner", "repo", created.number).await.unwrap();
-		assert_eq!(issue.title, "New Issue");
+		assert_snapshot!(issue.title, "New Issue");
 	}
 
 	#[tokio::test]

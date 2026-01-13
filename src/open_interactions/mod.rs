@@ -13,11 +13,12 @@ mod github_sync;
 mod meta;
 mod sync;
 mod touch;
+mod tree;
 pub(crate) mod util;
 
 // Re-export the public API
 pub use command::{OpenArgs, open_command};
 // Re-export sync types for blocker integration
-pub use sync::{Modifier, ModifyResult, modify_and_sync_issue};
+pub use sync::{Modifier, ModifyResult, OpenSource, SyncOptions, modify_and_sync_issue};
 // Re-export Issue from the library crate
 pub use todo::Issue;

@@ -10,7 +10,7 @@ use super::{
 	fetch::fetch_and_store_issue,
 	files::{choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
-	sync::open_local_issue,
+	sync::{OpenSource, SyncOptions, open_local_issue},
 	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 };
 use crate::{
@@ -59,6 +59,19 @@ pub struct OpenArgs {
 	/// If no pattern provided, opens the current blocker issue.
 	#[arg(short, long)]
 	pub blocker: bool,
+
+	/// Force through conflicts by taking the source side.
+	/// When opening via local path: takes local version.
+	/// When opening via GitHub URL: takes remote version.
+	#[arg(short, long)]
+	pub force: bool,
+
+	/// Reset to source state, ignoring any local/remote changes.
+	/// Overwrites everything with current source without syncing.
+	/// When opening via local path: keeps local as-is (skips sync).
+	/// When opening via GitHub URL: overwrites local with remote.
+	#[arg(short, long)]
+	pub reset: bool,
 }
 
 /// Get the effective extension from args, config, or default
@@ -85,6 +98,13 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	// Combine global --offline with subcommand --offline
 	let offline = global_offline || args.offline;
 
+	// Build sync options from args (source will be set per-branch)
+	let base_sync_opts = SyncOptions {
+		source: OpenSource::Local, // Default, overridden for URL mode
+		force: args.force,
+		reset: args.reset,
+	};
+
 	// Handle --blocker mode: use current blocker issue file if no pattern provided
 	let input = if args.blocker && args.url_or_pattern.is_none() {
 		// Get current blocker issue path
@@ -102,7 +122,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			return Err(eyre!("No issue files found. Use a GitHub URL to fetch an issue first."));
 		}
 		// Files are already sorted by modification time (most recent first)
-		open_local_issue(&gh, &all_files[0], offline).await?;
+		open_local_issue(&gh, &all_files[0], offline, base_sync_opts.clone()).await?;
 		return Ok(());
 	}
 
@@ -120,7 +140,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {:?}", existing_path);
 			let effective_offline = offline || project_is_virtual;
-			open_local_issue(&gh, &existing_path, effective_offline).await?;
+			open_local_issue(&gh, &existing_path, effective_offline, base_sync_opts.clone()).await?;
 			return Ok(());
 		}
 
@@ -136,7 +156,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		// Open for editing - sync will create on GitHub if pending
 		let effective_offline = offline || project_is_virtual;
-		open_local_issue(&gh, &issue_file_path, effective_offline).await?;
+		open_local_issue(&gh, &issue_file_path, effective_offline, base_sync_opts.clone()).await?;
 		return Ok(());
 	}
 
@@ -144,7 +164,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	if github::is_github_issue_url(input) {
 		// GitHub URL mode: fetch issue and store in XDG_DATA (can't be offline)
 		if offline {
-			return Err(eyre!("Cannot fetch issue from URL in offline mode"));
+			bail!("Cannot fetch issue from URL in offline mode");
 		}
 
 		let (owner, repo, issue_number) = github::parse_github_issue_url(input)?;
@@ -152,12 +172,19 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		println!("Fetching issue #{issue_number} from {owner}/{repo}...");
 
 		// Fetch and store issue (and sub-issues) in XDG_DATA
+		// This fetch IS the "take remote" action for --force/--reset with remote source
 		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, None).await?;
 
 		println!("Stored issue at: {:?}", issue_file_path);
 
-		// Open the local issue file for editing
-		open_local_issue(&gh, &issue_file_path, offline).await?;
+		// For remote source, force/reset already applied during fetch above.
+		// After editor, sync normally (don't re-apply force/reset which would undo user edits).
+		let remote_sync_opts = SyncOptions {
+			source: OpenSource::Remote,
+			force: false, // Don't re-apply after editor
+			reset: false, // Don't re-apply after editor
+		};
+		open_local_issue(&gh, &issue_file_path, offline, remote_sync_opts).await?;
 		return Ok(());
 	}
 
@@ -165,7 +192,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	let input_path = Path::new(input);
 	if input_path.exists() && input_path.is_file() {
 		// Direct file path - open it
-		open_local_issue(&gh, input_path, offline).await?;
+		open_local_issue(&gh, input_path, offline, base_sync_opts.clone()).await?;
 		return Ok(());
 	}
 
@@ -195,7 +222,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	};
 
 	// Open the local issue file for editing
-	open_local_issue(&gh, &issue_file_path, offline).await?;
+	open_local_issue(&gh, &issue_file_path, offline, base_sync_opts).await?;
 
 	Ok(())
 }

@@ -1,15 +1,40 @@
 //! Sync local issue changes back to GitHub.
 //!
-//! ## Consensus-based sync model
+//! ## Per-node consensus-based sync model
 //!
 //! The sync logic uses git's last committed state as the "consensus" (last synced state).
-//! When syncing:
-//! - If only local changed since consensus → push local to remote
-//! - If only remote changed since consensus → take remote as new local
-//! - If both changed since consensus → conflict requiring manual resolution
+//! For each node in the issue tree, we compare local vs consensus vs remote:
+//! - If only local changed since consensus → push local node to remote
+//! - If only remote changed since consensus → update local node from remote
+//! - If both changed → use timestamp-based auto-resolution (newer wins)
+//! - If timestamps equal or missing → conflict requiring manual resolution
 //! - If neither changed → no action needed
 //!
+//! Each node is resolved independently, allowing partial syncs where some nodes
+//! auto-resolve while others may conflict.
+//!
 //! This eliminates the need for storing consensus state in .meta.json files.
+
+/// Which source was used to open the issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpenSource {
+	/// Opened via local file path or search
+	#[default]
+	Local,
+	/// Opened via GitHub URL (remote)
+	Remote,
+}
+
+/// Options for controlling sync behavior.
+#[derive(Debug, Clone, Default)]
+pub struct SyncOptions {
+	/// How the issue was opened (local path vs remote URL)
+	pub source: OpenSource,
+	/// Force through conflicts by taking the source side
+	pub force: bool,
+	/// Reset to source state, skipping sync entirely
+	pub reset: bool,
+}
 
 use std::path::Path;
 
@@ -22,6 +47,7 @@ use super::{
 	git::{commit_issue_changes, is_git_initialized, load_consensus_issue},
 	github_sync::IssueGitHubExt,
 	meta::load_issue_meta_from_path,
+	tree::{fetch_full_issue_tree, resolve_tree},
 	util::expand_blocker_shorthand,
 };
 use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
@@ -360,7 +386,16 @@ impl Modifier {
 }
 
 /// Inner sync logic shared by open_local_issue and sync_issue_file.
-async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, issue_number: u64, issue: &mut Issue, extension: Extension) -> Result<()> {
+async fn sync_issue_to_github_inner(
+	gh: &BoxedGitHubClient,
+	issue_file_path: &Path,
+	owner: &str,
+	repo: &str,
+	issue_number: u64,
+	issue: &mut Issue,
+	extension: Extension,
+	sync_opts: &SyncOptions,
+) -> Result<()> {
 	// Check if this is a pending issue (created via --touch, not yet on GitHub)
 	let is_pending = issue.meta.url.is_none();
 
@@ -380,46 +415,46 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 			(0, None)
 		}
 	} else {
-		// Normal flow: use consensus-based sync
-		let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
-			gh.fetch_authenticated_user(),
-			gh.fetch_issue(owner, repo, issue_number),
-			gh.fetch_comments(owner, repo, issue_number),
-			gh.fetch_sub_issues(owner, repo, issue_number),
-		)?;
-
-		// Build Issue from current GitHub state
-		let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, owner, repo, &current_user);
+		// Normal flow: use per-node consensus-based sync
+		// Fetch the complete remote issue tree (level-by-level parallel fetching)
+		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
 		// Consensus is the last committed state in git
-		// If no consensus (new file), treat as "only local changed"
-		let local_changed = consensus.as_ref().map(|c| *issue != *c).unwrap_or(true);
-		let remote_changed = consensus.as_ref().map(|c| remote_issue != *c).unwrap_or(false);
+		// Resolve tree node-by-node with timestamp-based auto-resolution
+		let resolution = resolve_tree(issue, consensus.as_ref(), &remote_issue);
 
-		match (local_changed, remote_changed) {
-			(false, false) => {
-				// Neither changed - nothing to do
-				tracing::debug!("[sync] No changes detected");
-			}
-			(true, false) => {
-				// Only local changed - push to remote (normal sync flow)
-				tracing::debug!("[sync] Only local changed, pushing to remote");
-			}
-			(false, true) => {
-				// Only remote changed - accept remote as new truth
-				tracing::debug!("[sync] Only remote changed, accepting remote state");
-				let remote_content = remote_issue.serialize();
-				std::fs::write(issue_file_path, &remote_content)?;
-				// Commit the remote state update to git
-				commit_issue_changes(issue_file_path, owner, repo, issue_number, None)?;
-				println!("Remote changed, local file updated.");
-				return Ok(());
-			}
-			(true, true) => {
-				// Both changed - conflict!
-				tracing::debug!("[sync] Both local and remote changed, conflict detected");
+		// Handle conflicts if any remain after auto-resolution
+		let (local_needs_update, remote_needs_update) = if resolution.has_conflicts {
+			// Note: force only applies to Local source here. Remote source (GitHub URL) applies
+			// force during fetch_and_store_issue, before the editor opens. By the time we reach
+			// sync, any edits the user made ARE the local state we want to preserve and push.
+			if sync_opts.force && sync_opts.source == OpenSource::Local {
+				// Force mode with local source: keep local version, push to remote
+				tracing::debug!("[sync] Force mode: taking local version, pushing to remote");
+				println!("Force: taking local version (conflicts overwritten)");
+				(false, true) // Push local to remote
+			} else {
+				tracing::debug!("[sync] Unresolvable conflicts detected at paths: {:?}", resolution.conflict_paths);
 				return handle_divergence(issue_file_path, owner, repo, issue_number, &remote_issue).await;
 			}
+		} else {
+			// No conflicts, use resolution results
+			// Apply resolved changes
+			if resolution.local_needs_update {
+				// Update local with auto-resolved remote changes
+				tracing::debug!("[sync] Applying auto-resolved remote changes to local");
+				*issue = resolution.resolved.clone();
+				let content = issue.serialize();
+				std::fs::write(issue_file_path, &content)?;
+			}
+			(resolution.local_needs_update, resolution.remote_needs_update)
+		};
+
+		if !local_needs_update && !remote_needs_update {
+			// Neither changed - nothing to do
+			tracing::debug!("[sync] No changes detected");
+		} else if remote_needs_update {
+			tracing::debug!("[sync] Pushing local changes to remote");
 		}
 
 		// Collect and execute actions (for local changes being pushed)
@@ -530,13 +565,13 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 }
 
 /// Open a local issue file with the default editor modifier.
-pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool) -> Result<()> {
-	modify_and_sync_issue(gh, issue_file_path, offline, Modifier::Editor).await?;
+pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, sync_opts: SyncOptions) -> Result<()> {
+	modify_and_sync_issue(gh, issue_file_path, offline, Modifier::Editor, sync_opts).await?;
 	Ok(())
 }
 
 /// Modify a local issue file using the given modifier, then sync changes back to GitHub.
-pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier) -> Result<ModifyResult> {
+pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier, sync_opts: SyncOptions) -> Result<ModifyResult> {
 	use super::{conflict::check_any_conflicts, files::extract_owner_repo_from_path, meta::is_virtual_project};
 
 	// Check for any unresolved conflicts first
@@ -610,8 +645,18 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		return Ok(result);
 	}
 
+	// Handle reset mode
+	// Note: reset only applies to Local source here. Remote source (GitHub URL) applies reset during fetch_and_store_issue, before the editor opens. By the time we reach sync, any edits the user made ARE the local state we want to preserve and push.
+	if sync_opts.reset && sync_opts.source == OpenSource::Local {
+		// Reset with local source: skip sync, keep local as-is
+		println!("Reset: keeping local state (no sync to GitHub)");
+		// Commit local state to git
+		commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
+		return Ok(result);
+	}
+
 	// Use shared sync logic
-	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, meta.issue_number, &mut issue, extension).await?;
+	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, meta.issue_number, &mut issue, extension, &sync_opts).await?;
 
 	Ok(result)
 }

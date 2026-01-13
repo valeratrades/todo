@@ -114,21 +114,54 @@ impl TestContext {
 
 	/// Run `open` command with mock GitHub state and editor pipe.
 	///
-	/// This is used for sync tests where we need to:
-	/// 1. Set up mock GitHub state
-	/// 2. Spawn the command
-	/// 3. Signal the editor pipe to close
-	/// 4. Wait for completion
-	///
 	/// Returns (exit_status, stdout, stderr).
 	pub fn run_open(&self, issue_path: &Path) -> (ExitStatus, String, String) {
+		self.open(issue_path).run()
+	}
+
+	/// Create an OpenBuilder for running the `open` command with various options.
+	pub fn open<'a>(&'a self, issue_path: &'a Path) -> OpenBuilder<'a> {
+		OpenBuilder {
+			ctx: self,
+			issue_path,
+			extra_args: Vec::new(),
+			edit_to: None,
+		}
+	}
+}
+
+/// Builder for running the `open` command with various options.
+pub struct OpenBuilder<'a> {
+	ctx: &'a TestContext,
+	issue_path: &'a Path,
+	extra_args: Vec<&'a str>,
+	edit_to: Option<todo::Issue>,
+}
+
+impl<'a> OpenBuilder<'a> {
+	/// Add extra CLI arguments.
+	pub fn args(mut self, args: &[&'a str]) -> Self {
+		self.extra_args.extend(args);
+		self
+	}
+
+	/// Edit the file to this issue while "editor is open".
+	pub fn edit(mut self, issue: &todo::Issue) -> Self {
+		self.edit_to = Some(issue.clone());
+		self
+	}
+
+	/// Run the command and return (exit_status, stdout, stderr).
+	pub fn run(self) -> (ExitStatus, String, String) {
 		let mut cmd = Command::new(get_binary_path());
-		cmd.args(["--mock", "open", issue_path.to_str().unwrap()]);
-		for (key, value) in self.xdg.env_vars() {
+		cmd.arg("--mock").arg("open");
+		cmd.args(&self.extra_args);
+		cmd.arg(self.issue_path.to_str().unwrap());
+		for (key, value) in self.ctx.xdg.env_vars() {
 			cmd.env(key, value);
 		}
-		cmd.env("TODO_MOCK_STATE", &self.mock_state_path);
-		cmd.env("TODO_MOCK_PIPE", &self.pipe_path);
+		cmd.env("TODO_MOCK_STATE", &self.ctx.mock_state_path);
+		cmd.env("TODO_MOCK_PIPE", &self.ctx.pipe_path);
 		cmd.stdout(std::process::Stdio::piped());
 		cmd.stderr(std::process::Stdio::piped());
 
@@ -137,8 +170,13 @@ impl TestContext {
 		// Give the process time to start and begin waiting on the pipe
 		std::thread::sleep(std::time::Duration::from_millis(100));
 
+		// Edit the file while "editor is open" if requested
+		if let Some(issue) = &self.edit_to {
+			std::fs::write(self.issue_path, issue.serialize()).unwrap();
+		}
+
 		// Signal the editor to close
-		let mut pipe = std::fs::OpenOptions::new().write(true).open(&self.pipe_path).unwrap();
+		let mut pipe = std::fs::OpenOptions::new().write(true).open(&self.ctx.pipe_path).unwrap();
 		pipe.write_all(b"x").unwrap();
 		drop(pipe);
 
@@ -149,7 +187,9 @@ impl TestContext {
 			String::from_utf8_lossy(&output.stderr).into_owned(),
 		)
 	}
+}
 
+impl TestContext {
 	/// Read a file from the data directory.
 	pub fn read(&self, relative_path: &str) -> String {
 		self.xdg.read_data(relative_path.trim_start_matches('/'))

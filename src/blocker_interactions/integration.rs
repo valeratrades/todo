@@ -134,7 +134,7 @@ fn get_current_source() -> Result<IssueSource> {
 /// This is the default mode for blocker commands.
 pub async fn main_integrated(settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat, offline: bool) -> Result<()> {
 	use super::{io::Command, source::BlockerSource};
-	use crate::open_interactions::{Modifier, modify_and_sync_issue};
+	use crate::open_interactions::{Modifier, SyncOptions, modify_and_sync_issue};
 
 	match command {
 		Command::Set { pattern, touch: _ } => {
@@ -237,7 +237,7 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 
 			// Use the unified modify_and_sync workflow
 			let gh = crate::github::create_client(settings)?;
-			let result = modify_and_sync_issue(&gh, &issue_path, offline, Modifier::BlockerPop).await?;
+			let result = modify_and_sync_issue(&gh, &issue_path, offline, Modifier::BlockerPop, SyncOptions::default()).await?;
 
 			// Output results
 			if let Some(output) = result.output {
