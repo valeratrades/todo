@@ -96,12 +96,13 @@ fn fetch_children_recursive<'a>(
 				});
 			}
 
-			// Build sub-issue children
+			// Build sub-issue children, filtering out duplicates
 			child.children = sub_issues
 				.iter()
+				.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
 				.map(|si| {
 					let url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
-					let close_state = if si.state == "closed" { CloseState::Closed } else { CloseState::Open };
+					let close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 					let timestamp = si.updated_at.parse::<Timestamp>().ok();
 					Issue {
 						meta: IssueMeta {

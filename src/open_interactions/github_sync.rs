@@ -43,7 +43,7 @@ impl IssueGitHubExt for Issue {
 	fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Issue {
 		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
 		let issue_owned = issue.user.login == current_user;
-		let close_state = if issue.state == "closed" { CloseState::Closed } else { CloseState::Open };
+		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
 
 		let meta = IssueMeta {
 			title: issue.title.clone(),
@@ -75,11 +75,13 @@ impl IssueGitHubExt for Issue {
 		}
 
 		// Build children from sub-issues (shallow - just metadata)
+		// Filter out duplicates - they shouldn't appear in local representation
 		let children: Vec<Issue> = sub_issues
 			.iter()
+			.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
 			.map(|si| {
 				let child_url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
-				let child_close_state = if si.state == "closed" { CloseState::Closed } else { CloseState::Open };
+				let child_close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 				let child_timestamp = si.updated_at.parse::<Timestamp>().ok();
 				Issue {
 					meta: IssueMeta {
@@ -174,6 +176,7 @@ mod tests {
 			labels: vec![GitHubLabel { name: "bug".to_string() }],
 			user: GitHubUser { login: "me".to_string() },
 			state: "open".to_string(),
+			state_reason: None,
 			updated_at: "2024-01-15T12:00:00Z".to_string(),
 		};
 
@@ -190,6 +193,7 @@ mod tests {
 			labels: vec![],
 			user: GitHubUser { login: "me".to_string() },
 			state: "closed".to_string(),
+			state_reason: Some("completed".to_string()),
 			updated_at: "2024-01-15T12:00:00Z".to_string(),
 		}];
 
@@ -225,6 +229,7 @@ mod tests {
 				labels: vec![],
 				user: GitHubUser { login: "me".to_string() },
 				state: state.to_string(),
+				state_reason: None,
 				updated_at: "2024-01-15T12:00:00Z".to_string(),
 			};
 			Issue::from_github(&gh_issue, &[], &[], "o", "r", "me")

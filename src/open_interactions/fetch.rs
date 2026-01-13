@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use todo::{Extension, FetchedIssue};
+use todo::{CloseState, Extension, FetchedIssue};
 use v_utils::prelude::*;
 
 use super::{
@@ -100,8 +100,11 @@ async fn store_issue_node(
 	extension: &Extension,
 	ancestors: Vec<FetchedIssue>,
 ) -> Result<PathBuf> {
+	// Filter out duplicate sub-issues - they shouldn't appear locally
+	let filtered_sub_issues: Vec<_> = sub_issues.iter().filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref())).cloned().collect();
+
 	let issue_closed = issue.state == "closed";
-	let has_sub_issues = !sub_issues.is_empty();
+	let has_sub_issues = !filtered_sub_issues.is_empty();
 
 	// Determine file path - use directory format if there are sub-issues
 	let issue_file_path = if has_sub_issues {
@@ -136,7 +139,7 @@ async fn store_issue_node(
 	}
 
 	// Format and write content
-	let content = format_issue(issue, comments, sub_issues, owner, repo, current_user, *extension, &ancestors);
+	let content = format_issue(issue, comments, &filtered_sub_issues, owner, repo, current_user, *extension, &ancestors);
 	std::fs::write(&issue_file_path, &content)?;
 
 	// Build ancestors for children (current issue becomes part of ancestors)
@@ -145,7 +148,7 @@ async fn store_issue_node(
 	child_ancestors.push(this_issue);
 
 	// Recursively fetch and store all sub-issues
-	for sub_issue in sub_issues {
+	for sub_issue in &filtered_sub_issues {
 		if let Err(e) = store_issue_tree(gh, owner, repo, sub_issue.number, extension, child_ancestors.clone()).await {
 			eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
 		}

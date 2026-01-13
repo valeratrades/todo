@@ -25,6 +25,7 @@ struct MockIssueData {
 	title: String,
 	body: String,
 	state: String,
+	state_reason: Option<String>,
 	labels: Vec<String>,
 	owner_login: String,
 }
@@ -131,6 +132,7 @@ impl MockGitHubClient {
 				let title = issue.get("title").and_then(|v| v.as_str()).unwrap_or("");
 				let body = issue.get("body").and_then(|v| v.as_str()).unwrap_or("");
 				let state_str = issue.get("state").and_then(|v| v.as_str()).unwrap_or("open");
+				let state_reason = issue.get("state_reason").and_then(|v| v.as_str()).map(|s| s.to_string());
 				let owner_login = issue.get("owner_login").and_then(|v| v.as_str()).unwrap_or("mock_user");
 
 				let labels: Vec<String> = issue
@@ -148,6 +150,7 @@ impl MockGitHubClient {
 					title: title.to_string(),
 					body: body.to_string(),
 					state: state_str.to_string(),
+					state_reason: state_reason.clone(),
 					labels,
 					owner_login: owner_login.to_string(),
 				};
@@ -200,6 +203,7 @@ impl MockGitHubClient {
 			title: title.to_string(),
 			body: body.to_string(),
 			state: state.to_string(),
+			state_reason: None,
 			labels: labels.into_iter().map(|s| s.to_string()).collect(),
 			owner_login: owner_login.to_string(),
 		};
@@ -267,6 +271,7 @@ impl MockGitHubClient {
 			labels: data.labels.iter().map(|name| GitHubLabel { name: name.clone() }).collect(),
 			user: GitHubUser { login: data.owner_login.clone() },
 			state: data.state.clone(),
+			state_reason: data.state_reason.clone(),
 			updated_at: "2024-01-15T12:00:00Z".to_string(), // Mock timestamp
 		}
 	}
@@ -460,6 +465,7 @@ impl GitHubClient for MockGitHubClient {
 			title: title.to_string(),
 			body: body.to_string(),
 			state: "open".to_string(),
+			state_reason: None,
 			labels: Vec::new(),
 			owner_login: self.user_login.clone(),
 		};
@@ -612,7 +618,7 @@ mod tests {
 
 		// Fetch sub-issues
 		let sub_issues = client.fetch_sub_issues("owner", "repo", 1).await.unwrap();
-		assert_debug_snapshot!(format!("{sub_issues:?}"), @r#""[GitHubIssue { number: 2, title: \"Child Issue\", body: None, labels: [], user: GitHubUser { login: \"testuser\" }, state: \"open\", updated_at: \"2024-01-15T12:00:00Z\" }]""#);
+		assert_debug_snapshot!(format!("{sub_issues:?}"), @r#""[GitHubIssue { number: 2, title: \"Child Issue\", body: None, labels: [], user: GitHubUser { login: \"testuser\" }, state: \"open\", state_reason: None, updated_at: \"2024-01-15T12:00:00Z\" }]""#);
 	}
 
 	#[tokio::test]

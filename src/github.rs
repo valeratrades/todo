@@ -7,7 +7,7 @@ use v_utils::prelude::*;
 
 use crate::config::LiveSettings;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct GitHubIssue {
 	pub number: u64,
 	pub title: String,
@@ -15,11 +15,14 @@ pub struct GitHubIssue {
 	pub labels: Vec<GitHubLabel>,
 	pub user: GitHubUser,
 	pub state: String, // "open" or "closed" //TODO!!!!: add an actual enum
+	/// Reason for the state (e.g., "completed", "not_planned", "duplicate")
+	/// Only present for closed issues.
+	pub state_reason: Option<String>,
 	/// Last time the issue was updated (ISO 8601 format)
 	pub updated_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct GitHubLabel {
 	pub name: String,
 }

@@ -287,17 +287,30 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 	let remote_content = remote_issue.serialize();
 	std::fs::write(issue_file_path, &remote_content)?;
 
-	// Commit remote state
+	// Commit remote state (if there are any changes)
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
 
-	let remote_commit_msg = format!("Remote state for {owner}/{repo}#{issue_number}");
-	let commit_status = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &remote_commit_msg]).status()?;
+	// Check if there are changes to commit
+	let diff_status = Command::new("git").args(["-C", data_dir_str, "diff", "--cached", "--quiet"]).status()?;
 
-	if !commit_status.success() {
-		// Restore original branch
+	if !diff_status.success() {
+		// There are staged changes, commit them
+		let remote_commit_msg = format!("Remote state for {owner}/{repo}#{issue_number}");
+		let commit_status = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &remote_commit_msg]).status()?;
+
+		if !commit_status.success() {
+			// Restore original branch
+			let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
+			let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).status();
+			bail!("Failed to commit remote state");
+		}
+	} else {
+		// No changes - remote state matches local, no merge needed
+		// Just switch back and clean up
 		let _ = Command::new("git").args(["-C", data_dir_str, "checkout", &current_branch]).status();
 		let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).status();
-		bail!("Failed to commit remote state");
+		println!("Remote state matches local, no changes needed.");
+		return Ok(());
 	}
 
 	// Switch back to original branch

@@ -23,15 +23,6 @@ pub trait GitExt {
 	/// Returns the path to the issue file.
 	fn setup_issue_with_local_changes(&self, owner: &str, repo: &str, number: u64, consensus: &Issue, local: &Issue) -> PathBuf;
 
-	/// Set up mock GitHub with a single issue (no sub-issues).
-	fn setup_remote(&self, owner: &str, repo: &str, number: u64, issue: &Issue);
-
-	/// Set up mock GitHub with an issue and its sub-issues.
-	fn setup_remote_with_children(&self, owner: &str, repo: &str, number: u64, issue: &Issue, child_numbers: &[u64]);
-
-	/// Set up mock GitHub with multiple independent issues.
-	fn setup_remote_issues(&self, issues: &[((&str, &str, u64), &Issue)]);
-
 	/// Get the flat format path for an issue: `{number}_-_{title}.md`
 	fn flat_issue_path(&self, owner: &str, repo: &str, number: u64, title: &str) -> PathBuf;
 
@@ -40,6 +31,9 @@ pub trait GitExt {
 
 	/// Get the issue path after sync (flat if no children, directory if has children).
 	fn issue_path_after_sync(&self, owner: &str, repo: &str, number: u64, title: &str, has_children: bool) -> PathBuf;
+
+	/// Start building mock remote state.
+	fn remote(&self) -> RemoteBuilder<'_>;
 }
 
 impl GitExt for TestContext {
@@ -82,76 +76,6 @@ impl GitExt for TestContext {
 		path
 	}
 
-	fn setup_remote(&self, owner: &str, repo: &str, number: u64, issue: &Issue) {
-		let state = serde_json::json!({
-			"issues": [{
-				"owner": owner,
-				"repo": repo,
-				"number": number,
-				"title": issue.meta.title,
-				"body": issue.body(),
-				"state": if issue.meta.close_state.is_closed() { "closed" } else { "open" },
-				"owner_login": "mock_user"
-			}]
-		});
-		self.setup_mock_state(&state);
-	}
-
-	fn setup_remote_with_children(&self, owner: &str, repo: &str, number: u64, issue: &Issue, child_numbers: &[u64]) {
-		let mut issues = vec![serde_json::json!({
-			"owner": owner,
-			"repo": repo,
-			"number": number,
-			"title": issue.meta.title,
-			"body": issue.body(),
-			"state": if issue.meta.close_state.is_closed() { "closed" } else { "open" },
-			"owner_login": "mock_user"
-		})];
-
-		for (child, &child_num) in issue.children.iter().zip(child_numbers.iter()) {
-			issues.push(serde_json::json!({
-				"owner": owner,
-				"repo": repo,
-				"number": child_num,
-				"title": child.meta.title,
-				"body": child.comments.first().map(|c| c.body.as_str()).unwrap_or(""),
-				"state": if child.meta.close_state.is_closed() { "closed" } else { "open" },
-				"owner_login": "mock_user"
-			}));
-		}
-
-		let state = serde_json::json!({
-			"issues": issues,
-			"sub_issues": [{
-				"owner": owner,
-				"repo": repo,
-				"parent": number,
-				"children": child_numbers
-			}]
-		});
-		self.setup_mock_state(&state);
-	}
-
-	fn setup_remote_issues(&self, issues: &[((&str, &str, u64), &Issue)]) {
-		let json_issues: Vec<_> = issues
-			.iter()
-			.map(|((owner, repo, number), issue)| {
-				serde_json::json!({
-					"owner": owner,
-					"repo": repo,
-					"number": number,
-					"title": issue.meta.title,
-					"body": issue.body(),
-					"state": if issue.meta.close_state.is_closed() { "closed" } else { "open" },
-					"owner_login": "mock_user"
-				})
-			})
-			.collect();
-
-		let state = serde_json::json!({ "issues": json_issues });
-		self.setup_mock_state(&state);
-	}
-
 	fn flat_issue_path(&self, owner: &str, repo: &str, number: u64, title: &str) -> PathBuf {
 		let sanitized = title.replace(' ', "_");
 		self.xdg.data_dir().join(format!("issues/{owner}/{repo}/{number}_-_{sanitized}.md"))
@@ -168,5 +92,169 @@ impl GitExt for TestContext {
 		} else {
 			self.flat_issue_path(owner, repo, number, title)
 		}
+	}
+
+	fn remote(&self) -> RemoteBuilder<'_> {
+		RemoteBuilder::new(self)
+	}
+}
+
+/// Builder for setting up mock GitHub remote state.
+///
+/// Usage:
+/// ```ignore
+/// ctx.remote()
+///     .issue("owner", "repo", 1, &parent_issue)
+///     .sub_issue("owner", "repo", 1, 2, &child_issue)
+///     .build();
+/// ```
+pub struct RemoteBuilder<'a> {
+	ctx: &'a TestContext,
+	issues: Vec<MockIssue>,
+	sub_issue_relations: Vec<SubIssueRelation>,
+}
+
+struct MockIssue {
+	owner: String,
+	repo: String,
+	number: u64,
+	title: String,
+	body: String,
+	state: String,
+	state_reason: Option<String>,
+}
+
+struct SubIssueRelation {
+	owner: String,
+	repo: String,
+	parent: u64,
+	child: u64,
+}
+
+impl<'a> RemoteBuilder<'a> {
+	fn new(ctx: &'a TestContext) -> Self {
+		Self {
+			ctx,
+			issues: Vec::new(),
+			sub_issue_relations: Vec::new(),
+		}
+	}
+
+	/// Add an issue to the remote.
+	pub fn issue(mut self, owner: &str, repo: &str, number: u64, issue: &Issue) -> Self {
+		self.issues.push(MockIssue {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+			number,
+			title: issue.meta.title.clone(),
+			body: issue.body(),
+			state: issue.meta.close_state.to_github_state().to_string(),
+			state_reason: issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
+		});
+		self
+	}
+
+	/// Add a sub-issue relationship and the child issue.
+	pub fn sub_issue(mut self, owner: &str, repo: &str, parent_number: u64, child_number: u64, child_issue: &Issue) -> Self {
+		// Add the child issue
+		self.issues.push(MockIssue {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+			number: child_number,
+			title: child_issue.meta.title.clone(),
+			body: child_issue.body(),
+			state: child_issue.meta.close_state.to_github_state().to_string(),
+			state_reason: child_issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
+		});
+
+		// Add the relationship
+		self.sub_issue_relations.push(SubIssueRelation {
+			owner: owner.to_string(),
+			repo: repo.to_string(),
+			parent: parent_number,
+			child: child_number,
+		});
+
+		self
+	}
+
+	/// Build and apply the mock state.
+	pub fn build(self) {
+		let issues: Vec<serde_json::Value> = self
+			.issues
+			.into_iter()
+			.map(|i| {
+				let mut json = serde_json::json!({
+					"owner": i.owner,
+					"repo": i.repo,
+					"number": i.number,
+					"title": i.title,
+					"body": i.body,
+					"state": i.state,
+					"owner_login": "mock_user"
+				});
+				if let Some(reason) = i.state_reason {
+					json["state_reason"] = serde_json::Value::String(reason);
+				}
+				json
+			})
+			.collect();
+
+		// Group sub-issue relations by (owner, repo, parent)
+		let mut sub_issues_map: std::collections::HashMap<(String, String, u64), Vec<u64>> = std::collections::HashMap::new();
+		for rel in self.sub_issue_relations {
+			sub_issues_map.entry((rel.owner, rel.repo, rel.parent)).or_default().push(rel.child);
+		}
+
+		let sub_issues: Vec<serde_json::Value> = sub_issues_map
+			.into_iter()
+			.map(|((owner, repo, parent), children)| {
+				serde_json::json!({
+					"owner": owner,
+					"repo": repo,
+					"parent": parent,
+					"children": children
+				})
+			})
+			.collect();
+
+		let state = if sub_issues.is_empty() {
+			serde_json::json!({ "issues": issues })
+		} else {
+			serde_json::json!({
+				"issues": issues,
+				"sub_issues": sub_issues
+			})
+		};
+
+		self.ctx.setup_mock_state(&state);
+	}
+}
+
+// Legacy compatibility methods - delegate to RemoteBuilder
+impl TestContext {
+	/// Set up mock GitHub with a single issue (no sub-issues).
+	pub fn setup_remote(&self, owner: &str, repo: &str, number: u64, issue: &Issue) {
+		self.remote().issue(owner, repo, number, issue).build();
+	}
+
+	/// Set up mock GitHub with an issue and its sub-issues.
+	pub fn setup_remote_with_children(&self, owner: &str, repo: &str, number: u64, issue: &Issue, child_numbers: &[u64]) {
+		let mut builder = self.remote().issue(owner, repo, number, issue);
+
+		for (child, &child_num) in issue.children.iter().zip(child_numbers.iter()) {
+			builder = builder.sub_issue(owner, repo, number, child_num, child);
+		}
+
+		builder.build();
+	}
+
+	/// Set up mock GitHub with multiple independent issues.
+	pub fn setup_remote_issues(&self, issues: &[((&str, &str, u64), &Issue)]) {
+		let mut builder = self.remote();
+		for ((owner, repo, number), issue) in issues {
+			builder = builder.issue(owner, repo, *number, issue);
+		}
+		builder.build();
 	}
 }

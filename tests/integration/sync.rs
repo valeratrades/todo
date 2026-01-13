@@ -311,3 +311,107 @@ fn test_closing_issue_syncs_state_change() {
 		"Expected state change sync. stdout: {stdout}"
 	);
 }
+
+/// Sub-issues closed as duplicates should NOT appear in the pulled remote state.
+/// GitHub marks these with state_reason="duplicate" - they should be filtered out entirely.
+#[test]
+fn test_duplicate_sub_issues_filtered_from_remote() {
+	let ctx = TestContext::new("");
+	ctx.init_git();
+
+	// Create issues with proper CloseState
+	let parent = parse("- [ ] Parent Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tparent body\n");
+
+	let mut normal_closed = parse("- [x] Normal Closed Sub <!-- https://github.com/testowner/testrepo/issues/2 -->\n\tsub body\n");
+	normal_closed.meta.close_state = todo::CloseState::Closed;
+
+	let mut duplicate = parse("- [x] Duplicate Sub <!-- https://github.com/testowner/testrepo/issues/3 -->\n\tduplicate body\n");
+	duplicate.meta.close_state = todo::CloseState::Duplicate(2); // duplicate of #2
+
+	// Set up remote with parent and two sub-issues
+	ctx.remote()
+		.issue(OWNER, REPO, 1, &parent)
+		.sub_issue(OWNER, REPO, 1, 2, &normal_closed)
+		.sub_issue(OWNER, REPO, 1, 3, &duplicate)
+		.build();
+
+	// Open via URL to fetch from remote
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed. stderr: {stderr}");
+
+	// Check the created file - duplicate sub-issue should NOT be present
+	let issue_path = ctx.dir_issue_path(OWNER, REPO, 1, "Parent Issue");
+	let content = std::fs::read_to_string(&issue_path).unwrap();
+
+	eprintln!("File content:\n{content}");
+
+	// Normal closed sub-issue should appear
+	assert!(content.contains("Normal Closed Sub"), "Normal closed sub-issue should appear. Got: {content}");
+	assert!(content.contains("[x]"), "Normal closed sub should show as [x]. Got: {content}");
+
+	// Duplicate sub-issue should NOT appear at all
+	assert!(
+		!content.contains("Duplicate Sub"),
+		"Duplicate sub-issue should NOT appear in local representation. Got: {content}"
+	);
+}
+
+/// Opening an issue twice when local matches remote should succeed (no-op).
+/// This tests the case where you:
+/// 1. Open an issue from URL (fetches remote)
+/// 2. Open again without making changes
+/// The second open should succeed, not fail with "Failed to commit remote state".
+#[test]
+fn test_open_unchanged_succeeds() {
+	let ctx = TestContext::new("");
+	ctx.init_git();
+
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tissue body\n");
+
+	// Set up remote with just the issue
+	ctx.remote().issue(OWNER, REPO, 1, &issue).build();
+
+	// First open via URL
+	let (status, _stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+	assert!(status.success(), "First open should succeed. stderr: {stderr}");
+
+	// Second open - should also succeed (no-op since nothing changed)
+	let issue_path = ctx.flat_issue_path(OWNER, REPO, 1, "Test Issue");
+	let (status, _stdout, stderr) = ctx.open(&issue_path).run();
+	assert!(status.success(), "Second open (unchanged) should succeed. stderr: {stderr}");
+}
+
+/// Opening an issue by number when remote state matches local should succeed.
+/// Reproduces: https://github.com/valeratrades/todo/issues/83
+/// The issue happens when:
+/// 1. `todo open --reset <url>` fetches and stores remote state
+/// 2. `todo open <number>` is called (by number, not path)
+/// 3. Remote state hasn't changed, but the merge machinery still runs
+/// 4. Git commit fails because there's nothing to commit
+#[test]
+fn test_open_by_number_unchanged_succeeds() {
+	let ctx = TestContext::new("");
+	ctx.init_git();
+
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tissue body\n");
+
+	// Set up remote
+	ctx.remote().issue(OWNER, REPO, 1, &issue).build();
+
+	// First open via URL with --reset
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).run();
+	eprintln!("First open stdout: {stdout}");
+	eprintln!("First open stderr: {stderr}");
+	assert!(status.success(), "First open should succeed. stderr: {stderr}");
+
+	// Second open by number (simulating the failing case)
+	// This uses the mock, so remote state is the same
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+	eprintln!("Second open stdout: {stdout}");
+	eprintln!("Second open stderr: {stderr}");
+	assert!(status.success(), "Second open (unchanged) should succeed. stderr: {stderr}");
+}

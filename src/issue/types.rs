@@ -179,6 +179,43 @@ impl CloseState {
 		}
 	}
 
+	/// Convert to GitHub API state_reason string (for closed issues)
+	pub fn to_github_state_reason(&self) -> Option<&'static str> {
+		match self {
+			CloseState::Open => None,
+			CloseState::Closed => Some("completed"),
+			CloseState::NotPlanned => Some("not_planned"),
+			CloseState::Duplicate(_) => Some("duplicate"),
+		}
+	}
+
+	/// Create from GitHub API state and state_reason.
+	///
+	/// # Panics
+	/// Panics if state_reason is "duplicate" - duplicates must be filtered before calling this.
+	pub fn from_github(state: &str, state_reason: Option<&str>) -> Self {
+		assert!(state_reason != Some("duplicate"), "Duplicate issues must be filtered before calling from_github");
+
+		match (state, state_reason) {
+			("open", _) => CloseState::Open,
+			("closed", Some("not_planned")) => CloseState::NotPlanned,
+			("closed", Some("completed") | None) => CloseState::Closed,
+			("closed", Some(unknown)) => {
+				tracing::warn!("Unknown state_reason '{unknown}', treating as Closed");
+				CloseState::Closed
+			}
+			(unknown, _) => {
+				tracing::warn!("Unknown state '{unknown}', treating as Open");
+				CloseState::Open
+			}
+		}
+	}
+
+	/// Returns true if this represents a duplicate (should be filtered from fetch results)
+	pub fn is_duplicate_reason(state_reason: Option<&str>) -> bool {
+		state_reason == Some("duplicate")
+	}
+
 	/// Parse from checkbox content (the character(s) inside `[ ]`)
 	pub fn from_checkbox(content: &str) -> Option<Self> {
 		let content = content.trim();
