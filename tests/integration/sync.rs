@@ -11,9 +11,8 @@
 use std::path::PathBuf;
 
 use todo::{Issue, ParseContext};
-use v_fixtures::fs_standards::git::Git;
 
-use crate::common::TestContext;
+use crate::common::{TestContext, git::GitExt};
 
 /// Default test repository coordinates (only needed for file paths and mock setup)
 const DEFAULT_OWNER: &str = "testowner";
@@ -40,12 +39,6 @@ trait SyncTestExt {
 
 	/// Set up mock GitHub to return an issue.
 	fn setup_remote(&self, issue: &Issue);
-
-	/// Write metadata file with the given issue as the "original" (last synced) state.
-	fn write_meta(&self, original: &Issue);
-
-	/// Initialize git in the issues directory.
-	fn init_git(&self) -> Git;
 }
 
 impl SyncTestExt for TestContext {
@@ -58,7 +51,7 @@ impl SyncTestExt for TestContext {
 		self.xdg.write_data(&format!("{issues_dir}/{issue_filename}"), &local.serialize());
 
 		// Write metadata with original as the consensus state
-		self.write_meta(original);
+		self.write_meta(DEFAULT_OWNER, DEFAULT_REPO, DEFAULT_NUMBER, original);
 
 		self.xdg.data_dir().join(&issues_dir).join(&issue_filename)
 	}
@@ -77,37 +70,6 @@ impl SyncTestExt for TestContext {
 			}]
 		});
 		self.setup_mock_state(&state);
-	}
-
-	fn write_meta(&self, original: &Issue) {
-		let body = original.body();
-		let meta_content = serde_json::json!({
-			"owner": DEFAULT_OWNER,
-			"repo": DEFAULT_REPO,
-			"issues": {
-				DEFAULT_NUMBER.to_string(): {
-					"issue_number": DEFAULT_NUMBER,
-					"title": original.meta.title,
-					"extension": "md",
-					"original_issue_body": body,
-					"original_comments": [],
-					"original_sub_issues": [],
-					"parent_issue": null,
-					"original_close_state": "Open"
-				}
-			},
-			"virtual_project": false,
-			"next_virtual_issue_number": 0
-		});
-		self.xdg.write_data(
-			&format!("issues/{DEFAULT_OWNER}/{DEFAULT_REPO}/.meta.json"),
-			&serde_json::to_string_pretty(&meta_content).unwrap(),
-		);
-	}
-
-	fn init_git(&self) -> Git {
-		let issues_dir = self.xdg.data_dir().join("issues");
-		Git::init(issues_dir)
 	}
 }
 

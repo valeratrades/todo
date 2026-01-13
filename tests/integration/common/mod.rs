@@ -18,6 +18,8 @@
 //! assert!(status.success());
 //! ```
 
+pub mod git;
+
 use std::{
 	io::Write,
 	path::{Path, PathBuf},
@@ -25,6 +27,7 @@ use std::{
 	sync::OnceLock,
 };
 
+use todo::Issue;
 use v_fixtures::{Fixture, fs_standards::xdg::Xdg};
 
 static BINARY_COMPILED: OnceLock<()> = OnceLock::new();
@@ -192,5 +195,33 @@ impl TestContext {
 	/// The issue parameter should be a serde_json::Value representing the mock state.
 	pub fn setup_mock_state(&self, state: &serde_json::Value) {
 		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(state).unwrap()).unwrap();
+	}
+
+	/// Write metadata file for an issue (the "original" / last synced state).
+	///
+	/// This is used by sync tests to establish the consensus state that
+	/// both local and remote changes are compared against.
+	pub fn write_meta(&self, owner: &str, repo: &str, issue_number: u64, original: &Issue) {
+		let body = original.body();
+		let meta_content = serde_json::json!({
+			"owner": owner,
+			"repo": repo,
+			"issues": {
+				issue_number.to_string(): {
+					"issue_number": issue_number,
+					"title": original.meta.title,
+					"extension": "md",
+					"original_issue_body": body,
+					"original_comments": [],
+					"original_sub_issues": [],
+					"parent_issue": null,
+					"original_close_state": "Open"
+				}
+			},
+			"virtual_project": false,
+			"next_virtual_issue_number": 0
+		});
+		self.xdg
+			.write_data(&format!("issues/{owner}/{repo}/.meta.json"), &serde_json::to_string_pretty(&meta_content).unwrap());
 	}
 }
