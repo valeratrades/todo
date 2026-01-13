@@ -182,7 +182,7 @@ impl TestContext {
 			ctx: self,
 			url,
 			extra_args: Vec::new(),
-			edit_to: None,
+			edit_at_path: None,
 		}
 	}
 }
@@ -273,7 +273,7 @@ pub struct OpenUrlBuilder<'a> {
 	ctx: &'a TestContext,
 	url: String,
 	extra_args: Vec<&'a str>,
-	edit_to: Option<todo::Issue>,
+	edit_at_path: Option<(PathBuf, todo::Issue)>,
 }
 
 impl<'a> OpenUrlBuilder<'a> {
@@ -283,10 +283,10 @@ impl<'a> OpenUrlBuilder<'a> {
 		self
 	}
 
-	/// Edit the file to this issue while "editor is open".
-	/// Note: For URL-based opens, the file path is determined after fetching.
-	pub fn edit(mut self, issue: &todo::Issue) -> Self {
-		self.edit_to = Some(issue.clone());
+	/// Edit the file at the specified path while "editor is open".
+	/// Use this when you know the path the issue will be stored at.
+	pub fn edit_at(mut self, path: &Path, issue: &todo::Issue) -> Self {
+		self.edit_at_path = Some((path.to_path_buf(), issue.clone()));
 		self
 	}
 
@@ -306,14 +306,9 @@ impl<'a> OpenUrlBuilder<'a> {
 
 		let mut child = cmd.spawn().unwrap();
 
-		// Note: For URL-based opens with edit_to, we'd need to determine the file path
-		// after the fetch completes. For now, editing during URL open is not supported.
-		if self.edit_to.is_some() {
-			eprintln!("[test] Warning: edit_to not supported for URL-based opens");
-		}
-
 		// Poll for process completion, signaling pipe when it's waiting
 		let pipe_path = self.ctx.pipe_path.clone();
+		let edit_at_path = self.edit_at_path.clone();
 		let mut signaled = false;
 
 		loop {
@@ -322,6 +317,11 @@ impl<'a> OpenUrlBuilder<'a> {
 				None => {
 					if !signaled {
 						std::thread::sleep(std::time::Duration::from_millis(100));
+
+						// Edit the file while "editor is open" if requested
+						if let Some((path, issue)) = &edit_at_path {
+							std::fs::write(path, issue.serialize()).unwrap();
+						}
 
 						// Try to signal the pipe (use O_NONBLOCK to avoid blocking)
 						#[cfg(unix)]

@@ -10,7 +10,7 @@ use super::{
 	fetch::fetch_and_store_issue,
 	files::{choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
-	sync::{PreferMode, PreferSource, SourceSide, SyncOptions, open_local_issue},
+	sync::{MergeMode, Side, SyncOptions, open_local_issue},
 	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 };
 use crate::{
@@ -104,22 +104,19 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	// Combine global --offline with subcommand --offline
 	let offline = global_offline || args.offline;
 
-	// Build prefer source from args
-	let build_prefer = |side: SourceSide| -> Option<PreferSource> {
+	// Build merge mode from args
+	let build_merge_mode = |prefer: Side| -> Option<MergeMode> {
 		if args.reset {
-			Some(PreferSource { side, mode: PreferMode::Reset })
+			Some(MergeMode::Reset { prefer })
 		} else if args.force {
-			Some(PreferSource { side, mode: PreferMode::Force })
+			Some(MergeMode::Force { prefer })
 		} else {
 			None
 		}
 	};
 
-	// Base sync opts for local source
-	let base_sync_opts = SyncOptions {
-		prefer: build_prefer(SourceSide::Local),
-		pull: args.pull,
-	};
+	// Helper to create sync opts for local source (used in multiple branches)
+	let local_sync_opts = || SyncOptions::new(build_merge_mode(Side::Local), args.pull);
 
 	// Handle --blocker and --blocker-set modes: use current blocker issue file if no pattern provided
 	let use_blocker_mode = args.blocker || args.blocker_set;
@@ -140,7 +137,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
 		}
 		// Files are already sorted by modification time (most recent first)
-		(all_files[0].clone(), base_sync_opts.clone(), offline)
+		(all_files[0].clone(), local_sync_opts(), offline)
 	} else if args.touch {
 		// Handle --touch mode
 		let touch_path = parse_touch_path(input)?;
@@ -165,7 +162,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			create_pending_issue(&touch_path, &effective_ext)?
 		};
 
-		(issue_file_path, base_sync_opts.clone(), effective_offline)
+		(issue_file_path, local_sync_opts(), effective_offline)
 	} else if github::is_github_issue_url(input) {
 		// GitHub URL mode: fetch issue and store in XDG_DATA (can't be offline)
 		if offline {
@@ -182,19 +179,22 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		println!("Stored issue at: {issue_file_path:?}");
 
-		// For remote source, use Remote side preference
-		// Note: pull is false here because we just fetched via URL
-		let remote_sync_opts = SyncOptions {
-			prefer: build_prefer(SourceSide::Remote),
-			pull: false,
-		};
+		// Commit the fetched state as the consensus baseline for post-editor sync
+		// This ensures that changes made during editing can be properly detected
+		use super::git::commit_issue_changes;
+		commit_issue_changes(&issue_file_path, &owner, &repo, issue_number, Some("initial fetch"))?;
+
+		// For remote source: the fetch IS the sync action.
+		// Post-editor sync uses Normal mode (changes get synced normally).
+		// Note: --reset and --force are consumed by the fetch itself.
+		let remote_sync_opts = SyncOptions::new(None, false);
 		(issue_file_path, remote_sync_opts, offline)
 	} else {
 		// Check if input is an existing file path (absolute or relative)
 		let input_path = Path::new(input);
 		if input_path.exists() && input_path.is_file() {
 			// Direct file path - open it
-			(input_path.to_path_buf(), base_sync_opts.clone(), offline)
+			(input_path.to_path_buf(), local_sync_opts(), offline)
 		} else {
 			// Local search mode: find and open existing issue file
 			let matches = search_issue_files(input)?;
@@ -221,7 +221,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 				}
 			};
 
-			(issue_file_path, base_sync_opts, offline)
+			(issue_file_path, local_sync_opts(), offline)
 		}
 	};
 

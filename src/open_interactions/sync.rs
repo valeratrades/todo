@@ -1,52 +1,84 @@
 //! Sync local issue changes back to GitHub.
 //!
-//! ## Per-node consensus-based sync model
+//! ## Unified Sync Workflow
 //!
-//! The sync logic uses git's last committed state as the "consensus" (last synced state).
-//! For each node in the issue tree, we compare local vs consensus vs remote:
-//! - If only local changed since consensus → push local node to remote
-//! - If only remote changed since consensus → update local node from remote
-//! - If both changed → use timestamp-based auto-resolution (newer wins)
-//! - If timestamps equal or missing → conflict requiring manual resolution
-//! - If neither changed → no action needed
+//! All sync operations go through `sync_issue`, which:
+//! 1. Takes local state, remote state, consensus (last committed), and a `MergeMode`
+//! 2. Produces a merged state according to the mode
+//! 3. Returns the merged issue for the caller to commit
 //!
-//! Each node is resolved independently, allowing partial syncs where some nodes
-//! auto-resolve while others may conflict.
+//! ## MergeMode semantics
 //!
-//! This eliminates the need for storing consensus state in .meta.json files.
+//! - `Normal`: Auto-resolve where only one side changed since consensus.
+//!   If both changed the same thing → create git merge conflict.
+//! - `Force(side)`: On conflicts, take the preferred side. Non-conflicting
+//!   parts still merge normally.
+//! - `Reset(side)`: Take preferred side entirely. Content only in the
+//!   non-preferred side is deleted.
+//!
+//! ## Consensus-based comparison
+//!
+//! The git-committed state serves as "consensus" (last synced truth).
+//! For each field/node:
+//! - If only local changed since consensus → use local
+//! - If only remote changed since consensus → use remote
+//! - If both changed → apply MergeMode rules
 
-/// Which side to prefer when resolving conflicts.
+/// Which side to prefer in merge operations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceSide {
+pub enum Side {
 	/// Prefer local file state
 	Local,
 	/// Prefer remote GitHub state
 	Remote,
 }
 
-/// How aggressively to prefer the source side.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreferMode {
-	/// Force through conflicts by taking the preferred side
-	Force,
-	/// Reset entirely to preferred side, skip all sync logic
-	Reset,
-}
-
-/// When set, prefer one side over the other during sync.
-#[derive(Clone, Copy, Debug)]
-pub struct PreferSource {
-	pub side: SourceSide,
-	pub mode: PreferMode,
+/// How to merge local and remote states.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MergeMode {
+	/// Auto-resolve conflicts where possible, create merge conflict otherwise.
+	/// - Only local changed → use local
+	/// - Only remote changed → use remote
+	/// - Both changed → git merge conflict
+	#[default]
+	Normal,
+	/// Force preferred side on conflicts, but keep non-conflicting parts from both.
+	Force { prefer: Side },
+	/// Reset to preferred side entirely. Content not in preferred side is deleted.
+	Reset { prefer: Side },
 }
 
 /// Options for controlling sync behavior.
-#[derive(Clone, Debug, Default)]
+///
+/// The `merge_mode` is consumed after first use (for pre-editor sync),
+/// so post-editor sync runs with `MergeMode::Normal`.
+#[derive(Debug, Default)]
 pub struct SyncOptions {
-	/// When set, prefer one side and skip normal conflict resolution
-	pub prefer: Option<PreferSource>,
+	/// Merge mode for conflict resolution. Consumed after first use. For reasons, refer to https://github.com/valeratrades/todo/issues/83#issuecomment-3746995182
+	merge_mode: std::cell::Cell<Option<MergeMode>>,
 	/// Fetch and sync from remote before opening editor
 	pub pull: bool,
+}
+
+impl SyncOptions {
+	/// Create new sync options with the given merge mode and pull flag.
+	pub fn new(merge_mode: Option<MergeMode>, pull: bool) -> Self {
+		Self {
+			merge_mode: std::cell::Cell::new(merge_mode),
+			pull,
+		}
+	}
+
+	/// Take the merge mode, returning Normal if already taken or not set.
+	/// This ensures non-Normal modes are only used once.
+	pub fn take_merge_mode(&self) -> MergeMode {
+		self.merge_mode.take().unwrap_or_default()
+	}
+
+	/// Peek at the merge mode without consuming it.
+	pub fn peek_merge_mode(&self) -> MergeMode {
+		self.merge_mode.get().unwrap_or_default()
+	}
 }
 
 use std::path::Path;
@@ -214,6 +246,85 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 	}
 
 	Ok((executed, created_root_number))
+}
+
+/// Apply the merge mode to produce a merged issue.
+///
+/// Returns (merged_issue, local_needs_update, remote_needs_update).
+/// - local_needs_update: true if local file should be rewritten with merged result
+/// - remote_needs_update: true if changes should be pushed to GitHub
+async fn apply_merge_mode(
+	local: &Issue,
+	consensus: Option<&Issue>,
+	remote: &Issue,
+	mode: MergeMode,
+	issue_file_path: &Path,
+	owner: &str,
+	repo: &str,
+	issue_number: u64,
+) -> Result<(Issue, bool, bool)> {
+	// First, do the standard tree resolution to detect conflicts
+	let resolution = resolve_tree(local, consensus, remote);
+
+	match mode {
+		MergeMode::Normal => {
+			if resolution.has_conflicts {
+				// Normal mode with conflicts: trigger git merge
+				tracing::debug!("[sync] Unresolvable conflicts detected at paths: {:?}", resolution.conflict_paths);
+				handle_divergence(issue_file_path, owner, repo, issue_number, remote).await?;
+				// handle_divergence bails on conflict, so if we reach here it means merge succeeded
+				// Re-read the merged file
+				let merged_content = std::fs::read_to_string(issue_file_path)?;
+				let ctx = ParseContext::new(merged_content.clone(), issue_file_path.display().to_string());
+				let merged = Issue::parse(&merged_content, &ctx)?;
+				Ok((merged, false, true)) // File already written by merge, push to remote
+			} else {
+				// No conflicts, use resolution results
+				if resolution.local_needs_update {
+					tracing::debug!("[sync] Applying auto-resolved remote changes to local");
+				}
+				Ok((resolution.resolved, resolution.local_needs_update, resolution.remote_needs_update))
+			}
+		}
+		MergeMode::Force { prefer } => {
+			if resolution.has_conflicts {
+				match prefer {
+					Side::Local => {
+						// Force local: keep local version, push to remote
+						tracing::debug!("[sync] Force mode: taking local version, pushing to remote");
+						println!("Force: taking local version (conflicts overwritten)");
+						Ok((local.clone(), false, true))
+					}
+					Side::Remote => {
+						// Force remote: take remote version, don't push
+						tracing::debug!("[sync] Force mode: taking remote version");
+						println!("Force: taking remote version (local overwritten)");
+						Ok((remote.clone(), true, false))
+					}
+				}
+			} else {
+				// No conflicts, use normal resolution
+				Ok((resolution.resolved, resolution.local_needs_update, resolution.remote_needs_update))
+			}
+		}
+		MergeMode::Reset { prefer } => {
+			// Reset takes preferred side entirely, regardless of conflicts
+			match prefer {
+				Side::Local => {
+					// Reset to local: keep local as-is, push everything to remote
+					tracing::debug!("[sync] Reset mode: taking local version entirely");
+					println!("Reset: taking local version (remote will be overwritten)");
+					Ok((local.clone(), false, true))
+				}
+				Side::Remote => {
+					// Reset to remote: take remote entirely, don't push
+					tracing::debug!("[sync] Reset mode: taking remote version entirely");
+					println!("Reset: taking remote version (local replaced)");
+					Ok((remote.clone(), true, false))
+				}
+			}
+		}
+	}
 }
 
 /// Handle divergence: both local and remote changed since last sync.
@@ -412,6 +523,8 @@ impl Modifier {
 }
 
 /// Inner sync logic shared by open_local_issue and sync_issue_file.
+///
+/// This is the unified sync entry point. All sync operations go through here.
 async fn sync_issue_to_github_inner(
 	gh: &BoxedGitHubClient,
 	issue_file_path: &Path,
@@ -420,7 +533,7 @@ async fn sync_issue_to_github_inner(
 	issue_number: u64,
 	issue: &mut Issue,
 	extension: Extension,
-	sync_opts: &SyncOptions,
+	merge_mode: MergeMode,
 ) -> Result<()> {
 	// Check if this is a pending issue (created via --touch, not yet on GitHub)
 	let is_pending = issue.meta.url.is_none();
@@ -447,74 +560,19 @@ async fn sync_issue_to_github_inner(
 		// Fetch the complete remote issue tree (level-by-level parallel fetching)
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
-		// Consensus is the last committed state in git
-		// Resolve tree node-by-node with timestamp-based auto-resolution
-		let resolution = resolve_tree(issue, consensus.as_ref(), &remote_issue);
+		// Apply merge mode to get the merged result
+		let (merged, local_needs_update, remote_needs_update) = apply_merge_mode(issue, consensus.as_ref(), &remote_issue, merge_mode, issue_file_path, owner, repo, issue_number).await?;
 
-		// Handle conflicts if any remain after auto-resolution
-		let (local_needs_update, remote_needs_update) = if resolution.has_conflicts {
-			match sync_opts.prefer {
-				Some(PreferSource {
-					side: SourceSide::Local,
-					mode: PreferMode::Force,
-				}) => {
-					// Force local: keep local version, push to remote
-					tracing::debug!("[sync] Force mode: taking local version, pushing to remote");
-					println!("Force: taking local version (conflicts overwritten)");
-					(false, true) // Push local to remote
-				}
-				Some(PreferSource {
-					side: SourceSide::Remote,
-					mode: PreferMode::Force,
-				}) => {
-					// Force remote: take remote version, don't push
-					tracing::debug!("[sync] Force mode: taking remote version");
-					println!("Force: taking remote version (local overwritten)");
-					*issue = remote_issue.clone();
-					let content = issue.serialize();
-					std::fs::write(issue_file_path, &content)?;
-					(true, false) // Local updated from remote
-				}
-				Some(PreferSource {
-					side: SourceSide::Remote,
-					mode: PreferMode::Reset,
-				}) => {
-					// Reset to remote: take remote version entirely, skip further sync
-					tracing::debug!("[sync] Reset mode: taking remote version entirely");
-					println!("Reset: taking remote version (local replaced)");
-					*issue = remote_issue.clone();
-					let content = issue.serialize();
-					std::fs::write(issue_file_path, &content)?;
-					commit_issue_changes(issue_file_path, owner, repo, issue_number, None)?;
-					return Ok(());
-				}
-				Some(PreferSource {
-					side: SourceSide::Local,
-					mode: PreferMode::Reset,
-				}) => {
-					// Reset to local handled earlier in modify_and_sync_issue
-					unreachable!("Local reset should be handled before sync_issue_to_github_inner");
-				}
-				None => {
-					tracing::debug!("[sync] Unresolvable conflicts detected at paths: {:?}", resolution.conflict_paths);
-					return handle_divergence(issue_file_path, owner, repo, issue_number, &remote_issue).await;
-				}
-			}
-		} else {
-			// No conflicts, use resolution results
-			// Apply resolved changes
-			if resolution.local_needs_update {
-				// Update local with auto-resolved remote changes
-				tracing::debug!("[sync] Applying auto-resolved remote changes to local");
-				*issue = resolution.resolved.clone();
-				let content = issue.serialize();
-				std::fs::write(issue_file_path, &content)?;
-			}
-			(resolution.local_needs_update, resolution.remote_needs_update)
-		};
+		// Update issue with merged result
+		*issue = merged;
+
+		// Write local file if it needs updating
+		if local_needs_update {
+			let content = issue.serialize();
+			std::fs::write(issue_file_path, &content)?;
+		}
 
 		if !local_needs_update && !remote_needs_update {
-			// Neither changed - nothing to do
 			tracing::debug!("[sync] No changes detected");
 		} else if remote_needs_update {
 			tracing::debug!("[sync] Pushing local changes to remote");
@@ -668,6 +726,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	let mut issue = Issue::parse(&content, &ctx)?;
 
 	// Handle --pull: fetch and sync from remote BEFORE opening editor
+	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
 	if sync_opts.pull && !offline && meta.issue_number != 0 {
 		println!("Pulling latest from GitHub...");
 
@@ -677,49 +736,22 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		// Load consensus from git
 		let consensus = load_consensus_issue(issue_file_path);
 
-		// Resolve using the same logic as post-editor sync
-		let resolution = resolve_tree(&issue, consensus.as_ref(), &remote_issue);
+		// Take merge mode (consumes it, so post-editor sync will use Normal)
+		let merge_mode = sync_opts.take_merge_mode();
 
-		if resolution.has_conflicts {
-			// Handle conflicts based on prefer settings
-			match sync_opts.prefer {
-				Some(PreferSource {
-					side: SourceSide::Remote,
-					mode: PreferMode::Reset,
-				}) => {
-					println!("Reset: taking remote version");
-					issue = remote_issue;
-					let content = issue.serialize();
-					std::fs::write(issue_file_path, &content)?;
-					commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
-				}
-				Some(PreferSource {
-					side: SourceSide::Remote,
-					mode: PreferMode::Force,
-				}) => {
-					println!("Force: taking remote version");
-					issue = remote_issue;
-					let content = issue.serialize();
-					std::fs::write(issue_file_path, &content)?;
-				}
-				Some(PreferSource { side: SourceSide::Local, .. }) => {
-					println!("Keeping local version (force/reset local)");
-					// Keep local as-is, will push after editor
-				}
-				None => {
-					// Divergence with no preference - trigger merge
-					return handle_divergence(issue_file_path, &owner, &repo, meta.issue_number, &remote_issue)
-						.await
-						.map(|()| ModifyResult { output: None });
-				}
-			}
-		} else if resolution.local_needs_update {
-			// Remote has updates, apply them
-			println!("Updating local with remote changes...");
-			issue = resolution.resolved;
+		// Apply merge mode through unified sync logic
+		let (merged, local_needs_update, _remote_needs_update) =
+			apply_merge_mode(&issue, consensus.as_ref(), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number).await?;
+
+		if local_needs_update {
+			// Write merged result to local file
+			issue = merged;
 			let content = issue.serialize();
 			std::fs::write(issue_file_path, &content)?;
 			commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
+		} else if issue != merged {
+			// Issue changed but doesn't need file update (keeping local)
+			issue = merged;
 		} else {
 			println!("Already up to date.");
 		}
@@ -780,21 +812,11 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		return Ok(result);
 	}
 
-	// Handle reset mode - skip sync entirely when resetting to local
-	if let Some(PreferSource {
-		side: SourceSide::Local,
-		mode: PreferMode::Reset,
-	}) = sync_opts.prefer
-	{
-		// Reset with local source: skip sync, keep local as-is
-		println!("Reset: keeping local state (no sync to GitHub)");
-		// Commit local state to git
-		commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
-		return Ok(result);
-	}
+	// Post-editor sync: take merge mode (will be Normal if already consumed by pre-editor sync)
+	let merge_mode = sync_opts.take_merge_mode();
 
 	// Use shared sync logic
-	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, meta.issue_number, &mut issue, extension, &sync_opts).await?;
+	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, meta.issue_number, &mut issue, extension, merge_mode).await?;
 
 	Ok(result)
 }

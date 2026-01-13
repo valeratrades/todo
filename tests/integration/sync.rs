@@ -415,3 +415,37 @@ fn test_open_by_number_unchanged_succeeds() {
 	eprintln!("Second open stderr: {stderr}");
 	assert!(status.success(), "Second open (unchanged) should succeed. stderr: {stderr}");
 }
+
+/// --reset should only apply to the first sync (before editor).
+/// After the user makes changes, normal sync should happen.
+/// Reproduces the issue where changes made after --reset don't sync.
+#[test]
+fn test_reset_syncs_changes_after_editor() {
+	let ctx = TestContext::new("");
+	ctx.init_git();
+
+	let remote_issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tremote body\n");
+
+	// Set up remote
+	ctx.remote().issue(OWNER, REPO, 1, &remote_issue).build();
+
+	// Create modified version (what user will change to)
+	let mut modified_issue = remote_issue.clone();
+	modified_issue.meta.close_state = todo::CloseState::Closed;
+
+	// Open with --reset and make changes while editor is open
+	let issue_path = ctx.flat_issue_path(OWNER, REPO, 1, "Test Issue");
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).edit_at(&issue_path, &modified_issue).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed. stderr: {stderr}");
+
+	// The key assertion: sync should have happened after editor
+	// We should see "Updating issue state" or similar in the output
+	assert!(
+		stdout.contains("Updating") || stdout.contains("Synced"),
+		"Changes should be synced after editor. stdout: {stdout}"
+	);
+}
