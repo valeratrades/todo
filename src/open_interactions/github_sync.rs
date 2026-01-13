@@ -2,12 +2,11 @@
 //!
 //! This module contains all GitHub-specific logic for Issues:
 //! - Converting GitHub API responses to Issue
-//! - Converting stored metadata to Issue
 //! - Collecting actions needed to sync Issue to GitHub
 
+use jiff::Timestamp;
 use todo::{BlockerSequence, CloseState, Comment, Issue, IssueMeta};
 
-use super::meta::IssueMetaEntry;
 use crate::github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue};
 
 /// Extension trait for GitHub-specific Issue operations.
@@ -18,9 +17,6 @@ pub trait IssueGitHubExt {
 
 	/// Construct an Issue directly from GitHub API data.
 	fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Issue;
-
-	/// Construct an Issue from stored metadata (the "original" consensus state).
-	fn from_meta(meta: &IssueMetaEntry, owner: &str, repo: &str) -> Issue;
 }
 
 impl IssueGitHubExt for Issue {
@@ -58,6 +54,9 @@ impl IssueGitHubExt for Issue {
 
 		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
 
+		// Parse timestamp from GitHub's ISO 8601 format
+		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
+
 		// Build comments: body is first comment
 		let mut issue_comments = Vec::new();
 
@@ -81,6 +80,7 @@ impl IssueGitHubExt for Issue {
 			.map(|si| {
 				let child_url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
 				let child_close_state = if si.state == "closed" { CloseState::Closed } else { CloseState::Open };
+				let child_timestamp = si.updated_at.parse::<Timestamp>().ok();
 				Issue {
 					meta: IssueMeta {
 						title: si.title.clone(),
@@ -96,6 +96,7 @@ impl IssueGitHubExt for Issue {
 					}],
 					children: Vec::new(),
 					blockers: BlockerSequence::default(),
+					last_contents_change: child_timestamp,
 				}
 			})
 			.collect();
@@ -106,66 +107,7 @@ impl IssueGitHubExt for Issue {
 			comments: issue_comments,
 			children,
 			blockers: BlockerSequence::default(),
-		}
-	}
-
-	fn from_meta(meta: &IssueMetaEntry, owner: &str, repo: &str) -> Issue {
-		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", meta.issue_number);
-
-		let issue_meta = IssueMeta {
-			title: meta.title.clone(),
-			url: Some(issue_url.clone()),
-			close_state: meta.original_close_state.clone(),
-			owned: true, // Doesn't matter for comparison
-		};
-
-		// Build comments from original_comments
-		let mut comments = Vec::new();
-
-		// Body as first comment
-		comments.push(Comment {
-			id: None,
-			body: meta.original_issue_body.clone().unwrap_or_default(),
-			owned: true,
-		});
-
-		// Original comments
-		for oc in &meta.original_comments {
-			comments.push(Comment {
-				id: Some(oc.id),
-				body: oc.body.clone().unwrap_or_default(),
-				owned: true,
-			});
-		}
-
-		// Build children from original_sub_issues (minimal - just state for comparison)
-		let children: Vec<Issue> = meta
-			.original_sub_issues
-			.iter()
-			.map(|osi| {
-				let child_url = format!("https://github.com/{owner}/{repo}/issues/{}", osi.number);
-				let child_close_state = if osi.state == "closed" { CloseState::Closed } else { CloseState::Open };
-				Issue {
-					meta: IssueMeta {
-						title: String::new(), // Not stored in OriginalSubIssue
-						url: Some(child_url),
-						close_state: child_close_state,
-						owned: true,
-					},
-					labels: Vec::new(),
-					comments: Vec::new(),
-					children: Vec::new(),
-					blockers: BlockerSequence::default(),
-				}
-			})
-			.collect();
-
-		Issue {
-			meta: issue_meta,
-			labels: Vec::new(),
-			comments,
-			children,
-			blockers: BlockerSequence::default(),
+			last_contents_change,
 		}
 	}
 }
@@ -221,7 +163,7 @@ fn collect_actions_recursive(issue: &Issue, current_path: &[usize], original_sub
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::github::{GitHubLabel, GitHubUser, OriginalComment};
+	use crate::github::{GitHubLabel, GitHubUser};
 
 	#[test]
 	fn test_from_github() {
@@ -232,6 +174,7 @@ mod tests {
 			labels: vec![GitHubLabel { name: "bug".to_string() }],
 			user: GitHubUser { login: "me".to_string() },
 			state: "open".to_string(),
+			updated_at: "2024-01-15T12:00:00Z".to_string(),
 		};
 
 		let comments = vec![GitHubComment {
@@ -247,6 +190,7 @@ mod tests {
 			labels: vec![],
 			user: GitHubUser { login: "me".to_string() },
 			state: "closed".to_string(),
+			updated_at: "2024-01-15T12:00:00Z".to_string(),
 		}];
 
 		let result = Issue::from_github(&issue, &comments, &sub_issues, "owner", "repo", "me");
@@ -281,6 +225,7 @@ mod tests {
 				labels: vec![],
 				user: GitHubUser { login: "me".to_string() },
 				state: state.to_string(),
+				updated_at: "2024-01-15T12:00:00Z".to_string(),
 			};
 			Issue::from_github(&gh_issue, &[], &[], "o", "r", "me")
 		};
@@ -293,35 +238,5 @@ mod tests {
 		assert_eq!(issue1, issue2);
 		assert_ne!(issue1, issue3); // different body
 		assert_ne!(issue1, issue4); // different state
-	}
-
-	#[test]
-	fn test_from_meta_roundtrip() {
-		let meta = IssueMetaEntry {
-			issue_number: 42,
-			title: "Meta Issue".to_string(),
-			extension: "md".to_string(),
-			original_issue_body: Some("Original body".to_string()),
-			original_comments: vec![OriginalComment {
-				id: 100,
-				body: Some("Original comment".to_string()),
-			}],
-			original_sub_issues: vec![OriginalSubIssue {
-				number: 43,
-				state: "open".to_string(),
-			}],
-			parent_issue: None,
-			original_close_state: CloseState::Open,
-		};
-
-		let issue = Issue::from_meta(&meta, "owner", "repo");
-
-		assert_eq!(issue.meta.title, "Meta Issue");
-		assert_eq!(issue.meta.close_state, CloseState::Open);
-		assert_eq!(issue.comments.len(), 2); // body + 1 comment
-		assert_eq!(issue.comments[0].body, "Original body");
-		assert_eq!(issue.comments[1].id, Some(100));
-		assert_eq!(issue.children.len(), 1);
-		assert_eq!(issue.children[0].meta.close_state, CloseState::Open);
 	}
 }

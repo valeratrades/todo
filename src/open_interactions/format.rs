@@ -196,6 +196,7 @@ mod tests {
 			labels: labels.into_iter().map(|name| GitHubLabel { name: name.to_string() }).collect(),
 			user: make_user(user),
 			state: state.to_string(),
+			updated_at: "2024-01-15T12:00:00Z".to_string(),
 		}
 	}
 

@@ -2,15 +2,14 @@
 
 use std::path::PathBuf;
 
-use todo::{CloseState, Extension, FetchedIssue};
+use todo::{Extension, FetchedIssue};
 use v_utils::prelude::*;
 
 use super::{
 	files::{find_issue_file, get_issue_dir_path, get_issue_file_path, get_main_file_path},
 	format::format_issue,
-	meta::{IssueMetaEntry, save_issue_meta},
 };
-use crate::github::{BoxedGitHubClient, GitHubIssue, OriginalComment, OriginalSubIssue};
+use crate::github::{BoxedGitHubClient, GitHubIssue};
 
 /// Traverse up the parent chain to find the root issue and build the ancestry path.
 /// Returns a list of ancestors from root to the immediate parent (not including the target issue).
@@ -106,18 +105,7 @@ async fn fetch_issue_with_ancestors(gh: &BoxedGitHubClient, owner: &str, repo: &
 	// Write issue file
 	std::fs::write(&issue_file_path, &content)?;
 
-	// Save metadata for syncing
-	let meta_entry = IssueMetaEntry {
-		issue_number,
-		title: issue.title.clone(),
-		extension: extension.as_str().to_string(),
-		original_issue_body: issue.body.clone(),
-		original_comments: comments.iter().map(OriginalComment::from).collect(),
-		original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
-		parent_issue: ancestors.last().map(|p| p.number()),
-		original_close_state: if issue_closed { CloseState::Closed } else { CloseState::Open },
-	};
-	save_issue_meta(owner, repo, meta_entry)?;
+	// No longer saving metadata - it's derived from file paths and git provides consensus state
 
 	// Build ancestors for children (current issue becomes part of ancestors)
 	let mut child_ancestors = ancestors;
@@ -181,18 +169,7 @@ fn fetch_sub_issue_tree<'a>(
 		// Write issue file
 		std::fs::write(&issue_file_path, &content)?;
 
-		// Save metadata for syncing
-		let meta_entry = IssueMetaEntry {
-			issue_number: issue.number,
-			title: issue.title.clone(),
-			extension: extension.as_str().to_string(),
-			original_issue_body: issue.body.clone(),
-			original_comments: comments.iter().map(OriginalComment::from).collect(),
-			original_sub_issues: sub_issues.iter().map(OriginalSubIssue::from).collect(),
-			parent_issue: ancestors.last().map(|p| p.number()),
-			original_close_state: if issue_closed { CloseState::Closed } else { CloseState::Open },
-		};
-		save_issue_meta(owner, repo, meta_entry)?;
+		// No longer saving metadata - it's derived from file paths and git provides consensus state
 
 		// Build ancestors for children (current issue becomes part of ancestors)
 		let mut child_ancestors = ancestors;

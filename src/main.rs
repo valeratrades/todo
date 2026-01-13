@@ -24,9 +24,8 @@ struct Cli {
 	command: Commands,
 	#[clap(flatten)]
 	settings_flags: config::SettingsFlags,
-	/// Use mock GitHub client instead of real API (for testing)
-	#[arg(long, global = true)]
-	dbg: bool,
+	#[arg(long, global = true, hide = true)]
+	mock: bool,
 	/// Skip all network operations - edit locally only, don't sync to GitHub.
 	/// Automatically enabled for virtual projects (projects without GitHub remote).
 	#[arg(long, global = true)]
@@ -91,8 +90,7 @@ async fn main() {
 		}
 	};
 
-	// Create the GitHub client based on --dbg flag
-	let github_client: github::BoxedGitHubClient = if cli.dbg {
+	let github_client: github::BoxedGitHubClient = if cli.mock {
 		std::sync::Arc::new(mock_github::MockGitHubClient::new("mock_user"))
 	} else {
 		match github::RealGitHubClient::new(&settings) {

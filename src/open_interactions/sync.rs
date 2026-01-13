@@ -2,13 +2,16 @@
 //!
 //! ## Consensus-based sync model
 //!
-//! The sync logic treats the last synced state as the "consensus". When syncing:
+//! The sync logic uses git's last committed state as the "consensus" (last synced state).
+//! When syncing:
 //! - If only local changed since consensus → push local to remote
 //! - If only remote changed since consensus → take remote as new local
 //! - If both changed since consensus → conflict requiring manual resolution
 //! - If neither changed → no action needed
+//!
+//! This eliminates the need for storing consensus state in .meta.json files.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use todo::{Extension, FetchedIssue, Issue, ParseContext};
 use v_utils::prelude::*;
@@ -16,8 +19,9 @@ use v_utils::prelude::*;
 use super::{
 	conflict::mark_conflict,
 	fetch::fetch_and_store_issue,
+	git::{commit_issue_changes, is_git_initialized, load_consensus_issue},
 	github_sync::IssueGitHubExt,
-	meta::{IssueMetaEntry, get_issue_meta, load_issue_meta_from_path},
+	meta::load_issue_meta_from_path,
 	util::expand_blocker_shorthand,
 };
 use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
@@ -26,72 +30,74 @@ use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient}
 // Sync implementation
 //=============================================================================
 
-/// Sync changes from a local issue file back to GitHub using stored metadata.
+/// Sync changes from a local issue to GitHub.
+/// Compares local state against remote state using git consensus.
 /// Returns whether the issue state changed (for file renaming).
-pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &str, meta: &IssueMetaEntry, issue: &Issue) -> Result<bool> {
+pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue_number: u64, consensus: &Issue, local: &Issue) -> Result<bool> {
 	let mut updates = 0;
 	let mut creates = 0;
 	let mut deletes = 0;
 	let mut state_changed = false;
 
 	// Step 0: Check if issue state (open/closed) changed
-	// Note: GitHub only supports binary open/closed, so NotPlanned and Duplicate both map to closed
-	let current_closed = issue.meta.close_state.is_closed();
-	let original_closed = meta.original_close_state.is_closed();
-	if current_closed != original_closed {
-		let new_state = issue.meta.close_state.to_github_state();
+	let current_closed = local.meta.close_state.is_closed();
+	let consensus_closed = consensus.meta.close_state.is_closed();
+	if current_closed != consensus_closed {
+		let new_state = local.meta.close_state.to_github_state();
 		println!("Updating issue state to {new_state}...");
-		gh.update_issue_state(owner, repo, meta.issue_number, new_state).await?;
+		gh.update_issue_state(owner, repo, issue_number, new_state).await?;
 		state_changed = true;
 		updates += 1;
 	}
 
 	// Step 1: Check issue body (includes blockers section)
-	let issue_body = issue.body();
-	let original_body = meta.original_issue_body.as_deref().unwrap_or("");
-	tracing::debug!("[sync] issue.blockers.len() = {}", issue.blockers.len());
+	let issue_body = local.body();
+	let consensus_body = consensus.body();
+	tracing::debug!("[sync] local.blockers.len() = {}", local.blockers.len());
 	tracing::debug!("[sync] issue_body:\n{issue_body}");
-	tracing::debug!("[sync] original_body:\n{original_body}");
-	if issue_body != original_body {
+	tracing::debug!("[sync] consensus_body:\n{consensus_body}");
+	if issue_body != consensus_body {
 		println!("Updating issue body...");
-		gh.update_issue_body(owner, repo, meta.issue_number, &issue_body).await?;
+		gh.update_issue_body(owner, repo, issue_number, &issue_body).await?;
 		updates += 1;
 	}
 
 	// Step 2: Sync comments (skip first which is body)
-	let target_ids: std::collections::HashSet<u64> = issue.comments.iter().skip(1).filter_map(|c| c.id).collect();
-	let original_ids: std::collections::HashSet<u64> = meta.original_comments.iter().map(|c| c.id).collect();
+	let target_ids: std::collections::HashSet<u64> = local.comments.iter().skip(1).filter_map(|c| c.id).collect();
+	let consensus_ids: std::collections::HashSet<u64> = consensus.comments.iter().skip(1).filter_map(|c| c.id).collect();
 
 	// Delete comments that were removed
-	for orig in &meta.original_comments {
-		if !target_ids.contains(&orig.id) {
-			println!("Deleting comment {}...", orig.id);
-			gh.delete_comment(owner, repo, orig.id).await?;
-			deletes += 1;
+	for comment in consensus.comments.iter().skip(1) {
+		if let Some(id) = comment.id {
+			if !target_ids.contains(&id) {
+				println!("Deleting comment {id}...");
+				gh.delete_comment(owner, repo, id).await?;
+				deletes += 1;
+			}
 		}
 	}
 
 	// Update existing comments and create new ones
-	for comment in issue.comments.iter().skip(1) {
+	for comment in local.comments.iter().skip(1) {
 		if !comment.owned {
 			continue; // Skip immutable comments
 		}
 		match comment.id {
-			Some(id) if original_ids.contains(&id) => {
-				let original = meta.original_comments.iter().find(|c| c.id == id).and_then(|c| c.body.as_deref()).unwrap_or("");
-				if comment.body != original {
+			Some(id) if consensus_ids.contains(&id) => {
+				let consensus_body = consensus.comments.iter().skip(1).find(|c| c.id == Some(id)).map(|c| c.body.as_str()).unwrap_or("");
+				if comment.body != consensus_body {
 					println!("Updating comment {id}...");
 					gh.update_comment(owner, repo, id, &comment.body).await?;
 					updates += 1;
 				}
 			}
 			Some(id) => {
-				eprintln!("Warning: comment {id} not found in original, skipping");
+				eprintln!("Warning: comment {id} not found in consensus, skipping");
 			}
 			None =>
 				if !comment.body.is_empty() {
 					println!("Creating new comment...");
-					gh.create_comment(owner, repo, meta.issue_number, &comment.body).await?;
+					gh.create_comment(owner, repo, issue_number, &comment.body).await?;
 					creates += 1;
 				},
 		}
@@ -171,56 +177,18 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 	Ok((executed, created_root_number))
 }
 
-/// Special commit message prefix that indicates a conflict-in-progress commit.
-/// These commits are not counted as the "last synced truth" for consensus.
-const CONFLICT_COMMIT_PREFIX: &str = "__conflicts:";
-
-/// Commit local changes to git after successful sync to GitHub.
-/// This ensures that the local git state reflects the synced state.
-/// Only commits if git is initialized in the issues directory.
-fn commit_synced_changes(owner: &str, repo: &str, issue_number: u64) {
-	use super::files::issues_dir;
-
-	let data_dir = issues_dir();
-	let data_dir_str = match data_dir.to_str() {
-		Some(s) => s,
-		None => return,
-	};
-
-	// Check if git is initialized
-	let git_check = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output();
-	if !git_check.map(|o| o.status.success()).unwrap_or(false) {
-		// Git not initialized, skip committing
-		return;
-	}
-
-	// Stage all changes
-	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status();
-
-	// Check if there are staged changes
-	let diff_output = Command::new("git").args(["-C", data_dir_str, "diff", "--cached", "--quiet"]).status();
-	if diff_output.map(|s| s.success()).unwrap_or(true) {
-		// No staged changes
-		return;
-	}
-
-	// Commit with a descriptive message
-	let commit_msg = format!("sync: {owner}/{repo}#{issue_number}");
-	let _ = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &commit_msg]).output();
-}
-
 /// Handle divergence: both local and remote changed since last sync.
 /// Creates a local `remote-state` branch with remote changes and initiates a git merge.
-/// No PR is created - conflicts are resolved locally via standard git workflow.
-async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, meta: &IssueMetaEntry, _local_issue: &Issue, remote_issue: &Issue) -> Result<()> {
+async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issue_number: u64, remote_issue: &Issue) -> Result<()> {
+	use std::process::Command;
+
 	use super::files::issues_dir;
 
 	let data_dir = issues_dir();
 	let data_dir_str = data_dir.to_str().ok_or_else(|| eyre!("Invalid data directory path"))?;
 
 	// Check if git is initialized
-	let git_check = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output()?;
-	if !git_check.status.success() {
+	if !is_git_initialized() {
 		return Err(eyre!(
 			"Conflict detected: both local and remote have changes since last sync.\n\
 			 \n\
@@ -239,7 +207,7 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	// Commit local changes with special prefix (so we know it's a conflict-in-progress)
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
 
-	let commit_msg = format!("{CONFLICT_COMMIT_PREFIX} local changes for issue #{}", meta.issue_number);
+	let commit_msg = format!("__conflicts: local changes for issue #{issue_number}");
 	let commit_output = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &commit_msg]).output()?;
 
 	if commit_output.status.success() {
@@ -253,14 +221,12 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).output();
 
 	// Create new branch from current HEAD (before our conflict commit)
-	// First, get the parent commit (before our conflict commit)
 	let parent_output = Command::new("git").args(["-C", data_dir_str, "rev-parse", "HEAD~1"]).output();
 	let base_commit = if let Ok(output) = parent_output
 		&& output.status.success()
 	{
 		String::from_utf8_lossy(&output.stdout).trim().to_string()
 	} else {
-		// No parent commit (first commit), use HEAD
 		"HEAD".to_string()
 	};
 
@@ -285,7 +251,7 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	// Commit remote state
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
 
-	let remote_commit_msg = format!("Remote state for {owner}/{repo}#{}", meta.issue_number);
+	let remote_commit_msg = format!("Remote state for {owner}/{repo}#{issue_number}");
 	let commit_status = Command::new("git").args(["-C", data_dir_str, "commit", "-m", &remote_commit_msg]).status()?;
 
 	if !commit_status.success() {
@@ -301,14 +267,13 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 	// Attempt to merge remote-state into current branch
 	println!("Merging remote changes...");
 	let merge_output = Command::new("git")
-		.args(["-C", data_dir_str, "merge", &branch_name, "-m", &format!("Merge remote state for issue #{}", meta.issue_number)])
+		.args(["-C", data_dir_str, "merge", &branch_name, "-m", &format!("Merge remote state for issue #{issue_number}")])
 		.output()?;
 
 	if merge_output.status.success() {
 		// Merge succeeded without conflicts - clean up
 		let _ = Command::new("git").args(["-C", data_dir_str, "branch", "-D", &branch_name]).status();
 		println!("Remote changes merged successfully.");
-		// Note: The conflict marker is not saved since merge succeeded
 		return Ok(());
 	}
 
@@ -322,7 +287,7 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 		let _ = mark_conflict(issue_file_path);
 
 		return Err(eyre!(
-			"Conflict detected: both local and remote have changes for issue #{}.\n\
+			"Conflict detected: both local and remote have changes for issue #{issue_number}.\n\
 			 \n\
 			 Git merge has been initiated. Resolve the conflicts in:\n\
 			   {}\n\
@@ -333,7 +298,6 @@ async fn handle_divergence(_gh: &BoxedGitHubClient, issue_file_path: &Path, owne
 			 3. Re-run this command to sync your changes\n\
 			 \n\
 			 To abort the merge: git merge --abort",
-			meta.issue_number,
 			issue_file_path.display(),
 			issue_file_path.display()
 		));
@@ -350,7 +314,6 @@ pub struct ModifyResult {
 }
 
 /// A modifier that can be applied to an issue file.
-/// This abstracts the "what changes the file" step in the open workflow.
 pub enum Modifier {
 	/// Open the file in an editor and wait for user to close it
 	Editor,
@@ -360,9 +323,6 @@ pub enum Modifier {
 
 impl Modifier {
 	/// Apply this modifier to an issue. Returns output to display.
-	///
-	/// For Editor: serializes, opens editor, re-parses
-	/// For BlockerPop: directly modifies issue.blockers
 	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, extension: &Extension) -> Result<ModifyResult> {
 		match self {
 			Modifier::Editor => {
@@ -400,14 +360,18 @@ impl Modifier {
 }
 
 /// Inner sync logic shared by open_local_issue and sync_issue_file.
-async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, meta: &IssueMetaEntry, issue: &mut Issue) -> Result<()> {
+async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Path, owner: &str, repo: &str, issue_number: u64, issue: &mut Issue, extension: Extension) -> Result<()> {
 	// Check if this is a pending issue (created via --touch, not yet on GitHub)
 	let is_pending = issue.meta.url.is_none();
+
+	// Load consensus from git (last committed state)
+	let consensus = load_consensus_issue(issue_file_path);
 
 	// For pending issues, skip divergence check and create on GitHub first
 	let (actions_executed, created_issue_number) = if is_pending {
 		// Collect actions (will include CreateIssue for the root)
-		let actions = issue.collect_actions(&meta.original_sub_issues);
+		// For pending issues without consensus, use empty sub-issues list
+		let actions = issue.collect_actions(&[]);
 		let has_actions = actions.iter().any(|level| !level.is_empty());
 
 		if has_actions {
@@ -419,20 +383,18 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 		// Normal flow: use consensus-based sync
 		let (current_user, gh_issue, gh_comments, gh_sub_issues) = tokio::try_join!(
 			gh.fetch_authenticated_user(),
-			gh.fetch_issue(owner, repo, meta.issue_number),
-			gh.fetch_comments(owner, repo, meta.issue_number),
-			gh.fetch_sub_issues(owner, repo, meta.issue_number),
+			gh.fetch_issue(owner, repo, issue_number),
+			gh.fetch_comments(owner, repo, issue_number),
+			gh.fetch_sub_issues(owner, repo, issue_number),
 		)?;
 
 		// Build Issue from current GitHub state
 		let remote_issue = Issue::from_github(&gh_issue, &gh_comments, &gh_sub_issues, owner, repo, &current_user);
 
-		// Build Issue from what we originally saw (stored in meta) - this is the consensus
-		let original_issue = Issue::from_meta(meta, owner, repo);
-
-		// Use consensus-based sync: compare local and remote against the original (consensus)
-		let local_changed = *issue != original_issue;
-		let remote_changed = remote_issue != original_issue;
+		// Consensus is the last committed state in git
+		// If no consensus (new file), treat as "only local changed"
+		let local_changed = consensus.as_ref().map(|c| *issue != *c).unwrap_or(true);
+		let remote_changed = consensus.as_ref().map(|c| remote_issue != *c).unwrap_or(false);
 
 		match (local_changed, remote_changed) {
 			(false, false) => {
@@ -445,30 +407,37 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 			}
 			(false, true) => {
 				// Only remote changed - accept remote as new truth
-				// Update local file to match remote state
 				tracing::debug!("[sync] Only remote changed, accepting remote state");
 				let remote_content = remote_issue.serialize();
 				std::fs::write(issue_file_path, &remote_content)?;
-				// Update metadata to reflect new original state
-				let mut updated_meta = meta.clone();
-				updated_meta.original_issue_body = remote_issue.body().into();
-				updated_meta.original_close_state = remote_issue.meta.close_state.clone();
-				// Note: comments and sub-issues would need similar updates for full implementation
-				super::meta::save_issue_meta(owner, repo, updated_meta)?;
 				// Commit the remote state update to git
-				commit_synced_changes(owner, repo, meta.issue_number);
+				commit_issue_changes(issue_file_path, owner, repo, issue_number, None)?;
 				println!("Remote changed, local file updated.");
 				return Ok(());
 			}
 			(true, true) => {
 				// Both changed - conflict!
 				tracing::debug!("[sync] Both local and remote changed, conflict detected");
-				return handle_divergence(gh, issue_file_path, owner, repo, meta, issue, &remote_issue).await;
+				return handle_divergence(issue_file_path, owner, repo, issue_number, &remote_issue).await;
 			}
 		}
 
 		// Collect and execute actions (for local changes being pushed)
-		let actions = issue.collect_actions(&meta.original_sub_issues);
+		// Use sub-issues from consensus for comparison
+		let consensus_sub_issues: Vec<_> = consensus
+			.as_ref()
+			.map(|c| {
+				c.children
+					.iter()
+					.map(|child| crate::github::OriginalSubIssue {
+						number: child.meta.url.as_ref().and_then(|u| u.rsplit('/').next()).and_then(|n| n.parse().ok()).unwrap_or(0),
+						state: child.meta.close_state.to_github_state().to_string(),
+					})
+					.collect()
+			})
+			.unwrap_or_default();
+
+		let actions = issue.collect_actions(&consensus_sub_issues);
 		let has_actions = actions.iter().any(|level| !level.is_empty());
 
 		if has_actions {
@@ -485,28 +454,35 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 	}
 
 	// Determine the issue number to use for sync/refresh (may have just been created)
-	let issue_number = created_issue_number.unwrap_or(meta.issue_number);
+	let final_issue_number = created_issue_number.unwrap_or(issue_number);
 
 	// Sync body/comment/state changes to GitHub (skip for newly created issues - body already set)
 	let state_changed = if created_issue_number.is_none() {
-		sync_local_issue_to_github(gh, owner, repo, meta, issue).await?
+		// Use consensus for comparison, or create empty Issue if no consensus
+		let consensus_for_sync = consensus.unwrap_or_else(|| Issue {
+			meta: issue.meta.clone(),
+			labels: vec![],
+			comments: vec![],
+			children: vec![],
+			blockers: Default::default(),
+			last_contents_change: None,
+		});
+		sync_local_issue_to_github(gh, owner, repo, final_issue_number, &consensus_for_sync, issue).await?
 	} else {
 		false
 	};
 
 	// If we executed actions or state changed, refresh from GitHub
 	if actions_executed > 0 || state_changed {
-		// Re-fetch and update local file and metadata to reflect the synced state
+		// Re-fetch and update local file to reflect the synced state
 		println!("Refreshing local issue file from GitHub...");
-		let extension = match meta.extension.as_str() {
-			"typ" => Extension::Typ,
-			_ => Extension::Md,
-		};
 
 		// Determine parent issue info if this is a sub-issue
-		// Convert to Vec<FetchedIssue> for the new API
+		let meta = load_issue_meta_from_path(issue_file_path)?;
 		let ancestors: Option<Vec<FetchedIssue>> = meta.parent_issue.and_then(|parent_num| {
-			let parent_meta = get_issue_meta(owner, repo, parent_num)?;
+			// Load parent info from filesystem
+			// This is simplified - full implementation would traverse the hierarchy
+			let parent_meta = load_issue_meta_from_path(issue_file_path.parent()?.join("..").as_path()).ok()?;
 			let fetched = FetchedIssue::from_parts(owner, repo, parent_num, &parent_meta.title)?;
 			Some(vec![fetched])
 		});
@@ -515,7 +491,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
-		let new_path = fetch_and_store_issue(gh, owner, repo, issue_number, &extension, ancestors).await?;
+		let new_path = fetch_and_store_issue(gh, owner, repo, final_issue_number, &extension, ancestors).await?;
 
 		// If the path changed (title/state changed or format changed), delete the old file
 		if old_path != new_path && old_path.exists() {
@@ -528,18 +504,10 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 			}
 			std::fs::remove_file(&old_path)?;
 
-			// For title changes, we might also need to remove the old sub-issues directory
-			// Only do this if the old directory is different from where the new file lives
-			// (i.e., don't delete the new directory when moving from flat to directory format)
+			// Handle old sub-issues directory cleanup
 			let old_sub_dir = old_path.with_extension("");
-			let old_sub_dir = if old_sub_dir.extension().is_some() {
-				// Handle .md.bak case - strip .md too
-				old_sub_dir.with_extension("")
-			} else {
-				old_sub_dir
-			};
+			let old_sub_dir = if old_sub_dir.extension().is_some() { old_sub_dir.with_extension("") } else { old_sub_dir };
 
-			// Only delete old sub-issues dir if it's not where the new file lives
 			let new_parent = new_path.parent();
 			if old_sub_dir.is_dir() && new_parent != Some(old_sub_dir.as_path()) {
 				if let Err(e) = std::fs::remove_dir_all(&old_sub_dir) {
@@ -553,7 +521,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGitHubClient, issue_file_path: &Pa
 		}
 
 		// Commit the synced changes to local git
-		commit_synced_changes(owner, repo, issue_number);
+		commit_issue_changes(issue_file_path, owner, repo, final_issue_number, None)?;
 	} else {
 		println!("No changes made.");
 	}
@@ -568,11 +536,10 @@ pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, of
 }
 
 /// Modify a local issue file using the given modifier, then sync changes back to GitHub.
-/// This is the core workflow for all issue modifications.
 pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier) -> Result<ModifyResult> {
 	use super::{conflict::check_any_conflicts, files::extract_owner_repo_from_path, meta::is_virtual_project};
 
-	// Check for any unresolved conflicts first - blocks all operations
+	// Check for any unresolved conflicts first
 	check_any_conflicts()?;
 
 	// Extract owner and repo from path
@@ -581,10 +548,10 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	// Auto-enable offline mode for virtual projects
 	let offline = offline || is_virtual_project(&owner, &repo);
 
-	// Load metadata
+	// Load metadata from path
 	let meta = load_issue_meta_from_path(issue_file_path)?;
 
-	// Determine extension for shorthand expansion
+	// Determine extension
 	let extension = match meta.extension.as_str() {
 		"typ" => Extension::Typ,
 		_ => Extension::Md,
@@ -608,7 +575,9 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		println!("Issue marked as duplicate, removing local file...");
 
 		// Close on GitHub (if not already closed and not offline)
-		if !offline && !meta.original_close_state.is_closed() {
+		let consensus = load_consensus_issue(issue_file_path);
+		let consensus_closed = consensus.map(|c| c.meta.close_state.is_closed()).unwrap_or(false);
+		if !offline && !consensus_closed {
 			gh.update_issue_state(&owner, &repo, meta.issue_number, "closed").await?;
 		}
 
@@ -617,23 +586,13 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 		// Remove sub-issues directory if it exists
 		let sub_dir = issue_file_path.with_extension("");
-		let sub_dir = if sub_dir.extension().is_some() {
-			// Handle .md.bak case - strip .md too
-			sub_dir.with_extension("")
-		} else {
-			sub_dir
-		};
+		let sub_dir = if sub_dir.extension().is_some() { sub_dir.with_extension("") } else { sub_dir };
 		if sub_dir.is_dir() {
 			std::fs::remove_dir_all(&sub_dir)?;
 		}
 
-		// Remove from metadata
-		let mut project_meta = super::meta::load_project_meta(&owner, &repo);
-		project_meta.issues.remove(&meta.issue_number);
-		super::meta::save_project_meta(&project_meta)?;
-
 		// Commit the removal to git
-		commit_synced_changes(&owner, &repo, meta.issue_number);
+		commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
 
 		println!("Duplicate issue removed from local storage.");
 		return Ok(result);
@@ -652,7 +611,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	}
 
 	// Use shared sync logic
-	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, &meta, &mut issue).await?;
+	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, meta.issue_number, &mut issue, extension).await?;
 
 	Ok(result)
 }

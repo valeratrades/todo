@@ -15,6 +15,8 @@ pub struct GitHubIssue {
 	pub labels: Vec<GitHubLabel>,
 	pub user: GitHubUser,
 	pub state: String, // "open" or "closed" //TODO!!!!: add an actual enum
+	/// Last time the issue was updated (ISO 8601 format)
+	pub updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,18 +34,6 @@ pub struct GitHubComment {
 	pub id: u64,
 	pub body: Option<String>,
 	pub user: GitHubUser,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OriginalComment {
-	pub id: u64,
-	pub body: Option<String>,
-}
-
-impl From<&GitHubComment> for OriginalComment {
-	fn from(c: &GitHubComment) -> Self {
-		Self { id: c.id, body: c.body.clone() }
-	}
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -1,41 +1,36 @@
-//! Project and issue metadata persistence.
+//! Project and issue metadata.
+//!
+//! The .meta.json file only stores virtual project configuration.
+//! Issue metadata (title, extension, parent) is derived from file paths.
+//! Consensus state for sync comes from git (last committed version).
 
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use todo::CloseState;
 use v_utils::prelude::*;
 
 use super::files::get_project_dir;
-use crate::github::{OriginalComment, OriginalSubIssue};
 
-/// Stored metadata for a single issue
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Metadata for a single issue, derived from file path/name.
+/// This is NOT stored in .meta.json - it's computed on demand from the file path.
+#[derive(Clone, Debug)]
 pub struct IssueMetaEntry {
 	pub issue_number: u64,
 	pub title: String,
 	pub extension: String,
-	/// Original issue body (for diffing)
-	pub original_issue_body: Option<String>,
-	/// Original comments with their IDs
-	pub original_comments: Vec<OriginalComment>,
-	/// Original sub-issues with their state
-	pub original_sub_issues: Vec<OriginalSubIssue>,
 	/// Parent issue number if this is a sub-issue
 	pub parent_issue: Option<u64>,
-	/// Original issue close state (for detecting close/reopen)
-	#[serde(default)]
-	pub original_close_state: CloseState,
 }
 
-/// Project-level metadata file containing all issues
+/// Project-level metadata file containing only virtual project configuration.
 /// Stored at: issues/{owner}/{repo}/.meta.json
+///
+/// NOTE: This file only exists for virtual projects (offline-only).
+/// Normal GitHub-connected projects don't need this file at all.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ProjectMeta {
 	pub owner: String,
 	pub repo: String,
-	/// Map from issue number to its metadata
-	pub issues: HashMap<u64, IssueMetaEntry>,
 	/// Virtual project: has no GitHub remote, all operations are offline-only.
 	/// Issue numbers are locally generated (starting from 1).
 	#[serde(default)]
@@ -57,14 +52,12 @@ pub fn load_project_meta(owner: &str, repo: &str) -> ProjectMeta {
 		Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| ProjectMeta {
 			owner: owner.to_string(),
 			repo: repo.to_string(),
-			issues: HashMap::new(),
 			virtual_project: false,
 			next_virtual_issue_number: 0,
 		}),
 		Err(_) => ProjectMeta {
 			owner: owner.to_string(),
 			repo: repo.to_string(),
-			issues: HashMap::new(),
 			virtual_project: false,
 			next_virtual_issue_number: 0,
 		},
@@ -82,54 +75,105 @@ pub fn save_project_meta(meta: &ProjectMeta) -> Result<()> {
 	Ok(())
 }
 
-/// Get metadata for a specific issue from the project meta
-pub fn get_issue_meta(owner: &str, repo: &str, issue_number: u64) -> Option<IssueMetaEntry> {
-	let project_meta = load_project_meta(owner, repo);
-	project_meta.issues.get(&issue_number).cloned()
-}
-
-/// Save metadata for a specific issue to the project meta
-pub fn save_issue_meta(owner: &str, repo: &str, entry: IssueMetaEntry) -> Result<()> {
-	let mut project_meta = load_project_meta(owner, repo);
-	project_meta.issues.insert(entry.issue_number, entry);
-	save_project_meta(&project_meta)
-}
-
-/// Load metadata from an issue file path by extracting the issue number.
+/// Load metadata from an issue file path by extracting info from the path/name.
 /// Handles both flat format ({number}_-_{title}.ext) and directory format ({number}_-_{title}/__main__.ext).
 pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<IssueMetaEntry> {
-	use super::files::{MAIN_ISSUE_FILENAME, extract_owner_repo_from_path};
+	use super::files::{MAIN_ISSUE_FILENAME, extract_owner_repo_from_path, issues_dir};
 
-	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
+	let (_owner, _repo) = extract_owner_repo_from_path(issue_file_path)?;
 
-	// Extract issue number from filename or parent directory name
+	// Extract issue number and title from filename or parent directory name
 	let filename = issue_file_path.file_name().and_then(|n| n.to_str()).ok_or_else(|| eyre!("Invalid issue file path"))?;
 
 	// Handle .bak suffix for closed issues
-	let filename = filename.strip_suffix(".bak").unwrap_or(filename);
+	let filename_no_bak = filename.strip_suffix(".bak").unwrap_or(filename);
 
-	// Check if this is a __main__ file (directory format)
-	let name_to_parse = if filename.starts_with(MAIN_ISSUE_FILENAME) {
-		// Get issue number from parent directory name instead
-		// Parent directory format: {number}_-_{title}
-		issue_file_path
-			.parent()
-			.and_then(|p| p.file_name())
-			.and_then(|n| n.to_str())
-			.ok_or_else(|| eyre!("Could not extract parent directory for __main__ file"))?
+	// Determine extension
+	let extension = if filename_no_bak.ends_with(".md") {
+		"md"
+	} else if filename_no_bak.ends_with(".typ") {
+		"typ"
 	} else {
-		filename
+		"md" // default
 	};
 
-	// Extract issue number from name format: {number}_-_{title} or {number}.{ext}
-	let issue_number: u64 = name_to_parse
-		.split("_-_")
-		.next()
-		.or_else(|| name_to_parse.split('.').next())
-		.ok_or_else(|| eyre!("Could not extract issue number from filename"))?
-		.parse()?;
+	// Check if this is a __main__ file (directory format)
+	let (name_to_parse, parent_dir) = if filename_no_bak.starts_with(MAIN_ISSUE_FILENAME) {
+		// Get issue number from parent directory name instead
+		// Parent directory format: {number}_-_{title}
+		let parent_dir = issue_file_path.parent();
+		let name = parent_dir
+			.and_then(|p| p.file_name())
+			.and_then(|n| n.to_str())
+			.ok_or_else(|| eyre!("Could not extract parent directory for __main__ file"))?;
+		(name, parent_dir)
+	} else {
+		// Strip extension for flat format
+		let name = filename_no_bak.strip_suffix(".md").or_else(|| filename_no_bak.strip_suffix(".typ")).unwrap_or(filename_no_bak);
+		(name, issue_file_path.parent())
+	};
 
-	get_issue_meta(&owner, &repo, issue_number).ok_or_else(|| eyre!("No metadata found for issue #{issue_number}"))
+	// Extract issue number and title from name format: {number}_-_{title} or just {number}
+	let (issue_number, title) = if let Some(sep_pos) = name_to_parse.find("_-_") {
+		let number: u64 = name_to_parse[..sep_pos].parse()?;
+		let title = name_to_parse[sep_pos + 3..].replace('_', " ");
+		(number, title)
+	} else {
+		// Just a number, no title separator
+		let number: u64 = name_to_parse.parse().map_err(|_| eyre!("Could not parse issue number from: {}", name_to_parse))?;
+		(number, String::new())
+	};
+
+	// Determine parent issue by looking at the directory structure
+	// Path structure: issues/{owner}/{repo}/{parent_dir}?/{file}
+	// If there's a parent_dir that looks like {number}_-_{title}, it's a sub-issue
+	let parent_issue = if let Some(parent) = parent_dir {
+		// Check if the parent is the issue directory (for __main__ files) or grandparent (for nested issues)
+		let check_dir = if filename_no_bak.starts_with(MAIN_ISSUE_FILENAME) {
+			// For __main__.md, the parent dir is THIS issue's dir, check grandparent for parent issue
+			parent.parent()
+		} else {
+			// For flat files, check the parent directory
+			Some(parent)
+		};
+
+		if let Some(dir) = check_dir {
+			// Get relative path from issues base
+			let issues_base = issues_dir();
+			if let Ok(rel) = dir.strip_prefix(&issues_base) {
+				// Skip owner/repo components
+				let components: Vec<_> = rel.components().collect();
+				if components.len() > 2 {
+					// There's a parent issue directory
+					if let Some(parent_dir_name) = components.last().and_then(|c| c.as_os_str().to_str()) {
+						// Try to extract parent issue number
+						if let Some(sep_pos) = parent_dir_name.find("_-_") {
+							parent_dir_name[..sep_pos].parse::<u64>().ok()
+						} else {
+							parent_dir_name.parse::<u64>().ok()
+						}
+					} else {
+						None
+					}
+				} else {
+					None
+				}
+			} else {
+				None
+			}
+		} else {
+			None
+		}
+	} else {
+		None
+	};
+
+	Ok(IssueMetaEntry {
+		issue_number,
+		title,
+		extension: extension.to_string(),
+		parent_issue,
+	})
 }
 
 /// Check if a project is virtual (has no GitHub remote)
@@ -172,7 +216,6 @@ pub fn ensure_virtual_project(owner: &str, repo: &str) -> Result<ProjectMeta> {
 		let project_meta = ProjectMeta {
 			owner: owner.to_string(),
 			repo: repo.to_string(),
-			issues: HashMap::new(),
 			virtual_project: true,
 			next_virtual_issue_number: 1,
 		};

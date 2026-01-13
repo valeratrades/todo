@@ -4,6 +4,7 @@
 
 use std::fmt;
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -211,6 +212,9 @@ pub struct Issue {
 	pub children: Vec<Issue>,
 	/// Blockers section.
 	pub blockers: BlockerSequence,
+	/// Timestamp of last content change (body/comments, not children).
+	/// Used for sync conflict resolution. None for local-only issues that haven't been synced.
+	pub last_contents_change: Option<Timestamp>,
 }
 
 impl Issue {
@@ -425,6 +429,7 @@ impl Issue {
 					comments: child_comments,
 					children: vec![],
 					blockers: BlockerSequence::default(),
+					last_contents_change: None, // Set from GitHub when syncing
 				});
 				continue;
 			}
@@ -453,6 +458,7 @@ impl Issue {
 			comments,
 			children,
 			blockers: BlockerSequence::from_lines(blocker_lines),
+			last_contents_change: None, // Set from GitHub when syncing
 		})
 	}
 

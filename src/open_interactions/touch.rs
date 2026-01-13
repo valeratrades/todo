@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 
-use todo::{CloseState, Extension};
+use todo::Extension;
 use v_utils::prelude::*;
 
 use super::{
 	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
-	meta::{IssueMetaEntry, allocate_virtual_issue_number, ensure_virtual_project, save_issue_meta},
+	meta::{allocate_virtual_issue_number, ensure_virtual_project},
 };
 
 /// Parsed touch path components
@@ -102,18 +102,7 @@ pub fn create_pending_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 	let content = format!("- [ ] {issue_title} <!--  -->\n");
 	std::fs::write(&issue_file_path, &content)?;
 
-	// Save metadata (issue_number 0 = pending)
-	let meta_entry = IssueMetaEntry {
-		issue_number: 0,
-		title: issue_title.clone(),
-		extension: extension.as_str().to_string(),
-		original_issue_body: Some(String::new()),
-		original_comments: vec![],
-		original_sub_issues: vec![],
-		parent_issue: None,
-		original_close_state: CloseState::Open,
-	};
-	save_issue_meta(owner, repo, meta_entry)?;
+	// No longer saving metadata - it's derived from file paths
 
 	println!("Created pending issue: {issue_title}");
 	println!("Will be created on GitHub when you close the editor.");
@@ -156,18 +145,7 @@ pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 
 	std::fs::write(&issue_file_path, &content)?;
 
-	// Save metadata
-	let meta_entry = IssueMetaEntry {
-		issue_number,
-		title: issue_title.clone(),
-		extension: extension.as_str().to_string(),
-		original_issue_body: Some(String::new()),
-		original_comments: vec![],
-		original_sub_issues: vec![],
-		parent_issue: None,
-		original_close_state: CloseState::Open,
-	};
-	save_issue_meta(owner, repo, meta_entry)?;
+	// No longer saving metadata - it's derived from file paths
 
 	println!("Created virtual issue #{issue_number}: {issue_title}");
 	println!("Stored at: {:?}", issue_file_path);

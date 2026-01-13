@@ -267,6 +267,7 @@ impl MockGitHubClient {
 			labels: data.labels.iter().map(|name| GitHubLabel { name: name.clone() }).collect(),
 			user: GitHubUser { login: data.owner_login.clone() },
 			state: data.state.clone(),
+			updated_at: "2024-01-15T12:00:00Z".to_string(), // Mock timestamp
 		}
 	}
 }
