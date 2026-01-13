@@ -56,6 +56,4 @@
 
 	- [ ] --last flag on open
 
-	- [ ] --last flag on open
-
 	- [ ] close options

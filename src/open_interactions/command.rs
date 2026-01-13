@@ -60,6 +60,12 @@ pub struct OpenArgs {
 	#[arg(short, long)]
 	pub blocker: bool,
 
+	/// Like --blocker, but also sets the opened issue as active if different from current.
+	/// Opens the current blocker issue (or pattern match), and if that issue belongs to
+	/// a different project than the currently active one, sets it as the active project.
+	#[arg(long)]
+	pub blocker_set: bool,
+
 	/// Force through conflicts by taking the source side.
 	/// When opening via local path: takes local version.
 	/// When opening via GitHub URL: takes remote version.
@@ -105,8 +111,9 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		reset: args.reset,
 	};
 
-	// Handle --blocker mode: use current blocker issue file if no pattern provided
-	let input = if args.blocker && args.url_or_pattern.is_none() {
+	// Handle --blocker and --blocker-set modes: use current blocker issue file if no pattern provided
+	let use_blocker_mode = args.blocker || args.blocker_set;
+	let input = if use_blocker_mode && args.url_or_pattern.is_none() {
 		// Get current blocker issue path
 		let blocker_path = crate::blocker_interactions::integration::get_current_blocker_issue().ok_or_else(|| eyre!("No blocker issue set. Use `todo blocker set <pattern>` first."))?;
 		blocker_path.to_string_lossy().to_string()
@@ -115,19 +122,17 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	};
 	let input = input.as_str();
 
-	// Handle --last mode: open the most recently modified issue file
-	if args.last {
+	// Resolve the issue file path and sync options based on mode
+	let (issue_file_path, sync_opts, effective_offline) = if args.last {
+		// Handle --last mode: open the most recently modified issue file
 		let all_files = search_issue_files("")?;
 		if all_files.is_empty() {
 			bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
 		}
 		// Files are already sorted by modification time (most recent first)
-		open_local_issue(&gh, &all_files[0], offline, base_sync_opts.clone()).await?;
-		return Ok(());
-	}
-
-	// Handle --touch mode
-	if args.touch {
+		(all_files[0].clone(), base_sync_opts.clone(), offline)
+	} else if args.touch {
+		// Handle --touch mode
 		let touch_path = parse_touch_path(input)?;
 
 		// Determine the extension to use
@@ -135,17 +140,13 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		// Check if the project is virtual
 		let project_is_virtual = is_virtual_project(&touch_path.owner, &touch_path.repo);
+		let effective_offline = offline || project_is_virtual;
 
 		// First, try to find an existing local issue file
-		if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
+		let issue_file_path = if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {existing_path:?}");
-			let effective_offline = offline || project_is_virtual;
-			open_local_issue(&gh, &existing_path, effective_offline, base_sync_opts.clone()).await?;
-			return Ok(());
-		}
-
-		// Not found locally - create a local file
-		let issue_file_path = if project_is_virtual {
+			existing_path
+		} else if project_is_virtual {
 			// Virtual project: stays local forever
 			println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
 			create_virtual_issue(&touch_path, &effective_ext)?
@@ -154,14 +155,8 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			create_pending_issue(&touch_path, &effective_ext)?
 		};
 
-		// Open for editing - sync will create on GitHub if pending
-		let effective_offline = offline || project_is_virtual;
-		open_local_issue(&gh, &issue_file_path, effective_offline, base_sync_opts.clone()).await?;
-		return Ok(());
-	}
-
-	// Check if input is a GitHub issue URL specifically (not just any GitHub URL)
-	if github::is_github_issue_url(input) {
+		(issue_file_path, base_sync_opts.clone(), effective_offline)
+	} else if github::is_github_issue_url(input) {
 		// GitHub URL mode: fetch issue and store in XDG_DATA (can't be offline)
 		if offline {
 			bail!("Cannot fetch issue from URL in offline mode");
@@ -184,45 +179,51 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			force: false, // Don't re-apply after editor
 			reset: false, // Don't re-apply after editor
 		};
-		open_local_issue(&gh, &issue_file_path, offline, remote_sync_opts).await?;
-		return Ok(());
-	}
+		(issue_file_path, remote_sync_opts, offline)
+	} else {
+		// Check if input is an existing file path (absolute or relative)
+		let input_path = Path::new(input);
+		if input_path.exists() && input_path.is_file() {
+			// Direct file path - open it
+			(input_path.to_path_buf(), base_sync_opts.clone(), offline)
+		} else {
+			// Local search mode: find and open existing issue file
+			let matches = search_issue_files(input)?;
 
-	// Check if input is an existing file path (absolute or relative)
-	let input_path = Path::new(input);
-	if input_path.exists() && input_path.is_file() {
-		// Direct file path - open it
-		open_local_issue(&gh, input_path, offline, base_sync_opts.clone()).await?;
-		return Ok(());
-	}
+			let issue_file_path = match matches.len() {
+				0 => {
+					// No matches - open fzf with all files and use input as initial query
+					let all_files = search_issue_files("")?;
+					if all_files.is_empty() {
+						bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
+					}
+					match choose_issue_with_fzf(&all_files, input)? {
+						Some(path) => path,
+						None => bail!("No issue selected"),
+					}
+				}
+				1 => matches[0].clone(),
+				_ => {
+					// Multiple matches - open fzf to choose
+					match choose_issue_with_fzf(&matches, input)? {
+						Some(path) => path,
+						None => bail!("No issue selected"),
+					}
+				}
+			};
 
-	// Local search mode: find and open existing issue file
-	let matches = search_issue_files(input)?;
-
-	let issue_file_path = match matches.len() {
-		0 => {
-			// No matches - open fzf with all files and use input as initial query
-			let all_files = search_issue_files("")?;
-			if all_files.is_empty() {
-				bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
-			}
-			match choose_issue_with_fzf(&all_files, input)? {
-				Some(path) => path,
-				None => bail!("No issue selected"),
-			}
-		}
-		1 => matches[0].clone(),
-		_ => {
-			// Multiple matches - open fzf to choose
-			match choose_issue_with_fzf(&matches, input)? {
-				Some(path) => path,
-				None => bail!("No issue selected"),
-			}
+			(issue_file_path, base_sync_opts, offline)
 		}
 	};
 
 	// Open the local issue file for editing
-	open_local_issue(&gh, &issue_file_path, offline, base_sync_opts).await?;
+	open_local_issue(&gh, &issue_file_path, effective_offline, sync_opts).await?;
+
+	// If --blocker-set was used, set this issue as the current blocker issue
+	if args.blocker_set {
+		crate::blocker_interactions::integration::set_current_blocker_issue(&issue_file_path)?;
+		println!("Set current blocker issue to: {}", issue_file_path.display());
+	}
 
 	Ok(())
 }

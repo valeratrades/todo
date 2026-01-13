@@ -403,16 +403,18 @@ async fn sync_issue_to_github_inner(
 	let consensus = load_consensus_issue(issue_file_path);
 
 	// For pending issues, skip divergence check and create on GitHub first
-	let (actions_executed, created_issue_number) = if is_pending {
+	// Returns (actions_executed, created_issue_number, local_needs_update)
+	let (actions_executed, created_issue_number, local_needs_update) = if is_pending {
 		// Collect actions (will include CreateIssue for the root)
 		// For pending issues without consensus, use empty sub-issues list
 		let actions = issue.collect_actions(&[]);
 		let has_actions = actions.iter().any(|level| !level.is_empty());
 
 		if has_actions {
-			execute_issue_actions(gh, owner, repo, issue, actions).await?
+			let (executed, created) = execute_issue_actions(gh, owner, repo, issue, actions).await?;
+			(executed, created, false)
 		} else {
-			(0, None)
+			(0, None, false)
 		}
 	} else {
 		// Normal flow: use per-node consensus-based sync
@@ -476,9 +478,10 @@ async fn sync_issue_to_github_inner(
 		let has_actions = actions.iter().any(|level| !level.is_empty());
 
 		if has_actions {
-			execute_issue_actions(gh, owner, repo, issue, actions).await?
+			let (executed, created) = execute_issue_actions(gh, owner, repo, issue, actions).await?;
+			(executed, created, local_needs_update)
 		} else {
-			(0, None)
+			(0, None, local_needs_update)
 		}
 	};
 
@@ -507,8 +510,8 @@ async fn sync_issue_to_github_inner(
 		false
 	};
 
-	// If we executed actions or state changed, refresh from GitHub
-	if actions_executed > 0 || state_changed {
+	// If we executed actions, state changed, or local needs update (new sub-issues from remote), refresh from GitHub
+	if actions_executed > 0 || state_changed || local_needs_update {
 		// Re-fetch and update local file to reflect the synced state
 		println!("Refreshing local issue file from GitHub...");
 

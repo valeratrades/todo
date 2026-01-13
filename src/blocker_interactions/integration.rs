@@ -27,7 +27,7 @@ pub fn get_current_blocker_issue() -> Option<PathBuf> {
 }
 
 /// Set the current blocker issue file path
-fn set_current_blocker_issue(path: &Path) -> Result<()> {
+pub fn set_current_blocker_issue(path: &Path) -> Result<()> {
 	let cache_path = get_current_blocker_cache_path();
 	std::fs::write(&cache_path, path.to_string_lossy().as_bytes())?;
 	Ok(())

@@ -55,8 +55,8 @@ fn main() {
 	// Summary
 	println!("=== Summary for {line_count} lines ===");
 	println!("pulldown-cmark parse:     {pulldown_parse:?}");
-	println!("pulldown-cmark → typst:   {pulldown_to_typst:?}"st);
-	println!("pandoc md → typst:        {pandoc_to_typst:?}"st);
+	println!("pulldown-cmark → typst:   {pulldown_to_typst:?}");
+	println!("pandoc md → typst:        {pandoc_to_typst:?}");
 	println!("Speedup (pulldown/pandoc): {:.1}x", pandoc_to_typst.as_secs_f64() / pulldown_to_typst.as_secs_f64());
 }
 
