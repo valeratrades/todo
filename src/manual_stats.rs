@@ -11,7 +11,6 @@ use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, bail, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use v_utils::{Percent, io::file_open::OpenMode, time::Timelike};
-use xattr::FileExt as _;
 
 use crate::utils;
 
@@ -30,15 +29,10 @@ pub async fn update_or_open(settings: &crate::config::LiveSettings, args: Manual
 			return Ok(());
 		}
 		ManualSubcommands::LastEvUpdateHours(_) => {
-			let file = match std::fs::File::open(&target_file_path) {
-				Ok(m) => m,
-				Err(_) => bail!("Day object not initialized"),
-			};
-			let last_update_tag = file
-				.get_xattr("user.last_ev_change")?
-				.ok_or_else(|| color_eyre::eyre::eyre!("No last_ev_change xattr found on day file\nSuggestion: try to manually remove and re-initialize with `todo manual ev -r`"))?;
-			let last_update_str = String::from_utf8_lossy(&last_update_tag).into_owned();
-			let last_update_ts: jiff::Timestamp = last_update_str.parse()?;
+			let day = Day::load(&date).map_err(|_| color_eyre::eyre::eyre!("Day object not initialized"))?;
+			let last_update_ts = day
+				.last_ev_change
+				.ok_or_else(|| color_eyre::eyre::eyre!("No last_ev_change recorded\nSuggestion: try to manually remove and re-initialize with `todo manual ev -r`"))?;
 
 			let now = jiff::Timestamp::now();
 			let full_hours_ago = (now - last_update_ts).get_hours();
@@ -105,15 +99,18 @@ pub async fn update_or_open(settings: &crate::config::LiveSettings, args: Manual
 			d
 		}
 	};
+
+	let mut day = day;
+	if !matches!(&args.command, &ManualSubcommands::CounterStep(_)) {
+		day.last_ev_change = Some(jiff::Timestamp::now());
+	}
+
 	day.update_pbs(target_file_path.parent().unwrap(), settings);
 
 	let formatted_json = serde_json::to_string_pretty(&day).unwrap();
 	let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&target_file_path).unwrap();
 	file.write_all(formatted_json.as_bytes()).unwrap();
 	fs::set_permissions(&target_file_path, fs::Permissions::from_mode(0o666))?;
-	if !matches!(&args.command, &ManualSubcommands::CounterStep(_)) {
-		file.set_xattr("user.last_ev_change", jiff::Timestamp::now().to_string().as_bytes())?;
-	}
 
 	if ev_override.is_some_and(|ev_args| ev_args.open) {
 		v_utils::io::file_open::open(&target_file_path).await?;
@@ -258,6 +255,7 @@ struct Counters {
 pub struct Day {
 	date: String,
 	ev: i32,
+	last_ev_change: Option<jiff::Timestamp>,
 	morning: Morning,
 	midday: Midday,
 	evening: Evening,
