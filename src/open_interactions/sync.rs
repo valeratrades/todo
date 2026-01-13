@@ -16,7 +16,7 @@
 //! This eliminates the need for storing consensus state in .meta.json files.
 
 /// Which source was used to open the issue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OpenSource {
 	/// Opened via local file path or search
 	#[default]
@@ -26,7 +26,7 @@ pub enum OpenSource {
 }
 
 /// Options for controlling sync behavior.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SyncOptions {
 	/// How the issue was opened (local path vs remote URL)
 	pub source: OpenSource,

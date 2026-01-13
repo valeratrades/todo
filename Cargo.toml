@@ -45,10 +45,10 @@ xdg = "3.0.0"
 insta = "1.46"
 pulldown-cmark = "0.13.0"
 rstest = "0.26"
-v_fixtures = { version = "^0.3.1" }
+v_fixtures = { version = "^0.3.2" }
 
-[patch.crates-io]
-v_fixtures = { path = "../v_fixtures" }
+#[patch.crates-io]
+#v_fixtures = { path = "../v_fixtures" }
 
 [[test]]
 name = "integration"

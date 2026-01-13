@@ -128,6 +128,52 @@ impl TestContext {
 			edit_to: None,
 		}
 	}
+
+	/// Read a file from the data directory.
+	pub fn read(&self, relative_path: &str) -> String {
+		self.xdg.read_data(relative_path.trim_start_matches('/'))
+	}
+
+	/// Write a file to the data directory.
+	pub fn write(&self, relative_path: &str, content: &str) {
+		self.xdg.write_data(relative_path.trim_start_matches('/'), content);
+	}
+
+	/// Check if a file exists in the data directory.
+	pub fn data_exists(&self, relative_path: &str) -> bool {
+		self.xdg.data_exists(relative_path.trim_start_matches('/'))
+	}
+
+	/// Read the current project from cache.
+	pub fn read_current_project(&self) -> Option<String> {
+		if self.xdg.cache_exists("current_project.txt") {
+			Some(self.xdg.read_cache("current_project.txt"))
+		} else {
+			None
+		}
+	}
+
+	/// Read a blocker file (path relative to blockers directory).
+	pub fn read_blocker(&self, blocker_relative_path: &str) -> String {
+		self.xdg.read_data(&format!("blockers/{blocker_relative_path}"))
+	}
+
+	/// Check if a blocker file exists.
+	pub fn blocker_exists(&self, blocker_relative_path: &str) -> bool {
+		self.xdg.data_exists(&format!("blockers/{blocker_relative_path}"))
+	}
+
+	/// Get the data directory path.
+	pub fn data_dir(&self) -> PathBuf {
+		self.xdg.data_dir()
+	}
+
+	/// Set up mock GitHub to return an issue.
+	///
+	/// The issue parameter should be a serde_json::Value representing the mock state.
+	pub fn setup_mock_state(&self, state: &serde_json::Value) {
+		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(state).unwrap()).unwrap();
+	}
 }
 
 /// Builder for running the `open` command with various options.
@@ -186,53 +232,5 @@ impl<'a> OpenBuilder<'a> {
 			String::from_utf8_lossy(&output.stdout).into_owned(),
 			String::from_utf8_lossy(&output.stderr).into_owned(),
 		)
-	}
-}
-
-impl TestContext {
-	/// Read a file from the data directory.
-	pub fn read(&self, relative_path: &str) -> String {
-		self.xdg.read_data(relative_path.trim_start_matches('/'))
-	}
-
-	/// Write a file to the data directory.
-	pub fn write(&self, relative_path: &str, content: &str) {
-		self.xdg.write_data(relative_path.trim_start_matches('/'), content);
-	}
-
-	/// Check if a file exists in the data directory.
-	pub fn data_exists(&self, relative_path: &str) -> bool {
-		self.xdg.data_exists(relative_path.trim_start_matches('/'))
-	}
-
-	/// Read the current project from cache.
-	pub fn read_current_project(&self) -> Option<String> {
-		if self.xdg.cache_exists("current_project.txt") {
-			Some(self.xdg.read_cache("current_project.txt"))
-		} else {
-			None
-		}
-	}
-
-	/// Read a blocker file (path relative to blockers directory).
-	pub fn read_blocker(&self, blocker_relative_path: &str) -> String {
-		self.xdg.read_data(&format!("blockers/{blocker_relative_path}"))
-	}
-
-	/// Check if a blocker file exists.
-	pub fn blocker_exists(&self, blocker_relative_path: &str) -> bool {
-		self.xdg.data_exists(&format!("blockers/{blocker_relative_path}"))
-	}
-
-	/// Get the data directory path.
-	pub fn data_dir(&self) -> PathBuf {
-		self.xdg.data_dir()
-	}
-
-	/// Set up mock GitHub to return an issue.
-	///
-	/// The issue parameter should be a serde_json::Value representing the mock state.
-	pub fn setup_mock_state(&self, state: &serde_json::Value) {
-		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(state).unwrap()).unwrap();
 	}
 }

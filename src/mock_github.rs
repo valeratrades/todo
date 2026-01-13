@@ -612,7 +612,7 @@ mod tests {
 
 		// Fetch sub-issues
 		let sub_issues = client.fetch_sub_issues("owner", "repo", 1).await.unwrap();
-		assert_debug_snapshot!(format!("{sub_issues:?}"));
+		assert_debug_snapshot!(format!("{sub_issues:?}"), @r#""[GitHubIssue { number: 2, title: \"Child Issue\", body: None, labels: [], user: GitHubUser { login: \"testuser\" }, state: \"open\", updated_at: \"2024-01-15T12:00:00Z\" }]""#);
 	}
 
 	#[tokio::test]
@@ -626,7 +626,7 @@ mod tests {
 
 		// Verify it exists
 		let issue = client.fetch_issue("owner", "repo", created.number).await.unwrap();
-		assert_snapshot!(issue.title, "New Issue");
+		assert_snapshot!(issue.title, "New Issue", @"New Issue");
 	}
 
 	#[tokio::test]

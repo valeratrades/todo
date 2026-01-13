@@ -134,7 +134,7 @@ fn fetch_children_recursive<'a>(
 }
 
 /// Result of comparing a single node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NodeResolution {
 	/// No changes on either side
 	NoChange,
@@ -504,7 +504,7 @@ mod tests {
 		assert!(!result.has_conflicts);
 		assert!(result.local_needs_update);
 		assert!(!result.remote_needs_update);
-		assert_snapshot!(result.resolved.body(), "remote changed");
+		assert_snapshot!(result.resolved.body(), "remote changed", @"remote changed");
 	}
 
 	#[test]
@@ -519,7 +519,7 @@ mod tests {
 		assert!(!result.has_conflicts);
 		assert!(!result.local_needs_update);
 		assert!(result.remote_needs_update);
-		assert_snapshot!(result.resolved.body(), "local changed");
+		assert_snapshot!(result.resolved.body(), "local changed", @"local changed");
 	}
 
 	#[test]
