@@ -113,24 +113,6 @@ pub struct RemoteBuilder<'a> {
 	issues: Vec<MockIssue>,
 	sub_issue_relations: Vec<SubIssueRelation>,
 }
-
-struct MockIssue {
-	owner: String,
-	repo: String,
-	number: u64,
-	title: String,
-	body: String,
-	state: String,
-	state_reason: Option<String>,
-}
-
-struct SubIssueRelation {
-	owner: String,
-	repo: String,
-	parent: u64,
-	child: u64,
-}
-
 impl<'a> RemoteBuilder<'a> {
 	fn new(ctx: &'a TestContext) -> Self {
 		Self {
@@ -229,6 +211,23 @@ impl<'a> RemoteBuilder<'a> {
 
 		self.ctx.setup_mock_state(&state);
 	}
+}
+
+struct MockIssue {
+	owner: String,
+	repo: String,
+	number: u64,
+	title: String,
+	body: String,
+	state: String,
+	state_reason: Option<String>,
+}
+
+struct SubIssueRelation {
+	owner: String,
+	repo: String,
+	parent: u64,
+	child: u64,
 }
 
 // Legacy compatibility methods - delegate to RemoteBuilder
