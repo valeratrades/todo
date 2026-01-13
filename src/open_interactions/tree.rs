@@ -154,9 +154,22 @@ pub enum NodeResolution {
 /// Compare a single Issue node (not including children).
 /// Returns the resolution for this node.
 pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) -> NodeResolution {
+	// No consensus means first sync - compare local vs remote directly
+	let Some(consensus) = consensus else {
+		// First sync: if local == remote, no change; otherwise need to pick one
+		if node_content_eq(local, remote) {
+			return NodeResolution::NoChange;
+		}
+		// Different content with no consensus - try timestamps, else conflict
+		return match (local.last_contents_change, remote.last_contents_change) {
+			(Some(local_ts), Some(remote_ts)) if local_ts != remote_ts => NodeResolution::AutoResolved { take_local: local_ts > remote_ts },
+			_ => NodeResolution::Conflict,
+		};
+	};
+
 	// Compare node content (body, comments, close_state) - not children
-	let local_matches_consensus = consensus.map(|c| node_content_eq(local, c)).unwrap_or(false);
-	let remote_matches_consensus = consensus.map(|c| node_content_eq(remote, c)).unwrap_or(false);
+	let local_matches_consensus = node_content_eq(local, consensus);
+	let remote_matches_consensus = node_content_eq(remote, consensus);
 
 	let local_changed = !local_matches_consensus;
 	let remote_changed = !remote_matches_consensus;

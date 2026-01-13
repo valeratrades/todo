@@ -15,25 +15,38 @@
 //!
 //! This eliminates the need for storing consensus state in .meta.json files.
 
-/// Which source was used to open the issue.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum OpenSource {
-	/// Opened via local file path or search
-	#[default]
+/// Which side to prefer when resolving conflicts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceSide {
+	/// Prefer local file state
 	Local,
-	/// Opened via GitHub URL (remote)
+	/// Prefer remote GitHub state
 	Remote,
+}
+
+/// How aggressively to prefer the source side.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreferMode {
+	/// Force through conflicts by taking the preferred side
+	Force,
+	/// Reset entirely to preferred side, skip all sync logic
+	Reset,
+}
+
+/// When set, prefer one side over the other during sync.
+#[derive(Clone, Copy, Debug)]
+pub struct PreferSource {
+	pub side: SourceSide,
+	pub mode: PreferMode,
 }
 
 /// Options for controlling sync behavior.
 #[derive(Clone, Debug, Default)]
 pub struct SyncOptions {
-	/// How the issue was opened (local path vs remote URL)
-	pub source: OpenSource,
-	/// Force through conflicts by taking the source side
-	pub force: bool,
-	/// Reset to source state, skipping sync entirely
-	pub reset: bool,
+	/// When set, prefer one side and skip normal conflict resolution
+	pub prefer: Option<PreferSource>,
+	/// Fetch and sync from remote before opening editor
+	pub pull: bool,
 }
 
 use std::path::Path;
@@ -427,17 +440,52 @@ async fn sync_issue_to_github_inner(
 
 		// Handle conflicts if any remain after auto-resolution
 		let (local_needs_update, remote_needs_update) = if resolution.has_conflicts {
-			// Note: force only applies to Local source here. Remote source (GitHub URL) applies
-			// force during fetch_and_store_issue, before the editor opens. By the time we reach
-			// sync, any edits the user made ARE the local state we want to preserve and push.
-			if sync_opts.force && sync_opts.source == OpenSource::Local {
-				// Force mode with local source: keep local version, push to remote
-				tracing::debug!("[sync] Force mode: taking local version, pushing to remote");
-				println!("Force: taking local version (conflicts overwritten)");
-				(false, true) // Push local to remote
-			} else {
-				tracing::debug!("[sync] Unresolvable conflicts detected at paths: {:?}", resolution.conflict_paths);
-				return handle_divergence(issue_file_path, owner, repo, issue_number, &remote_issue).await;
+			match sync_opts.prefer {
+				Some(PreferSource {
+					side: SourceSide::Local,
+					mode: PreferMode::Force,
+				}) => {
+					// Force local: keep local version, push to remote
+					tracing::debug!("[sync] Force mode: taking local version, pushing to remote");
+					println!("Force: taking local version (conflicts overwritten)");
+					(false, true) // Push local to remote
+				}
+				Some(PreferSource {
+					side: SourceSide::Remote,
+					mode: PreferMode::Force,
+				}) => {
+					// Force remote: take remote version, don't push
+					tracing::debug!("[sync] Force mode: taking remote version");
+					println!("Force: taking remote version (local overwritten)");
+					*issue = remote_issue.clone();
+					let content = issue.serialize();
+					std::fs::write(issue_file_path, &content)?;
+					(true, false) // Local updated from remote
+				}
+				Some(PreferSource {
+					side: SourceSide::Remote,
+					mode: PreferMode::Reset,
+				}) => {
+					// Reset to remote: take remote version entirely, skip further sync
+					tracing::debug!("[sync] Reset mode: taking remote version entirely");
+					println!("Reset: taking remote version (local replaced)");
+					*issue = remote_issue.clone();
+					let content = issue.serialize();
+					std::fs::write(issue_file_path, &content)?;
+					commit_issue_changes(issue_file_path, owner, repo, issue_number, None)?;
+					return Ok(());
+				}
+				Some(PreferSource {
+					side: SourceSide::Local,
+					mode: PreferMode::Reset,
+				}) => {
+					// Reset to local handled earlier in modify_and_sync_issue
+					unreachable!("Local reset should be handled before sync_issue_to_github_inner");
+				}
+				None => {
+					tracing::debug!("[sync] Unresolvable conflicts detected at paths: {:?}", resolution.conflict_paths);
+					return handle_divergence(issue_file_path, owner, repo, issue_number, &remote_issue).await;
+				}
 			}
 		} else {
 			// No conflicts, use resolution results
@@ -606,6 +654,64 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
 	let mut issue = Issue::parse(&content, &ctx)?;
 
+	// Handle --pull: fetch and sync from remote BEFORE opening editor
+	if sync_opts.pull && !offline && meta.issue_number != 0 {
+		println!("Pulling latest from GitHub...");
+
+		// Fetch remote state
+		let remote_issue = fetch_full_issue_tree(gh, &owner, &repo, meta.issue_number).await?;
+
+		// Load consensus from git
+		let consensus = load_consensus_issue(issue_file_path);
+
+		// Resolve using the same logic as post-editor sync
+		let resolution = resolve_tree(&issue, consensus.as_ref(), &remote_issue);
+
+		if resolution.has_conflicts {
+			// Handle conflicts based on prefer settings
+			match sync_opts.prefer {
+				Some(PreferSource {
+					side: SourceSide::Remote,
+					mode: PreferMode::Reset,
+				}) => {
+					println!("Reset: taking remote version");
+					issue = remote_issue;
+					let content = issue.serialize();
+					std::fs::write(issue_file_path, &content)?;
+					commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
+				}
+				Some(PreferSource {
+					side: SourceSide::Remote,
+					mode: PreferMode::Force,
+				}) => {
+					println!("Force: taking remote version");
+					issue = remote_issue;
+					let content = issue.serialize();
+					std::fs::write(issue_file_path, &content)?;
+				}
+				Some(PreferSource { side: SourceSide::Local, .. }) => {
+					println!("Keeping local version (force/reset local)");
+					// Keep local as-is, will push after editor
+				}
+				None => {
+					// Divergence with no preference - trigger merge
+					return handle_divergence(issue_file_path, &owner, &repo, meta.issue_number, &remote_issue)
+						.await
+						.map(|()| ModifyResult { output: None });
+				}
+			}
+		} else if resolution.local_needs_update {
+			// Remote has updates, apply them
+			println!("Updating local with remote changes...");
+			issue = resolution.resolved;
+			let content = issue.serialize();
+			std::fs::write(issue_file_path, &content)?;
+			commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
+		} else {
+			println!("Already up to date.");
+		}
+	}
+
 	// Apply the modifier (editor, blocker command, etc.)
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
@@ -661,9 +767,12 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		return Ok(result);
 	}
 
-	// Handle reset mode
-	// Note: reset only applies to Local source here. Remote source (GitHub URL) applies reset during fetch_and_store_issue, before the editor opens. By the time we reach sync, any edits the user made ARE the local state we want to preserve and push.
-	if sync_opts.reset && sync_opts.source == OpenSource::Local {
+	// Handle reset mode - skip sync entirely when resetting to local
+	if let Some(PreferSource {
+		side: SourceSide::Local,
+		mode: PreferMode::Reset,
+	}) = sync_opts.prefer
+	{
 		// Reset with local source: skip sync, keep local as-is
 		println!("Reset: keeping local state (no sync to GitHub)");
 		// Commit local state to git

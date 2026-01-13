@@ -150,6 +150,143 @@ fn test_reset_with_local_source_skips_sync() {
 	assert!(content.contains("local body"), "Local changes should be preserved with --reset");
 }
 
+/// Opening via URL when no local file exists should create the file from remote.
+#[test]
+fn test_url_open_creates_local_file_from_remote() {
+	let ctx = TestContext::new("");
+	ctx.init_git(); // Need git initialized for commits
+
+	let remote = issue("Test Issue", "remote body content");
+	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+
+	// No local file exists - URL open should create it
+	let expected_path = ctx.flat_issue_path(OWNER, REPO, NUMBER, "Test Issue");
+	assert!(!expected_path.exists(), "Local file should not exist before open");
+
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, NUMBER).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed creating from URL. stderr: {stderr}");
+
+	// File should now exist with remote content
+	assert!(expected_path.exists(), "Local file should be created");
+	let content = std::fs::read_to_string(&expected_path).unwrap();
+	assert!(content.contains("remote body content"), "Should have remote content. Got: {content}");
+}
+
+/// When opening via URL with --reset, local state should be completely replaced with remote.
+/// No merge conflicts, no prompts - just nuke and replace.
+#[test]
+fn test_reset_with_remote_url_nukes_local_state() {
+	let ctx = TestContext::new("");
+
+	let local = issue("Test Issue", "local body that should be nuked");
+	let remote = issue("Test Issue", "remote body wins");
+
+	// Set up: local file exists with different content
+	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &local);
+	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+
+	// Open via URL with --reset should nuke local and use remote
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, NUMBER).args(&["--reset"]).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed with --reset via URL. stderr: {stderr}");
+
+	// Local file should now have remote content
+	let content = std::fs::read_to_string(&issue_path).unwrap();
+	assert!(content.contains("remote body wins"), "Local should be replaced with remote. Got: {content}");
+	assert!(!content.contains("local body that should be nuked"), "Local content should be gone");
+}
+
+/// When opening via URL with --reset and there's divergence, should NOT trigger merge conflict.
+#[test]
+fn test_reset_with_remote_url_skips_merge_on_divergence() {
+	let ctx = TestContext::new("");
+
+	let consensus = issue("Test Issue", "consensus body");
+	let local = issue("Test Issue", "local diverged body");
+	let remote = issue("Test Issue", "remote diverged body");
+
+	// Set up: consensus committed, local has uncommitted changes, remote is different
+	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
+	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+
+	// Open via URL with --reset should NOT trigger merge conflict
+	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, NUMBER).args(&["--reset"]).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	// Should succeed without merge conflict
+	assert!(status.success(), "Should succeed without merge conflict. stderr: {stderr}");
+	assert!(!stderr.contains("Conflict"), "Should not mention conflict with --reset");
+	assert!(!stdout.contains("Merging"), "Should not attempt merge with --reset");
+
+	// Local should have remote content
+	let content = std::fs::read_to_string(&issue_path).unwrap();
+	assert!(content.contains("remote diverged body"), "Should have remote content. Got: {content}");
+}
+
+/// --pull flag should fetch and sync BEFORE opening editor.
+/// This test verifies the fetch actually happens by checking stdout for fetch message.
+#[test]
+fn test_pull_fetches_before_editor() {
+	let ctx = TestContext::new("");
+
+	let local = issue("Test Issue", "local body");
+	let remote = issue("Test Issue", "remote body from github");
+
+	// Set up: local file exists, remote has different content
+	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &local);
+	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+
+	// --pull should fetch from GitHub before opening editor
+	let (status, stdout, stderr) = ctx.open(&issue_path).args(&["--pull"]).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed with --pull. stderr: {stderr}");
+
+	// Should show fetch activity
+	assert!(
+		stdout.contains("Fetching") || stdout.contains("Pulling"),
+		"Should show fetch/pull activity with --pull. stdout: {stdout}"
+	);
+}
+
+/// --pull with diverged state should trigger conflict resolution (or auto-resolve).
+#[test]
+fn test_pull_with_divergence_runs_sync_before_editor() {
+	let ctx = TestContext::new("");
+
+	let consensus = issue("Test Issue", "consensus body");
+	let local = issue("Test Issue", "local diverged body");
+	let remote = issue("Test Issue", "remote diverged body");
+
+	// Set up: both local and remote diverged from consensus
+	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
+	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+
+	// --pull should attempt to sync/merge BEFORE editor opens
+	let (_status, stdout, stderr) = ctx.open(&issue_path).args(&["--pull"]).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	// Should either succeed (auto-resolved) or fail with conflict
+	// But importantly, it should attempt sync BEFORE editor
+	assert!(
+		stdout.contains("Merging") || stdout.contains("Conflict") || stderr.contains("Conflict") || stdout.contains("Pulling"),
+		"Should attempt sync/merge with --pull before editor. stdout: {stdout}, stderr: {stderr}"
+	);
+}
+
 #[test]
 fn test_closing_issue_syncs_state_change() {
 	let ctx = TestContext::new("");

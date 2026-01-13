@@ -174,6 +174,17 @@ impl TestContext {
 	pub fn setup_mock_state(&self, state: &serde_json::Value) {
 		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(state).unwrap()).unwrap();
 	}
+
+	/// Create an OpenUrlBuilder for running the `open` command with a GitHub URL.
+	pub fn open_url(&self, owner: &str, repo: &str, number: u64) -> OpenUrlBuilder<'_> {
+		let url = format!("https://github.com/{owner}/{repo}/issues/{number}");
+		OpenUrlBuilder {
+			ctx: self,
+			url,
+			extra_args: Vec::new(),
+			edit_to: None,
+		}
+	}
 }
 
 /// Builder for running the `open` command with various options.
@@ -183,7 +194,6 @@ pub struct OpenBuilder<'a> {
 	extra_args: Vec<&'a str>,
 	edit_to: Option<todo::Issue>,
 }
-
 impl<'a> OpenBuilder<'a> {
 	/// Add extra CLI arguments.
 	pub fn args(mut self, args: &[&'a str]) -> Self {
@@ -211,20 +221,122 @@ impl<'a> OpenBuilder<'a> {
 		cmd.stdout(std::process::Stdio::piped());
 		cmd.stderr(std::process::Stdio::piped());
 
-		let child = cmd.spawn().unwrap();
+		let mut child = cmd.spawn().unwrap();
 
-		// Give the process time to start and begin waiting on the pipe
-		std::thread::sleep(std::time::Duration::from_millis(100));
+		// Poll for process completion, signaling pipe when it's waiting
+		let pipe_path = self.ctx.pipe_path.clone();
+		let issue_path = self.issue_path.to_path_buf();
+		let edit_to = self.edit_to.clone();
+		let mut signaled = false;
 
-		// Edit the file while "editor is open" if requested
-		if let Some(issue) = &self.edit_to {
-			std::fs::write(self.issue_path, issue.serialize()).unwrap();
+		loop {
+			// Check if process has exited
+			match child.try_wait().unwrap() {
+				Some(_status) => break,
+				None => {
+					// Process still running
+					if !signaled {
+						// Give process time to reach pipe wait
+						std::thread::sleep(std::time::Duration::from_millis(100));
+
+						// Edit the file while "editor is open" if requested
+						if let Some(issue) = &edit_to {
+							std::fs::write(&issue_path, issue.serialize()).unwrap();
+						}
+
+						// Try to signal the pipe (use nix O_NONBLOCK to avoid blocking)
+						#[cfg(unix)]
+						{
+							use std::os::unix::fs::OpenOptionsExt;
+							if let Ok(mut pipe) = std::fs::OpenOptions::new().write(true).custom_flags(0x800).open(&pipe_path) {
+								let _ = pipe.write_all(b"x");
+							}
+						}
+						signaled = true;
+					}
+					std::thread::sleep(std::time::Duration::from_millis(10));
+				}
+			}
 		}
 
-		// Signal the editor to close
-		let mut pipe = std::fs::OpenOptions::new().write(true).open(&self.ctx.pipe_path).unwrap();
-		pipe.write_all(b"x").unwrap();
-		drop(pipe);
+		let output = child.wait_with_output().unwrap();
+		(
+			output.status,
+			String::from_utf8_lossy(&output.stdout).into_owned(),
+			String::from_utf8_lossy(&output.stderr).into_owned(),
+		)
+	}
+}
+
+/// Builder for running the `open` command with a URL (remote source).
+pub struct OpenUrlBuilder<'a> {
+	ctx: &'a TestContext,
+	url: String,
+	extra_args: Vec<&'a str>,
+	edit_to: Option<todo::Issue>,
+}
+
+impl<'a> OpenUrlBuilder<'a> {
+	/// Add extra CLI arguments.
+	pub fn args(mut self, args: &[&'a str]) -> Self {
+		self.extra_args.extend(args);
+		self
+	}
+
+	/// Edit the file to this issue while "editor is open".
+	/// Note: For URL-based opens, the file path is determined after fetching.
+	pub fn edit(mut self, issue: &todo::Issue) -> Self {
+		self.edit_to = Some(issue.clone());
+		self
+	}
+
+	/// Run the command and return (exit_status, stdout, stderr).
+	pub fn run(self) -> (ExitStatus, String, String) {
+		let mut cmd = Command::new(get_binary_path());
+		cmd.arg("--mock").arg("open");
+		cmd.args(&self.extra_args);
+		cmd.arg(&self.url);
+		for (key, value) in self.ctx.xdg.env_vars() {
+			cmd.env(key, value);
+		}
+		cmd.env("TODO_MOCK_STATE", &self.ctx.mock_state_path);
+		cmd.env("TODO_MOCK_PIPE", &self.ctx.pipe_path);
+		cmd.stdout(std::process::Stdio::piped());
+		cmd.stderr(std::process::Stdio::piped());
+
+		let mut child = cmd.spawn().unwrap();
+
+		// Note: For URL-based opens with edit_to, we'd need to determine the file path
+		// after the fetch completes. For now, editing during URL open is not supported.
+		if self.edit_to.is_some() {
+			eprintln!("[test] Warning: edit_to not supported for URL-based opens");
+		}
+
+		// Poll for process completion, signaling pipe when it's waiting
+		let pipe_path = self.ctx.pipe_path.clone();
+		let mut signaled = false;
+
+		loop {
+			match child.try_wait().unwrap() {
+				Some(_status) => break,
+				None => {
+					if !signaled {
+						std::thread::sleep(std::time::Duration::from_millis(100));
+
+						// Try to signal the pipe (use O_NONBLOCK to avoid blocking)
+						#[cfg(unix)]
+						{
+							use std::os::unix::fs::OpenOptionsExt;
+							if let Ok(mut pipe) = std::fs::OpenOptions::new().write(true).custom_flags(0x800).open(&pipe_path) {
+								let _ = pipe.write_all(b"x");
+							}
+						}
+						signaled = true;
+					}
+					std::thread::sleep(std::time::Duration::from_millis(10));
+				}
+			}
+		}
 
 		let output = child.wait_with_output().unwrap();
 		(

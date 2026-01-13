@@ -10,7 +10,7 @@ use super::{
 	fetch::fetch_and_store_issue,
 	files::{choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
-	sync::{OpenSource, SyncOptions, open_local_issue},
+	sync::{PreferMode, PreferSource, SourceSide, SyncOptions, open_local_issue},
 	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 };
 use crate::{
@@ -104,11 +104,21 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	// Combine global --offline with subcommand --offline
 	let offline = global_offline || args.offline;
 
-	// Build sync options from args (source will be set per-branch)
+	// Build prefer source from args
+	let build_prefer = |side: SourceSide| -> Option<PreferSource> {
+		if args.reset {
+			Some(PreferSource { side, mode: PreferMode::Reset })
+		} else if args.force {
+			Some(PreferSource { side, mode: PreferMode::Force })
+		} else {
+			None
+		}
+	};
+
+	// Base sync opts for local source
 	let base_sync_opts = SyncOptions {
-		source: OpenSource::Local, // Default, overridden for URL mode
-		force: args.force,
-		reset: args.reset,
+		prefer: build_prefer(SourceSide::Local),
+		pull: args.pull,
 	};
 
 	// Handle --blocker and --blocker-set modes: use current blocker issue file if no pattern provided
@@ -172,12 +182,11 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		println!("Stored issue at: {issue_file_path:?}");
 
-		// For remote source, force/reset already applied during fetch above.
-		// After editor, sync normally (don't re-apply force/reset which would undo user edits).
+		// For remote source, use Remote side preference
+		// Note: pull is false here because we just fetched via URL
 		let remote_sync_opts = SyncOptions {
-			source: OpenSource::Remote,
-			force: false, // Don't re-apply after editor
-			reset: false, // Don't re-apply after editor
+			prefer: build_prefer(SourceSide::Remote),
+			pull: false,
 		};
 		(issue_file_path, remote_sync_opts, offline)
 	} else {
