@@ -535,29 +535,36 @@ async fn sync_issue_to_github_inner(
 	extension: Extension,
 	merge_mode: MergeMode,
 ) -> Result<()> {
-	// Check if this is a pending issue (created via --touch, not yet on GitHub)
-	let is_pending = issue.meta.url.is_none();
-
 	// Load consensus from git (last committed state)
 	let consensus = load_consensus_issue(issue_file_path);
 
-	// For pending issues, skip divergence check and create on GitHub first
-	// Returns (actions_executed, created_issue_number, local_needs_update)
-	let (actions_executed, created_issue_number, local_needs_update) = if is_pending {
-		// Collect actions (will include CreateIssue for the root)
-		// For pending issues without consensus, use empty sub-issues list
-		let actions = issue.collect_actions(&[]);
-		let has_actions = actions.iter().any(|level| !level.is_empty());
+	//=========================================================================
+	// PRE-SYNC: Create new issues so they have URLs for comparison
+	//=========================================================================
+	// This must happen BEFORE merge because issues without URLs can't be compared.
+	// Includes: root issue if pending (--touch), and any new `- [ ]` sub-issues.
+	let create_actions = issue.collect_create_actions();
+	let has_creates = create_actions.iter().any(|level| !level.is_empty());
+	let mut created_issue_number = None;
 
-		if has_actions {
-			let (executed, created) = execute_issue_actions(gh, owner, repo, issue, actions).await?;
-			(executed, created, false)
-		} else {
-			(0, None, false)
+	if has_creates {
+		let (executed, created) = execute_issue_actions(gh, owner, repo, issue, create_actions).await?;
+		created_issue_number = created;
+
+		// Re-serialize to save the new URLs
+		if executed > 0 {
+			let serialized = issue.serialize();
+			std::fs::write(issue_file_path, &serialized)?;
+			tracing::debug!("[sync] Pre-sync: created {executed} new issue(s)");
 		}
-	} else {
-		// Normal flow: use per-node consensus-based sync
-		// Fetch the complete remote issue tree (level-by-level parallel fetching)
+	}
+
+	//=========================================================================
+	// SYNC: Merge local and remote state
+	//=========================================================================
+	// Now that all issues have URLs, we can compare and merge.
+	let local_needs_update = if issue.meta.url.is_some() {
+		// Normal flow: fetch remote and merge
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
 		// Apply merge mode to get the merged result
@@ -575,48 +582,25 @@ async fn sync_issue_to_github_inner(
 		if !local_needs_update && !remote_needs_update {
 			tracing::debug!("[sync] No changes detected");
 		} else if remote_needs_update {
-			tracing::debug!("[sync] Pushing local changes to remote");
+			tracing::debug!("[sync] Will push local changes to remote");
 		}
 
-		// Collect and execute actions (for local changes being pushed)
-		// Use sub-issues from consensus for comparison
-		let consensus_sub_issues: Vec<_> = consensus
-			.as_ref()
-			.map(|c| {
-				c.children
-					.iter()
-					.map(|child| crate::github::OriginalSubIssue {
-						number: child.meta.url.as_ref().and_then(|u| u.rsplit('/').next()).and_then(|n| n.parse().ok()).unwrap_or(0),
-						state: child.meta.close_state.to_github_state().to_string(),
-					})
-					.collect()
-			})
-			.unwrap_or_default();
-
-		let actions = issue.collect_actions(&consensus_sub_issues);
-		let has_actions = actions.iter().any(|level| !level.is_empty());
-
-		if has_actions {
-			let (executed, created) = execute_issue_actions(gh, owner, repo, issue, actions).await?;
-			(executed, created, local_needs_update)
-		} else {
-			(0, None, local_needs_update)
-		}
+		local_needs_update
+	} else {
+		// Issue was just created, no merge needed
+		false
 	};
 
-	// Re-serialize if actions added URLs
-	if actions_executed > 0 {
-		let serialized = issue.serialize();
-		std::fs::write(issue_file_path, &serialized)?;
-	}
-
-	// Determine the issue number to use for sync/refresh (may have just been created)
+	//=========================================================================
+	// POST-SYNC: Push differences to remote
+	//=========================================================================
+	// Compare merged state against consensus and push all differences.
+	// This handles: body/comments/state for root, state changes for sub-issues.
 	let final_issue_number = created_issue_number.unwrap_or(issue_number);
 
-	// Sync body/comment/state changes to GitHub (skip for newly created issues - body already set)
-	let state_changed = if created_issue_number.is_none() {
-		// Use consensus for comparison, or create empty Issue if no consensus
-		let consensus_for_sync = consensus.unwrap_or_else(|| Issue {
+	// Push root issue changes (body, comments, state) - skip for newly created issues
+	let state_changed = if created_issue_number.is_none() && final_issue_number != 0 {
+		let consensus_for_sync = consensus.as_ref().cloned().unwrap_or_else(|| Issue {
 			meta: issue.meta.clone(),
 			labels: vec![],
 			comments: vec![],
@@ -629,16 +613,42 @@ async fn sync_issue_to_github_inner(
 		false
 	};
 
-	// If we executed actions, state changed, or local needs update (new sub-issues from remote), refresh from GitHub
-	if actions_executed > 0 || state_changed || local_needs_update {
+	// Push sub-issue state updates
+	let consensus_sub_issues: Vec<_> = consensus
+		.as_ref()
+		.map(|c| {
+			c.children
+				.iter()
+				.filter_map(|child| {
+					let number = child.meta.url.as_ref().and_then(|u| u.rsplit('/').next()).and_then(|n| n.parse().ok())?;
+					Some(crate::github::OriginalSubIssue {
+						number,
+						state: child.meta.close_state.to_github_state().to_string(),
+					})
+				})
+				.collect()
+		})
+		.unwrap_or_default();
+
+	let update_actions = issue.collect_update_actions(&consensus_sub_issues);
+	let has_updates = update_actions.iter().any(|level| !level.is_empty());
+	let updates_executed = if has_updates {
+		let (executed, _) = execute_issue_actions(gh, owner, repo, issue, update_actions).await?;
+		executed
+	} else {
+		0
+	};
+
+	// Determine if we need to refresh from GitHub
+	let needs_refresh = has_creates || state_changed || local_needs_update || updates_executed > 0;
+
+	if needs_refresh {
 		// Re-fetch and update local file to reflect the synced state
 		println!("Refreshing local issue file from GitHub...");
 
 		// Determine parent issue info if this is a sub-issue
 		let meta = load_issue_meta_from_path(issue_file_path)?;
 		let ancestors: Option<Vec<FetchedIssue>> = meta.parent_issue.and_then(|parent_num| {
-			// Load parent info from filesystem
-			// This is simplified - full implementation would traverse the hierarchy
 			let parent_meta = load_issue_meta_from_path(issue_file_path.parent()?.join("..").as_path()).ok()?;
 			let fetched = FetchedIssue::from_parts(owner, repo, parent_num, &parent_meta.title)?;
 			Some(vec![fetched])
@@ -647,10 +657,10 @@ async fn sync_issue_to_github_inner(
 		// Store the old path before re-fetching
 		let old_path = issue_file_path.to_path_buf();
 
-		// Re-fetch creates file with potentially new title/state (affects .bak suffix)
+		// Re-fetch creates file with potentially new title/state
 		let new_path = fetch_and_store_issue(gh, owner, repo, final_issue_number, &extension, ancestors).await?;
 
-		// If the path changed (title/state changed or format changed), delete the old file
+		// If the path changed, delete the old file
 		if old_path != new_path && old_path.exists() {
 			if created_issue_number.is_some() {
 				println!("Issue created on GitHub, updating local file...");
@@ -674,8 +684,9 @@ async fn sync_issue_to_github_inner(
 			}
 		}
 
-		if actions_executed > 0 {
-			println!("Synced {actions_executed} actions to GitHub.");
+		let total_actions = if has_creates { 1 } else { 0 } + updates_executed;
+		if total_actions > 0 {
+			println!("Synced {total_actions} actions to GitHub.");
 		}
 
 		// Commit the synced changes to local git

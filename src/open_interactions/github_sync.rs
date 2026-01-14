@@ -3,6 +3,10 @@
 //! This module contains all GitHub-specific logic for Issues:
 //! - Converting GitHub API responses to Issue
 //! - Collecting actions needed to sync Issue to GitHub
+//!
+//! Actions are split into two categories:
+//! - **Pre-sync**: Creating new issues (without URLs) so they get URLs before comparison
+//! - **Post-sync**: Updating existing issue states to match local changes
 
 use jiff::Timestamp;
 use todo::{BlockerSequence, CloseState, Comment, Issue, IssueMeta};
@@ -12,15 +16,20 @@ use crate::github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIs
 /// Extension trait for GitHub-specific Issue operations.
 /// These methods are only available in the binary, not the library.
 pub trait IssueGitHubExt {
-	/// Collect all required GitHub actions, organized by nesting level.
-	fn collect_actions(&self, original_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>>;
+	/// Collect actions for creating new issues (pre-sync).
+	/// These must run BEFORE sync so new issues get URLs for comparison.
+	fn collect_create_actions(&self) -> Vec<Vec<IssueAction>>;
+
+	/// Collect actions for updating existing issue states (post-sync).
+	/// These run AFTER sync to push local state changes to remote.
+	fn collect_update_actions(&self, consensus_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>>;
 
 	/// Construct an Issue directly from GitHub API data.
 	fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Issue;
 }
 
 impl IssueGitHubExt for Issue {
-	fn collect_actions(&self, original_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>> {
+	fn collect_create_actions(&self) -> Vec<Vec<IssueAction>> {
 		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
 
 		// Check if root issue needs to be created (no URL = pending creation from --touch)
@@ -32,11 +41,23 @@ impl IssueGitHubExt for Issue {
 				closed: self.meta.close_state.is_closed(),
 				parent: None,
 			}]);
-			// Don't collect sub-issue actions yet - they'll be handled after root is created
+			// Don't collect sub-issue creates yet - they'll be handled after root is created
 			return levels;
 		}
 
-		collect_actions_recursive(self, &[], original_sub_issues, &mut levels);
+		// Collect create actions for children recursively
+		collect_create_actions_recursive(self, &[], &mut levels);
+		levels
+	}
+
+	fn collect_update_actions(&self, consensus_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>> {
+		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
+
+		// Only collect updates if root exists
+		if self.meta.url.is_some() {
+			collect_update_actions_recursive(self, &[], consensus_sub_issues, &mut levels);
+		}
+
 		levels
 	}
 
@@ -114,8 +135,8 @@ impl IssueGitHubExt for Issue {
 	}
 }
 
-/// Recursively collect actions from this issue and its children
-fn collect_actions_recursive(issue: &Issue, current_path: &[usize], original_sub_issues: &[OriginalSubIssue], levels: &mut Vec<Vec<IssueAction>>) {
+/// Recursively collect CREATE actions only (for pre-sync)
+fn collect_create_actions_recursive(issue: &Issue, current_path: &[usize], levels: &mut Vec<Vec<IssueAction>>) {
 	let depth = current_path.len();
 
 	// Ensure we have a vec for this level
@@ -126,7 +147,7 @@ fn collect_actions_recursive(issue: &Issue, current_path: &[usize], original_sub
 	// Get parent issue number from URL
 	let parent_number = issue.meta.url.as_ref().and_then(|url| github::extract_issue_number_from_url(url));
 
-	// Check each child for required actions
+	// Check each child for create actions
 	for (i, child) in issue.children.iter().enumerate() {
 		let mut child_path = current_path.to_vec();
 		child_path.push(i);
@@ -142,13 +163,36 @@ fn collect_actions_recursive(issue: &Issue, current_path: &[usize], original_sub
 					parent: Some(parent_num),
 				});
 			}
-		} else if let Some(child_url) = &child.meta.url {
-			// Existing issue - check if state changed
+		}
+
+		// Recursively process child's children (only if child has URL - can't create under non-existent parent)
+		if child.meta.url.is_some() {
+			collect_create_actions_recursive(child, &child_path, levels);
+		}
+	}
+}
+
+/// Recursively collect UPDATE actions only (for post-sync)
+fn collect_update_actions_recursive(issue: &Issue, current_path: &[usize], consensus_sub_issues: &[OriginalSubIssue], levels: &mut Vec<Vec<IssueAction>>) {
+	let depth = current_path.len();
+
+	// Ensure we have a vec for this level
+	while levels.len() <= depth {
+		levels.push(Vec::new());
+	}
+
+	// Check each child for update actions
+	for (i, child) in issue.children.iter().enumerate() {
+		let mut child_path = current_path.to_vec();
+		child_path.push(i);
+
+		// Only check for updates if child has URL (exists on GitHub)
+		if let Some(child_url) = &child.meta.url {
 			if let Some(child_number) = github::extract_issue_number_from_url(child_url)
-				&& let Some(orig) = original_sub_issues.iter().find(|o| o.number == child_number)
+				&& let Some(consensus) = consensus_sub_issues.iter().find(|o| o.number == child_number)
 			{
-				let orig_closed = orig.state == "closed";
-				if child.meta.close_state.is_closed() != orig_closed {
+				let consensus_closed = consensus.state == "closed";
+				if child.meta.close_state.is_closed() != consensus_closed {
 					levels[depth].push(IssueAction::UpdateIssueState {
 						issue_number: child_number,
 						closed: child.meta.close_state.is_closed(),
@@ -158,7 +202,7 @@ fn collect_actions_recursive(issue: &Issue, current_path: &[usize], original_sub
 		}
 
 		// Recursively process child's children
-		collect_actions_recursive(child, &child_path, original_sub_issues, levels);
+		collect_update_actions_recursive(child, &child_path, consensus_sub_issues, levels);
 	}
 }
 
