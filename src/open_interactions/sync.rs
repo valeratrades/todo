@@ -496,12 +496,15 @@ impl Modifier {
 
 				// Calculate position if opening at blocker
 				let position = if *open_at_blocker {
-					issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)))
+					let pos = issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)));
+					eprintln!("[DEBUG] open_at_blocker=true, position={:?}", pos);
+					pos
 				} else {
 					None
 				};
 
 				// Open in editor (blocks until editor closes)
+				eprintln!("[DEBUG] About to call open_file with position={:?}", position);
 				crate::utils::open_file(issue_file_path, position).await?;
 
 				// Read edited content, expand !b shorthand, and re-parse

@@ -5,6 +5,7 @@ use color_eyre::eyre::{Report, Result, bail};
 use jiff::Timestamp as TimestampImpl;
 use jiff::{SignedDuration, civil};
 pub use tokio::sync::oneshot;
+use tracing::{debug, instrument};
 pub use v_utils::io::file_open::{Client as OpenClient, OpenMode, Position};
 
 use crate::config::LiveSettings;
@@ -19,7 +20,8 @@ use crate::mocks::MockTimestamp as TimestampImpl;
 /// - Otherwise: opens with $EDITOR normally.
 ///
 /// If `position` is provided, the editor will open at the specified line and column (if supported).
-pub async fn open_file<P: AsRef<Path>>(path: P, position: Option<Position>) -> Result<()> {
+#[instrument]
+pub async fn open_file<P: AsRef<Path> + std::fmt::Debug>(path: P, position: Option<Position>) -> Result<()> {
 	// Check for integration test pipe-based mock mode
 	if let Ok(pipe_path) = std::env::var("TODO_MOCK_PIPE") {
 		// Wait for signal on the pipe (any data or EOF when writer closes)
@@ -39,6 +41,7 @@ pub async fn open_file<P: AsRef<Path>>(path: P, position: Option<Position>) -> R
 
 	let mut client = OpenClient::default().mode(OpenMode::Normal);
 	if let Some(pos) = position {
+		debug!("Opening file at position: {pos:?}");
 		client = client.at(pos);
 	}
 	client.open(path).await?;
