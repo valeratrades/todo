@@ -76,6 +76,7 @@ async fn main() {
 			.with(file_layer)
 			.with(tracing_subscriber::EnvFilter::new("info,todo=debug"))
 			.try_init();
+		tracing::debug!("Tracing initialized with TODO_TRACE_FILE");
 	} else {
 		let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
 	}

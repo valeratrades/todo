@@ -22,7 +22,7 @@ jobs:
     - name: Install qlty
       uses: qltysh/qlty-action/install@main
     - name: Initialize qlty
-      run: qlty init --yes --no-upgrade-check
+      run: qlty init --no --no-upgrade-check
     - name: Check for code duplication
       run: cargo +nightly -Zscript -q my_gh_stuff/github/workflows/code-duplication.rs
     timeout-minutes: 15

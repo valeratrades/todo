@@ -496,15 +496,12 @@ impl Modifier {
 
 				// Calculate position if opening at blocker
 				let position = if *open_at_blocker {
-					let pos = issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)));
-					eprintln!("[DEBUG] open_at_blocker=true, position={:?}", pos);
-					pos
+					issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)))
 				} else {
 					None
 				};
 
 				// Open in editor (blocks until editor closes)
-				eprintln!("[DEBUG] About to call open_file with position={:?}", position);
 				crate::utils::open_file(issue_file_path, position).await?;
 
 				// Read edited content, expand !b shorthand, and re-parse
@@ -747,6 +744,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
 	let mut issue = Issue::parse(&content, &ctx)?;
+	tracing::debug!("Issue parsed successfully, proceeding to modifier");
 
 	// Handle --pull: fetch and sync from remote BEFORE opening editor
 	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
@@ -781,6 +779,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	}
 
 	// Apply the modifier (editor, blocker command, etc.)
+	tracing::debug!("Applying modifier to issue file: {}", issue_file_path.display());
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
 	// Handle duplicate close type: remove from local storage entirely

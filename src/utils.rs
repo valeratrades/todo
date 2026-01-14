@@ -20,7 +20,7 @@ use crate::mocks::MockTimestamp as TimestampImpl;
 /// - Otherwise: opens with $EDITOR normally.
 ///
 /// If `position` is provided, the editor will open at the specified line and column (if supported).
-#[instrument]
+#[instrument(level = "debug")]
 pub async fn open_file<P: AsRef<Path> + std::fmt::Debug>(path: P, position: Option<Position>) -> Result<()> {
 	// Check for integration test pipe-based mock mode
 	if let Ok(pipe_path) = std::env::var("TODO_MOCK_PIPE") {
