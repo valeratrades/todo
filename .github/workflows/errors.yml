@@ -48,9 +48,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: modified-cargo-files
-    - run: cargo update
-    - run: cargo check
-    - run: cargo test
+    - run: nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
+        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c bash -c 'cargo update'
+    - run: nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
+        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c bash -c 'cargo check'
+    - run: nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
+        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c bash -c 'cargo test'
     strategy:
       fail-fast: false
       matrix:
