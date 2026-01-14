@@ -29,15 +29,19 @@
             inherit pkgs rust;
             deny = true;
           };
-          github = v-utils.github {
-            inherit pkgs pname rs;
-            lastSupportedVersion = "nightly-2025-08-01";
-            langs = [ "rs" ];
-            jobs.default = true;
-            jobs.errors.install = { apt = [ "libwayland-dev" "libegl-dev" ]; };
-            jobs.warnings.install = { apt = [ "libwayland-dev" "libegl-dev" ]; };
-            jobs.warnings.augment = [ "code-duplication" ];
-          };
+          github =
+            let
+              jobDeps = { apt = [ "libwayland-dev" "libegl-dev" ]; };
+            in
+            v-utils.github {
+              inherit pkgs pname rs;
+              lastSupportedVersion = "nightly-2025-08-01";
+              langs = [ "rs" ];
+              jobs.default = true;
+              jobs.errors.install = jobDeps;
+              jobs.warnings.install = jobDeps;
+              jobs.warnings.augment = [ "code-duplication" ];
+            };
           readme = v-utils.readme-fw {
             inherit pkgs pname;
             defaults = true;
