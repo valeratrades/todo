@@ -39,8 +39,13 @@ jobs:
       uses: DeterminateSystems/nix-installer-action@main
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
-    - name: Install packages
-      run: nix-env -i mold openssl.dev egl-wayland wayland libGL libgbm pkg-config
+    - name: Cache packages
+      run: '# Pre-fetch packages into nix store so they''re cached for dependent jobs
+
+        nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
+        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c true
+
+        '
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
   rust-clippy:
