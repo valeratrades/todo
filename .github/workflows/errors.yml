@@ -4,26 +4,33 @@ env:
   RUSTUP_MAX_RETRIES: '10'
   RUST_BACKTRACE: short
 jobs:
+  load_nix:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install packages
+      run: nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
   rust-tests:
     if: needs.pre_ci.outputs.continue
     name: Rust ${{matrix.rust}}
-    needs: pre_ci
+    needs:
+    - load_nix
+    - pre_ci
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Install Nix
       uses: DeterminateSystems/nix-installer-action@main
-    - name: Setup Nix cache
+    - name: Restore Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
-    - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
-        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
-        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
-        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
-
-        '
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{matrix.rust}}
