@@ -25,7 +25,7 @@ use crate::{
 /// or comment is treated as blockers, using the same format as standalone blocker files.
 ///
 /// Shorthand: Use `!b` on its own line to auto-expand to `# Blockers` (or `// blockers` for Typst).
-#[derive(Args)]
+#[derive(Args, Debug)]
 pub struct OpenArgs {
 	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
 	/// With --touch: path format is workspace/project/{issue.md, issue/sub-issue.md}
@@ -45,10 +45,6 @@ pub struct OpenArgs {
 	/// Open the most recently modified issue file
 	#[arg(short, long)]
 	pub last: bool,
-
-	/// Skip all network operations - edit locally only, don't sync to GitHub
-	#[arg(short, long)]
-	pub offline: bool,
 
 	/// Fetch latest from GitHub before opening. If remote differs from local,
 	/// prompts: [s]kip (use local), [o]verwrite (use remote), [m]erge (attempt merge)
@@ -99,10 +95,10 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 	Extension::Md
 }
 
-pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, global_offline: bool) -> Result<()> {
+#[tracing::instrument(level = "debug", skip(settings, gh))]
+pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, offline: bool) -> Result<()> {
+	tracing::debug!("open_command entered, blocker={}", args.blocker);
 	let extension = get_effective_extension(args.extension, settings);
-	// Combine global --offline with subcommand --offline
-	let offline = global_offline || args.offline;
 
 	// Build merge mode from args
 	let build_merge_mode = |prefer: Side| -> Option<MergeMode> {

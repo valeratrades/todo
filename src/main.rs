@@ -30,6 +30,9 @@ struct Cli {
 	/// Automatically enabled for virtual projects (projects without GitHub remote).
 	#[arg(long, global = true)]
 	offline: bool,
+	/// Log to a specific file (filename only, no path). Logs go to ~/.local/state/todo/{filename}.log
+	#[arg(long, global = true)]
+	log_to: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -56,29 +59,55 @@ enum Commands {
 	Open(open_interactions::OpenArgs),
 }
 
+/// Extract --log-to value from args before full CLI parsing (needed for early logging init)
+fn extract_log_to() -> Option<String> {
+	let args: Vec<String> = std::env::args().collect();
+	for (i, arg) in args.iter().enumerate() {
+		if arg == "--log-to" {
+			if let Some(value) = args.get(i + 1) {
+				if value.contains('/') || value.contains('\\') {
+					eprintln!("Error: --log-to accepts filename only, not a path");
+					std::process::exit(1);
+				}
+				return Some(value.clone());
+			}
+		} else if let Some(value) = arg.strip_prefix("--log-to=") {
+			if value.contains('/') || value.contains('\\') {
+				eprintln!("Error: --log-to accepts filename only, not a path");
+				std::process::exit(1);
+			}
+			return Some(value.to_string());
+		}
+	}
+	None
+}
+
 #[tokio::main]
 async fn main() {
 	#[cfg(not(feature = "is_integration_test"))]
-	v_utils::clientside!();
+	{
+		if let Some(filename) = extract_log_to() {
+			v_utils::clientside!(filename);
+		} else {
+			v_utils::clientside!();
+		}
+	}
 
-	// Initialize tracing/logging
-	// If TODO_TRACE_FILE is set, write traces to that file for test verification
-	if let Ok(trace_file) = std::env::var("TODO_TRACE_FILE") {
+	#[cfg(feature = "is_integration_test")]
+	{
+		// Initialize tracing/logging
+		// If TODO_TRACE_FILE is set, write traces to that file for test verification
+		let trace_file = std::env::var("TODO_TRACE_FILE").expect("TODO_TRACE_FILE env var not set");
 		use std::fs::OpenOptions;
 
 		use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 		let file = OpenOptions::new().create(true).append(true).open(&trace_file).expect("Failed to open trace file");
-
 		let file_layer = tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(file)).with_ansi(false).json();
-
 		let _ = tracing_subscriber::registry()
 			.with(file_layer)
 			.with(tracing_subscriber::EnvFilter::new("info,todo=debug"))
 			.try_init();
 		tracing::debug!("Tracing initialized with TODO_TRACE_FILE");
-	} else {
-		let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).try_init();
 	}
 
 	let cli = Cli::parse();
@@ -117,7 +146,7 @@ async fn main() {
 			shell_init::output(&settings, args);
 			Ok(())
 		}
-		Commands::Blocker(args) => blocker_interactions::main(&settings, args).await,
+		Commands::Blocker(args) => blocker_interactions::main(&settings, args, cli.offline).await,
 		Commands::Clockify(args) => blocker_interactions::clockify::clockify_main(&settings, args).await,
 		Commands::PerfEval(args) => perf_eval::main(&settings, args).await,
 		Commands::WatchMonitors(args) => watch_monitors::main(&settings, args),

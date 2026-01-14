@@ -477,6 +477,7 @@ pub struct ModifyResult {
 }
 
 /// A modifier that can be applied to an issue file.
+#[derive(Debug)]
 pub enum Modifier {
 	/// Open the file in an editor and wait for user to close it.
 	/// If `open_at_blocker` is true, opens at the position of the last blocker item.
@@ -487,6 +488,7 @@ pub enum Modifier {
 
 impl Modifier {
 	/// Apply this modifier to an issue. Returns output to display.
+	#[tracing::instrument(level = "debug", skip(issue, extension))]
 	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, extension: &Extension) -> Result<ModifyResult> {
 		match self {
 			Modifier::Editor { open_at_blocker } => {
@@ -708,12 +710,14 @@ async fn sync_issue_to_github_inner(
 
 /// Open a local issue file with the default editor modifier.
 /// If `open_at_blocker` is true, opens the editor at the position of the last blocker item.
+#[tracing::instrument(level = "debug", skip(gh, sync_opts), target = "todo::open_interactions::sync")]
 pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, sync_opts: SyncOptions, open_at_blocker: bool) -> Result<()> {
 	modify_and_sync_issue(gh, issue_file_path, offline, Modifier::Editor { open_at_blocker }, sync_opts).await?;
 	Ok(())
 }
 
 /// Modify a local issue file using the given modifier, then sync changes back to GitHub.
+#[tracing::instrument(level = "debug", skip(gh), target = "todo::open_interactions::sync")]
 pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier, sync_opts: SyncOptions) -> Result<ModifyResult> {
 	use super::{conflict::check_any_conflicts, files::extract_owner_repo_from_path, meta::is_virtual_project};
 
@@ -744,7 +748,6 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
 	let mut issue = Issue::parse(&content, &ctx)?;
-	tracing::debug!("Issue parsed successfully, proceeding to modifier");
 
 	// Handle --pull: fetch and sync from remote BEFORE opening editor
 	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
@@ -779,7 +782,6 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	}
 
 	// Apply the modifier (editor, blocker command, etc.)
-	tracing::debug!("Applying modifier to issue file: {}", issue_file_path.display());
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
 	// Handle duplicate close type: remove from local storage entirely
