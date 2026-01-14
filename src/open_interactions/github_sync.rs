@@ -9,7 +9,7 @@
 //! - **Post-sync**: Updating existing issue states to match local changes
 
 use jiff::Timestamp;
-use todo::{BlockerSequence, CloseState, Comment, Issue, IssueMeta};
+use todo::{split_blockers, BlockerSequence, CloseState, Comment, Issue, IssueMeta};
 
 use crate::github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue};
 
@@ -79,10 +79,10 @@ impl IssueGitHubExt for Issue {
 		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
 
 		// Build comments: body is first comment
+		// Split out blockers from body (they're appended during sync)
 		let mut issue_comments = Vec::new();
-
-		// Body as first comment
-		let body = issue.body.as_deref().unwrap_or("").to_string();
+		let raw_body = issue.body.as_deref().unwrap_or("");
+		let (body, blockers) = split_blockers(raw_body);
 		issue_comments.push(Comment { id: None, body, owned: issue_owned });
 
 		// Actual comments
@@ -129,7 +129,7 @@ impl IssueGitHubExt for Issue {
 			labels,
 			comments: issue_comments,
 			children,
-			blockers: BlockerSequence::default(),
+			blockers,
 			last_contents_change,
 		}
 	}

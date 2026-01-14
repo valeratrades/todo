@@ -117,7 +117,7 @@ impl FetchedIssue {
 }
 
 use super::{
-	blocker::{BlockerSequence, classify_line},
+	blocker::{join_with_blockers, BlockerSequence, classify_line},
 	error::{ParseContext, ParseError},
 	util::{is_blockers_marker, normalize_issue_indentation},
 };
@@ -279,15 +279,7 @@ impl Issue {
 	/// This is what should be synced to GitHub as the issue body.
 	pub fn body(&self) -> String {
 		let base_body = self.comments.first().map(|c| c.body.as_str()).unwrap_or("");
-		if self.blockers.is_empty() {
-			base_body.to_string()
-		} else {
-			let mut full_body = base_body.to_string();
-			full_body.push_str("# Blockers\n");
-			full_body.push_str(&self.blockers.serialize(super::blocker::DisplayFormat::Headers));
-			full_body.push('\n');
-			full_body
-		}
+		join_with_blockers(base_body, &self.blockers)
 	}
 
 	/// Parse markdown content into an Issue.

@@ -43,7 +43,8 @@
             let
               # nixpkgs attribute names for CI dependencies
               #HACK: duplication with alwaysPkgs. #TODO: make a function to auto-generate these
-              jobDeps = { packages = [ "mold" "openssl.dev" "egl-wayland" "wayland" "libGL" "libgbm" "pkg-config" ]; };
+              # Note: need both openssl.dev (headers for compilation) and openssl (runtime libs)
+              jobDeps = { packages = [ "mold" "openssl" "openssl.dev" "egl-wayland" "wayland" "libGL" "libgbm" "pkg-config" ]; };
             in
             v-utils.github {
               inherit pkgs pname rs;

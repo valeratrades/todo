@@ -300,8 +300,36 @@ pub fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 	Ok(matches)
 }
 
+/// Exact match level for fzf queries.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ExactMatchLevel {
+	/// Default fuzzy matching
+	#[default]
+	Fuzzy,
+	/// Exact substring match (fzf --exact)
+	Substring,
+	/// Exact line match (query must match entire line)
+	Line,
+}
+
+impl TryFrom<u8> for ExactMatchLevel {
+	type Error = &'static str;
+
+	fn try_from(count: u8) -> Result<Self, Self::Error> {
+		match count {
+			0 => Ok(Self::Fuzzy),
+			1 => Ok(Self::Substring),
+			2 => Ok(Self::Line),
+			_ => Err("--exact / -E can be specified at most twice"),
+		}
+	}
+}
+
 /// Choose an issue file using fzf.
-pub fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result<Option<PathBuf>> {
+///
+/// Takes all files and lets fzf handle the filtering with the specified exact match level.
+/// Uses --select-1 to auto-select when only one match.
+pub fn choose_issue_with_fzf(files: &[PathBuf], initial_query: &str, exact: ExactMatchLevel) -> Result<Option<PathBuf>> {
 	use std::{
 		io::Write,
 		process::{Command, Stdio},
@@ -310,24 +338,37 @@ pub fn choose_issue_with_fzf(matches: &[PathBuf], initial_query: &str) -> Result
 	let issues_base = issues_dir();
 
 	// Prepare file list with relative paths for display
-	let file_list: Vec<String> = matches
+	let file_list: Vec<String> = files
 		.iter()
 		.filter_map(|p| p.strip_prefix(&issues_base).ok().map(|rel| rel.to_string_lossy().to_string()))
 		.collect();
 
-	// Spawn fzf with --select-1 to auto-select when only one match
-	let mut child = Command::new("fzf")
-		.arg("--query")
-		.arg(initial_query)
-		.arg("--select-1")
+	// Build fzf command with appropriate exact match flags
+	let mut cmd = Command::new("fzf");
+
+	// Transform query for line-exact mode by wrapping with ^...$
+	let query = match exact {
+		ExactMatchLevel::Line if !initial_query.is_empty() => format!("^{initial_query}$"),
+		_ => initial_query.to_string(),
+	};
+
+	cmd.arg("--query").arg(&query);
+
+	// Add --exact flag for substring and line modes
+	if matches!(exact, ExactMatchLevel::Substring | ExactMatchLevel::Line) {
+		cmd.arg("--exact");
+	}
+
+	cmd.arg("--select-1")
 		.arg("--preview")
 		.arg("cat {}")
 		.arg("--preview-window")
 		.arg("right:50%:wrap")
 		.current_dir(&issues_base)
 		.stdin(Stdio::piped())
-		.stdout(Stdio::piped())
-		.spawn()?;
+		.stdout(Stdio::piped());
+
+	let mut child = cmd.spawn()?;
 
 	// Write file list to fzf stdin
 	if let Some(stdin) = child.stdin.as_mut() {
@@ -434,5 +475,14 @@ mod tests {
 		fs::remove_file(dir.join("__main__.md.bak")).unwrap();
 		fs::write(dir.join("__main__.typ"), "test").unwrap();
 		assert_eq!(find_main_file_in_dir(dir), Some(dir.join("__main__.typ")));
+	}
+
+	#[test]
+	fn test_exact_match_level_try_from() {
+		assert!(matches!(ExactMatchLevel::try_from(0), Ok(ExactMatchLevel::Fuzzy)));
+		assert!(matches!(ExactMatchLevel::try_from(1), Ok(ExactMatchLevel::Substring)));
+		assert!(matches!(ExactMatchLevel::try_from(2), Ok(ExactMatchLevel::Line)));
+		assert!(ExactMatchLevel::try_from(3).is_err());
+		assert!(ExactMatchLevel::try_from(255).is_err());
 	}
 }

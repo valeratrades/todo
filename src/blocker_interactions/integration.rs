@@ -10,7 +10,7 @@ use color_eyre::eyre::{Result, bail, eyre};
 use todo::{DisplayFormat, Issue, Marker, ParseContext};
 
 use super::{BlockerSequence, operations::BlockerSequenceExt};
-use crate::open_interactions::files::{choose_issue_with_fzf, issues_dir, search_issue_files};
+use crate::open_interactions::files::{ExactMatchLevel, choose_issue_with_fzf, issues_dir, search_issue_files};
 
 /// Cache file for current blocker selection
 static CURRENT_BLOCKER_ISSUE_CACHE: &str = "current_blocker_issue.txt";
@@ -99,28 +99,14 @@ impl super::source::BlockerSource for IssueSource {
 
 /// Resolve an issue file from a pattern, using fzf if multiple matches.
 fn resolve_issue_file(pattern: &str) -> Result<PathBuf> {
-	let matches = search_issue_files(pattern)?;
-
-	match matches.len() {
-		0 => {
-			// No matches - open fzf with all files
-			let all_files = search_issue_files("")?;
-			if all_files.is_empty() {
-				bail!("No issue files found. Use `todo open <url>` to fetch an issue first.");
-			}
-			match choose_issue_with_fzf(&all_files, pattern)? {
-				Some(path) => Ok(path),
-				None => bail!("No issue selected"),
-			}
-		}
-		1 => Ok(matches[0].clone()),
-		_ => {
-			// Multiple matches - open fzf to choose
-			match choose_issue_with_fzf(&matches, pattern)? {
-				Some(path) => Ok(path),
-				None => bail!("No issue selected"),
-			}
-		}
+	// Always pass all files to fzf, let it handle filtering (uses fuzzy match by default)
+	let all_files = search_issue_files("")?;
+	if all_files.is_empty() {
+		bail!("No issue files found. Use `todo open <url>` to fetch an issue first.");
+	}
+	match choose_issue_with_fzf(&all_files, pattern, ExactMatchLevel::default())? {
+		Some(path) => Ok(path),
+		None => bail!("No issue selected"),
 	}
 }
 

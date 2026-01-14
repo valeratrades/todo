@@ -8,7 +8,7 @@ use v_utils::prelude::*;
 
 use super::{
 	fetch::fetch_and_store_issue,
-	files::{choose_issue_with_fzf, search_issue_files},
+	files::{ExactMatchLevel, choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
 	sync::{MergeMode, Side, SyncOptions, open_local_issue},
 	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
@@ -33,8 +33,14 @@ pub struct OpenArgs {
 	pub url_or_pattern: Option<String>,
 
 	/// File extension for the output file (overrides config default_extension)
-	#[arg(short = 'e', long)]
+	#[arg(short = "--ext", long)]
 	pub extension: Option<Extension>,
+
+	/// Use exact matching in fzf. Can be specified multiple times:
+	/// -E: exact substring match (fzf --exact)
+	/// -EE: exact line match (query must match entire line)
+	#[arg(short = 'E', long, action = clap::ArgAction::Count)]
+	pub exact: u8,
 
 	/// Create or open an issue from a path. Path format: workspace/project/issue[.md|.typ]
 	/// For sub-issues: workspace/project/parent/child (parent must exist on GitHub)
@@ -99,6 +105,9 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, offline: bool) -> Result<()> {
 	tracing::debug!("open_command entered, blocker={}", args.blocker);
 	let extension = get_effective_extension(args.extension, settings);
+
+	// Validate and convert exact match level
+	let exact = ExactMatchLevel::try_from(args.exact).map_err(|e| eyre!(e))?;
 
 	// Build merge mode from args
 	let build_merge_mode = |prefer: Side| -> Option<MergeMode> {
@@ -192,29 +201,14 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			// Direct file path - open it
 			(input_path.to_path_buf(), local_sync_opts(), offline)
 		} else {
-			// Local search mode: find and open existing issue file
-			let matches = search_issue_files(input)?;
-
-			let issue_file_path = match matches.len() {
-				0 => {
-					// No matches - open fzf with all files and use input as initial query
-					let all_files = search_issue_files("")?;
-					if all_files.is_empty() {
-						bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
-					}
-					match choose_issue_with_fzf(&all_files, input)? {
-						Some(path) => path,
-						None => bail!("No issue selected"),
-					}
-				}
-				1 => matches[0].clone(),
-				_ => {
-					// Multiple matches - open fzf to choose
-					match choose_issue_with_fzf(&matches, input)? {
-						Some(path) => path,
-						None => bail!("No issue selected"),
-					}
-				}
+			// Local search mode: always pass all files to fzf, let it handle filtering
+			let all_files = search_issue_files("")?;
+			if all_files.is_empty() {
+				bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
+			}
+			let issue_file_path = match choose_issue_with_fzf(&all_files, input, exact)? {
+				Some(path) => path,
+				None => bail!("No issue selected"),
 			};
 
 			(issue_file_path, local_sync_opts(), offline)

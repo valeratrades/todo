@@ -16,6 +16,31 @@ fn parse(content: &str) -> Issue {
 }
 
 #[test]
+fn test_comments_with_ids_sync_correctly() {
+	let ctx = TestContext::new("");
+
+	// Issue with a comment that has an ID
+	let content = format!(
+		r#"- [ ] a <!-- https://github.com/{OWNER}/{REPO}/issues/1 -->
+	body text
+
+	<!-- https://github.com/{OWNER}/{REPO}/issues/1#issuecomment-12345 -->
+	This is my comment
+"#
+	);
+	let issue = parse(&content);
+
+	let path = ctx.setup_issue(OWNER, REPO, 1, &issue);
+	ctx.setup_remote(OWNER, REPO, 1, &issue);
+
+	let (status, stdout, stderr) = ctx.open(&path).args(&["--force"]).run();
+	eprintln!("stdout: {stdout}\nstderr: {stderr}");
+
+	// This should NOT fail with "comment X not found in consensus"
+	assert!(status.success(), "sync failed: {stderr}");
+}
+
+#[test]
 fn test_nested_issues_preserved_through_sync() {
 	let ctx = TestContext::new("");
 
