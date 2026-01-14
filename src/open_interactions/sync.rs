@@ -482,8 +482,10 @@ pub enum Modifier {
 	/// Open the file in an editor and wait for user to close it.
 	/// If `open_at_blocker` is true, opens at the position of the last blocker item.
 	Editor { open_at_blocker: bool },
-	/// Apply a blocker operation programmatically
+	/// Pop the last blocker from the stack
 	BlockerPop,
+	/// Add a blocker to the stack
+	BlockerAdd { text: String },
 }
 
 impl Modifier {
@@ -525,6 +527,14 @@ impl Modifier {
 
 				let popped = issue.blockers.pop();
 				let output = popped.map(|text| format!("Popped: {text}"));
+
+				Ok(ModifyResult { output })
+			}
+			Modifier::BlockerAdd { text } => {
+				use crate::blocker_interactions::BlockerSequenceExt;
+
+				issue.blockers.add(text);
+				let output = Some(format!("Added: {text}"));
 
 				Ok(ModifyResult { output })
 			}
@@ -841,6 +851,45 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 	// Use shared sync logic
 	sync_issue_to_github_inner(gh, issue_file_path, &owner, &repo, meta.issue_number, &mut issue, extension, merge_mode).await?;
+
+	Ok(result)
+}
+
+/// Modify a local issue file offline (no GitHub sync).
+/// Use this when you know you're in offline mode and don't want to require a GitHub client.
+#[tracing::instrument(level = "debug", target = "todo::open_interactions::sync")]
+pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) -> Result<ModifyResult> {
+	use super::meta::load_issue_meta_from_path;
+
+	// Load metadata from path
+	let meta = load_issue_meta_from_path(issue_file_path)?;
+
+	// Determine extension
+	let extension = match meta.extension.as_str() {
+		"typ" => Extension::Typ,
+		_ => Extension::Md,
+	};
+
+	// Read and parse the current issue state
+	let raw_content = std::fs::read_to_string(issue_file_path)?;
+	let content = expand_blocker_shorthand(&raw_content, &extension);
+	if content != raw_content {
+		std::fs::write(issue_file_path, &content)?;
+	}
+
+	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
+	let mut issue = Issue::parse(&content, &ctx)?;
+
+	// Apply the modifier (blocker command)
+	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
+
+	// Serialize the (potentially updated) Issue back to markdown
+	let serialized = issue.serialize();
+
+	// Write the normalized/updated content back
+	std::fs::write(issue_file_path, &serialized)?;
+
+	println!("Offline mode: changes saved locally only.");
 
 	Ok(result)
 }

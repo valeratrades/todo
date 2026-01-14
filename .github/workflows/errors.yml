@@ -14,8 +14,10 @@ jobs:
     - name: Cache packages
       run: '# Pre-fetch packages into nix store so they''re cached for dependent jobs
 
-        nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
-        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c true
+        # Use nix-shell which properly sets up env vars like PKG_CONFIG_PATH
+
+        nix-shell -p mold openssl.dev egl-wayland wayland libGL libgbm pkg-config
+        --run "echo packages cached"
 
         '
   pre_ci:
@@ -48,12 +50,12 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: modified-cargo-files
-    - run: nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
-        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c bash -c 'cargo update'
-    - run: nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
-        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c bash -c 'cargo check'
-    - run: nix shell nixpkgs#mold nixpkgs#openssl.dev nixpkgs#egl-wayland nixpkgs#wayland
-        nixpkgs#libGL nixpkgs#libgbm nixpkgs#pkg-config -c bash -c 'cargo test'
+    - run: nix-shell -p mold openssl.dev egl-wayland wayland libGL libgbm pkg-config
+        --run "cargo update"
+    - run: nix-shell -p mold openssl.dev egl-wayland wayland libGL libgbm pkg-config
+        --run "cargo check"
+    - run: nix-shell -p mold openssl.dev egl-wayland wayland libGL libgbm pkg-config
+        --run "cargo test"
     strategy:
       fail-fast: false
       matrix:

@@ -134,7 +134,7 @@ fn get_current_source() -> Result<IssueSource> {
 /// This is the default mode for blocker commands.
 pub async fn main_integrated(settings: &crate::config::LiveSettings, command: super::io::Command, format: DisplayFormat, offline: bool) -> Result<()> {
 	use super::{io::Command, source::BlockerSource};
-	use crate::open_interactions::{Modifier, SyncOptions, modify_and_sync_issue};
+	use crate::open_interactions::{Modifier, SyncOptions, modify_and_sync_issue, modify_issue_offline};
 
 	match command {
 		Command::Set { pattern, touch: _ } => {
@@ -235,9 +235,13 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 				bail!("No `{marker}` marker found in issue body.");
 			}
 
-			// Use the unified modify_and_sync workflow
-			let gh = crate::github::create_client(settings)?;
-			let result = modify_and_sync_issue(&gh, &issue_path, offline, Modifier::BlockerPop, SyncOptions::default()).await?;
+			// Use unified modify workflow - offline version skips GitHub client requirement
+			let result = if offline {
+				modify_issue_offline(&issue_path, Modifier::BlockerPop).await?
+			} else {
+				let gh = crate::github::create_client(settings)?;
+				modify_and_sync_issue(&gh, &issue_path, offline, Modifier::BlockerPop, SyncOptions::default()).await?
+			};
 
 			// Output results
 			if let Some(output) = result.output {
@@ -255,12 +259,34 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 		}
 
 		Command::Add {
-			name: _,
+			name,
 			project: _,
 			urgent: _,
 			touch: _,
 		} => {
-			bail!("Add command not supported in integrated mode. Use `todo blocker -i open` to edit the issue file directly.");
+			// In integrated mode, project/urgent/touch are ignored
+			// We just add the blocker to the current issue
+			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker set <pattern>` first."))?;
+
+			// Use unified modify workflow - offline version skips GitHub client requirement
+			let result = if offline {
+				modify_issue_offline(&issue_path, Modifier::BlockerAdd { text: name.clone() }).await?
+			} else {
+				let gh = crate::github::create_client(settings)?;
+				modify_and_sync_issue(&gh, &issue_path, offline, Modifier::BlockerAdd { text: name.clone() }, SyncOptions::default()).await?
+			};
+
+			// Output results
+			if let Some(output) = result.output {
+				println!("{output}");
+			}
+
+			// Show new current blocker
+			let source = IssueSource::new(issue_path);
+			let blockers = source.load()?;
+			if let Some(new_current) = blockers.current_with_context(&[]) {
+				println!("Current: {new_current}");
+			}
 		}
 
 		Command::Resume(_) | Command::Halt(_) => {

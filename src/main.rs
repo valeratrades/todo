@@ -84,7 +84,6 @@ fn extract_log_to() -> Option<String> {
 
 #[tokio::main]
 async fn main() {
-	#[cfg(not(feature = "is_integration_test"))]
 	{
 		if let Some(filename) = extract_log_to() {
 			v_utils::clientside!(filename);
@@ -92,23 +91,9 @@ async fn main() {
 			v_utils::clientside!();
 		}
 	}
-
 	#[cfg(feature = "is_integration_test")]
-	{
-		// Initialize tracing/logging
-		// If TODO_TRACE_FILE is set, write traces to that file for test verification
-		let trace_file = std::env::var("TODO_TRACE_FILE").expect("TODO_TRACE_FILE env var not set");
-		use std::fs::OpenOptions;
-
-		use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-		let file = OpenOptions::new().create(true).append(true).open(&trace_file).expect("Failed to open trace file");
-		let file_layer = tracing_subscriber::fmt::layer().with_writer(std::sync::Mutex::new(file)).with_ansi(false).json();
-		let _ = tracing_subscriber::registry()
-			.with(file_layer)
-			.with(tracing_subscriber::EnvFilter::new("info,todo=debug"))
-			.try_init();
-		tracing::debug!("Tracing initialized with TODO_TRACE_FILE");
-	}
+	// SAFETY: This is called at program start before any other threads are spawned
+	unsafe { std::env::set_var("LOG_DIRECTIVES", "info,todo=debug") };
 
 	let cli = Cli::parse();
 

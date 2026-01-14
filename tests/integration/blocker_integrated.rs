@@ -16,15 +16,6 @@ fn parse(content: &str) -> Issue {
 	Issue::parse(content, &ctx).expect("failed to parse test issue")
 }
 
-/// Helper to read the current blocker issue cache path
-fn read_current_blocker_issue(ctx: &TestContext) -> Option<String> {
-	if ctx.xdg.cache_exists("current_blocker_issue.txt") {
-		Some(ctx.xdg.read_cache("current_blocker_issue.txt"))
-	} else {
-		None
-	}
-}
-
 #[test]
 fn test_blocker_add_in_integrated_mode() {
 	let ctx = TestContext::new("");
