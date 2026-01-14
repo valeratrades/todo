@@ -69,6 +69,8 @@ fn fetch_children_recursive<'a>(
 				Ok::<_, color_eyre::eyre::Report>((num, comments, sub_issues))
 			}
 		});
+		//TODO: when adding retry logic, switch to `cancel_safe_futures::future::join_then_try_all`
+		// so retrying branches complete before propagating errors
 		let results = futures::future::try_join_all(futures).await?;
 
 		// Build a map for quick lookup
