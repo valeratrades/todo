@@ -16,8 +16,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - uses: actions/checkout@v4
@@ -49,8 +51,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - uses: dtolnay/rust-toolchain@clippy
@@ -76,8 +80,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - uses: dtolnay/rust-toolchain@nightly
@@ -103,8 +109,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - name: Cargo Machete
@@ -121,8 +129,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - name: Installation
@@ -143,8 +153,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - name: Installation
@@ -167,8 +179,10 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install dependencies via Nix
-      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
-        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+      run: 'nix-env -i /nix/store/ssfb44fiiqjl5g4m7yy8hyd7s91y72nh-mold-unwrapped-wrapper-2.40.4
+        /nix/store/ydrckgnllgg8nmhdwni81h7xhcpnrlhd-openssl-3.6.0-dev /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20
+        /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
+        /nix/store/pw8v6hlrg7lz2d3x115x3zy80bbhx1x9-mesa-libgbm-25.1.0
 
         '
     - name: Installation
