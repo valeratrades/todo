@@ -139,7 +139,8 @@ async fn store_issue_node(
 	}
 
 	// Format and write content
-	let content = format_issue(issue, comments, &filtered_sub_issues, owner, repo, current_user, *extension, &ancestors);
+	// use_local_subissue_content: false because we're fetching fresh from remote - don't mix in stale local content
+	let content = format_issue(issue, comments, &filtered_sub_issues, owner, repo, current_user, *extension, &ancestors, false);
 	std::fs::write(&issue_file_path, &content)?;
 
 	// Build ancestors for children (current issue becomes part of ancestors)

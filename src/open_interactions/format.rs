@@ -10,6 +10,9 @@ use crate::github::{GitHubComment, GitHubIssue};
 
 /// Format an issue for local file storage.
 /// `ancestors` is the chain of parent issues (for sub-issue file lookup).
+/// `use_local_subissue_content`: if true, prefer local sub-issue file content over GitHub API body.
+///   Set to false when doing a fresh fetch (e.g., --reset) to ensure only remote content is used.
+#[expect(clippy::too_many_arguments)]
 pub fn format_issue(
 	issue: &GitHubIssue,
 	comments: &[GitHubComment],
@@ -19,6 +22,7 @@ pub fn format_issue(
 	current_user: &str,
 	ext: Extension,
 	ancestors: &[FetchedIssue],
+	use_local_subissue_content: bool,
 ) -> String {
 	let mut content = String::new();
 
@@ -140,15 +144,19 @@ pub fn format_issue(
 			content.push_str(&format!("\t\t{}\n", Marker::OmittedStart.encode(ext)));
 		}
 
-		// Try to read local file contents for this sub-issue
+		// Try to read local file contents for this sub-issue (only if use_local_subissue_content is true)
 		// Build ancestors for the sub-issue lookup (current issue + existing ancestors)
-		let mut sub_ancestors = ancestors.to_vec();
-		if let Some(this_issue) = FetchedIssue::from_parts(owner, repo, issue.number, &issue.title) {
-			sub_ancestors.push(this_issue);
-		}
-		let local_body = find_sub_issue_file(owner, repo, &sub_ancestors, sub.number).and_then(|path| read_sub_issue_body_from_file(&path));
+		let local_body = if use_local_subissue_content {
+			let mut sub_ancestors = ancestors.to_vec();
+			if let Some(this_issue) = FetchedIssue::from_parts(owner, repo, issue.number, &issue.title) {
+				sub_ancestors.push(this_issue);
+			}
+			find_sub_issue_file(owner, repo, &sub_ancestors, sub.number).and_then(|path| read_sub_issue_body_from_file(&path))
+		} else {
+			None
+		};
 
-		// Use local file contents if available, otherwise fall back to GitHub body
+		// Use local file contents if available (and allowed), otherwise fall back to GitHub body
 		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
 
 		if let Some(body) = body_to_embed
@@ -205,7 +213,7 @@ mod tests {
 	fn test_format_issue_md_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec!["bug", "help wanted"], "me", "open");
 
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[], false);
 		assert_snapshot!(md, @"
 		- [ ] [bug, help wanted] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -216,7 +224,7 @@ mod tests {
 	fn test_format_issue_md_not_owned() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[], false);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -228,7 +236,7 @@ mod tests {
 		let issue = make_issue(123, "Closed Issue", Some("Issue body text"), vec![], "me", "closed");
 
 		// Closed issues wrap contents in vim fold markers
-		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[]);
+		let md = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Md, &[], false);
 		assert_snapshot!(md, @"
 		- [x] Closed Issue <!-- https://github.com/owner/repo/issues/123 -->
 			<!--omitted {{{always-->
@@ -245,7 +253,7 @@ mod tests {
 			make_issue(125, "Closed sub-issue", Some("Closed body"), vec![], "me", "closed"),
 		];
 
-		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", Extension::Md, &[]);
+		let md = format_issue(&issue, &[], &sub_issues, "owner", "repo", "me", Extension::Md, &[], false);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!-- https://github.com/owner/repo/issues/123 -->
 			Issue body text
@@ -276,7 +284,7 @@ mod tests {
 			},
 		];
 
-		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", Extension::Md, &[]);
+		let md = format_issue(&issue, &comments, &[], "owner", "repo", "me", Extension::Md, &[], false);
 		assert_snapshot!(md, @"
 		- [ ] Test Issue <!--immutable https://github.com/owner/repo/issues/123 -->
 				Issue body text
@@ -293,7 +301,7 @@ mod tests {
 	fn test_format_issue_typ_owned() {
 		let issue = make_issue(123, "Test Issue", Some("## Subheading\nBody text"), vec!["enhancement"], "me", "open");
 
-		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[]);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[], false);
 		assert_snapshot!(typ, @"
 		- [ ] [enhancement] Test Issue // https://github.com/owner/repo/issues/123
 			== Subheading
@@ -310,7 +318,7 @@ mod tests {
 			user: make_user("other"),
 		}];
 
-		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", Extension::Typ, &[]);
+		let typ = format_issue(&issue, &comments, &[], "testowner", "testrepo", "me", Extension::Typ, &[], false);
 		assert_snapshot!(typ, @"
 		- [ ] Typst Issue // immutable https://github.com/testowner/testrepo/issues/456
 				Body
@@ -323,7 +331,7 @@ mod tests {
 	fn test_format_issue_typ_closed_with_vim_folds() {
 		let issue = make_issue(123, "Closed Issue", Some("Body text"), vec![], "me", "closed");
 
-		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[]);
+		let typ = format_issue(&issue, &[], &[], "owner", "repo", "me", Extension::Typ, &[], false);
 		assert_snapshot!(typ, @"
 		- [x] Closed Issue // https://github.com/owner/repo/issues/123
 			// omitted {{{always
@@ -358,7 +366,7 @@ mod tests {
 			make_issue(125, "Sub Issue Two", Some("Closed sub body"), vec![], "me", "closed"),
 		];
 
-		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", Extension::Md, &[]);
+		let md = format_issue(&issue, &comments, &sub_issues, "owner", "repo", "me", Extension::Md, &[], false);
 		assert_snapshot!(md, @"
 		- [ ] [bug, priority] Main Issue <!-- https://github.com/owner/repo/issues/123 -->
 			This is the body text.

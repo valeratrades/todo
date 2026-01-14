@@ -4680,6 +4680,7 @@ dependencies = [
  "urlencoding",
  "v_fixtures",
  "v_utils",
+ "walkdir",
  "xdg",
 ]
 
