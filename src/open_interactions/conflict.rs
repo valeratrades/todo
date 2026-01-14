@@ -12,7 +12,7 @@ use v_utils::prelude::*;
 
 /// Get the conflicts directory
 fn conflicts_dir() -> PathBuf {
-	v_utils::xdg_state_dir!("todo/conflicts")
+	v_utils::xdg_state_dir!("conflicts")
 }
 
 /// Error returned when there are unresolved conflicts blocking operations

@@ -477,24 +477,34 @@ pub struct ModifyResult {
 }
 
 /// A modifier that can be applied to an issue file.
+#[derive(Debug)]
 pub enum Modifier {
-	/// Open the file in an editor and wait for user to close it
-	Editor,
+	/// Open the file in an editor and wait for user to close it.
+	/// If `open_at_blocker` is true, opens at the position of the last blocker item.
+	Editor { open_at_blocker: bool },
 	/// Apply a blocker operation programmatically
 	BlockerPop,
 }
 
 impl Modifier {
 	/// Apply this modifier to an issue. Returns output to display.
+	#[tracing::instrument(level = "debug", skip(issue, extension))]
 	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, extension: &Extension) -> Result<ModifyResult> {
 		match self {
-			Modifier::Editor => {
+			Modifier::Editor { open_at_blocker } => {
 				// Serialize current state
 				let content = issue.serialize();
 				std::fs::write(issue_file_path, &content)?;
 
+				// Calculate position if opening at blocker
+				let position = if *open_at_blocker {
+					issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)))
+				} else {
+					None
+				};
+
 				// Open in editor (blocks until editor closes)
-				crate::utils::open_file(issue_file_path).await?;
+				crate::utils::open_file(issue_file_path, position).await?;
 
 				// Read edited content, expand !b shorthand, and re-parse
 				let raw_content = std::fs::read_to_string(issue_file_path)?;
@@ -699,12 +709,15 @@ async fn sync_issue_to_github_inner(
 }
 
 /// Open a local issue file with the default editor modifier.
-pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, sync_opts: SyncOptions) -> Result<()> {
-	modify_and_sync_issue(gh, issue_file_path, offline, Modifier::Editor, sync_opts).await?;
+/// If `open_at_blocker` is true, opens the editor at the position of the last blocker item.
+#[tracing::instrument(level = "debug", skip(gh, sync_opts), target = "todo::open_interactions::sync")]
+pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, sync_opts: SyncOptions, open_at_blocker: bool) -> Result<()> {
+	modify_and_sync_issue(gh, issue_file_path, offline, Modifier::Editor { open_at_blocker }, sync_opts).await?;
 	Ok(())
 }
 
 /// Modify a local issue file using the given modifier, then sync changes back to GitHub.
+#[tracing::instrument(level = "debug", skip(gh), target = "todo::open_interactions::sync")]
 pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier, sync_opts: SyncOptions) -> Result<ModifyResult> {
 	use super::{conflict::check_any_conflicts, files::extract_owner_repo_from_path, meta::is_virtual_project};
 

@@ -5,7 +5,8 @@ use color_eyre::eyre::{Report, Result, bail};
 use jiff::Timestamp as TimestampImpl;
 use jiff::{SignedDuration, civil};
 pub use tokio::sync::oneshot;
-pub use v_utils::io::file_open::{Client as OpenClient, OpenMode};
+use tracing::{debug, instrument};
+pub use v_utils::io::file_open::{Client as OpenClient, OpenMode, Position};
 
 use crate::config::LiveSettings;
 #[cfg(test)]
@@ -17,7 +18,10 @@ use crate::mocks::MockTimestamp as TimestampImpl;
 /// - If `TODO_MOCK_PIPE` env var is set: waits for any data on the named pipe, then returns.
 ///   This allows integration tests to control when the "editor" closes.
 /// - Otherwise: opens with $EDITOR normally.
-pub async fn open_file<P: AsRef<Path>>(path: P) -> Result<()> {
+///
+/// If `position` is provided, the editor will open at the specified line and column (if supported).
+#[instrument(level = "debug")]
+pub async fn open_file<P: AsRef<Path> + std::fmt::Debug>(path: P, position: Option<Position>) -> Result<()> {
 	// Check for integration test pipe-based mock mode
 	if let Ok(pipe_path) = std::env::var("TODO_MOCK_PIPE") {
 		// Wait for signal on the pipe (any data or EOF when writer closes)
@@ -35,7 +39,12 @@ pub async fn open_file<P: AsRef<Path>>(path: P) -> Result<()> {
 		return Ok(());
 	}
 
-	OpenClient::default().mode(OpenMode::Normal).open(path).await?;
+	let mut client = OpenClient::default().mode(OpenMode::Normal);
+	if let Some(pos) = position {
+		debug!("Opening file at position: {pos:?}");
+		client = client.at(pos);
+	}
+	client.open(path).await?;
 	Ok(())
 }
 

@@ -35,9 +35,9 @@ alias tdo="{exe_name} open"
 alias tda="{exe_name} add"
 
 # {exe_name}s-blocker
-alias tbp="{exe_name} blocker --offline pop"
-alias tba="{exe_name} blocker --offline add"
-alias tbo="{exe_name} blocker --offline open"
+alias tbp="{exe_name} --offline blocker pop"
+alias tba="{exe_name} --offline blocker add"
+alias tbo="{exe_name} --offline blocker open"
 alias tbr="{exe_name} blocker resume"
 alias tbh="{exe_name} blocker halt"
 alias tbs="{exe_name} blocker set-project"

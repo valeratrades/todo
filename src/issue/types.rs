@@ -805,6 +805,49 @@ impl Issue {
 		}
 		current.children.get_mut(*path.last()?)
 	}
+
+	/// Find the position (line, col) of the last blocker item in the serialized content.
+	/// Returns None if there are no blockers.
+	/// Line numbers are 1-indexed to match editor conventions.
+	/// Column points to the first character of the item text (after `- `).
+	pub fn find_last_blocker_position(&self) -> Option<(u32, u32)> {
+		if self.blockers.is_empty() {
+			return None;
+		}
+
+		// Serialize and find the last blocker item line
+		let serialized = self.serialize();
+		let lines: Vec<&str> = serialized.lines().collect();
+
+		// Find where blockers section starts (look for `# Blockers` marker)
+		let blockers_start_idx = lines.iter().position(|line| line.trim() == "# Blockers")?;
+
+		// Track the last line that's a blocker item (starts with `- ` but not `- [` which is sub-issue)
+		let mut last_item_line_num: Option<u32> = None;
+		let mut last_item_col: Option<u32> = None;
+
+		for (offset, line) in lines[blockers_start_idx + 1..].iter().enumerate() {
+			let trimmed = line.trim();
+
+			// Check if we've reached sub-issues (they start with `- [`)
+			if trimmed.starts_with("- [") {
+				break;
+			}
+
+			// A blocker item starts with `- ` (but not `- [`)
+			if trimmed.starts_with("- ") {
+				// Line number is 1-indexed
+				let line_num = (blockers_start_idx + 1 + offset + 1) as u32;
+				// Column: find where `- ` starts, then add 2 to skip past it
+				let dash_pos = line.find("- ").unwrap_or(0);
+				let col = (dash_pos + 3) as u32; // +2 for "- ", +1 for 1-indexing
+				last_item_line_num = Some(line_num);
+				last_item_col = Some(col);
+			}
+		}
+
+		last_item_line_num.zip(last_item_col)
+	}
 }
 
 /// Semantic equality for divergence detection.
@@ -1029,5 +1072,63 @@ mod tests {
 				duplicate body
 				<!--,}}}-->
 		");
+	}
+
+	#[test]
+	fn test_find_last_blocker_position_empty() {
+		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n";
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+		assert!(issue.find_last_blocker_position().is_none());
+	}
+
+	#[test]
+	fn test_find_last_blocker_position_single_item() {
+		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- task 1\n";
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+		let pos = issue.find_last_blocker_position();
+		assert!(pos.is_some());
+		let (line, col) = pos.unwrap();
+		assert_eq!(line, 5); // Line 5: `\t- task 1`
+		// Column 4: 1-indexed position of first char after `\t- ` (tab=1, dash=2, space=3, 't'=4)
+		assert_eq!(col, 4);
+	}
+
+	#[test]
+	fn test_find_last_blocker_position_multiple_items() {
+		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- task 1\n\t- task 2\n\t- task 3\n";
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+		let pos = issue.find_last_blocker_position();
+		assert!(pos.is_some());
+		let (line, col) = pos.unwrap();
+		assert_eq!(line, 7); // Line 7: `\t- task 3`
+		assert_eq!(col, 4);
+	}
+
+	#[test]
+	fn test_find_last_blocker_position_with_headers() {
+		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t# Phase 1\n\t- task a\n\t# Phase 2\n\t- task b\n";
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+		let pos = issue.find_last_blocker_position();
+		assert!(pos.is_some());
+		let (line, col) = pos.unwrap();
+		assert_eq!(line, 8); // Line 8: `\t- task b`
+		assert_eq!(col, 4);
+	}
+
+	#[test]
+	fn test_find_last_blocker_position_before_sub_issues() {
+		let content =
+			"- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- blocker task\n\n\t- [ ] Sub issue <!--sub https://github.com/owner/repo/issues/2 -->\n";
+		let ctx = ParseContext::new(content.to_string(), "test".to_string());
+		let issue = Issue::parse(content, &ctx).unwrap();
+		let pos = issue.find_last_blocker_position();
+		assert!(pos.is_some());
+		let (line, col) = pos.unwrap();
+		assert_eq!(line, 5); // Line 5: `\t- blocker task`, not the sub-issue line
+		assert_eq!(col, 4);
 	}
 }
