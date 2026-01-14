@@ -25,13 +25,23 @@
           pname = manifest.name;
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
+          alwaysPkgs = with pkgs; [
+            mold
+            openssl.dev
+            egl-wayland
+            wayland
+            libGL
+            libgbm
+          ];
+
+          # v-utils modules {{{1
           rs = v-utils.rs {
             inherit pkgs rust;
             deny = true;
           };
           github =
             let
-              jobDeps = { apt = [ "libwayland-dev" "libegl-dev" ]; };
+              jobDeps = { packages = alwaysPkgs; };
             in
             v-utils.github {
               inherit pkgs pname rs;
@@ -50,16 +60,7 @@
             badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
           };
           combined = v-utils.utils.combine [ rs github readme ];
-        in
-        let
-          alwaysPkgs = with pkgs; [
-            mold
-            openssl.dev
-            egl-wayland
-            wayland
-            libGL
-            libgbm
-          ];
+          #,}}}1
         in
         {
           packages =

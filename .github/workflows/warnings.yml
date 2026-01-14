@@ -11,11 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - uses: actions/checkout@v4
@@ -42,11 +44,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - uses: dtolnay/rust-toolchain@clippy
@@ -67,11 +71,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - uses: dtolnay/rust-toolchain@nightly
@@ -92,11 +98,13 @@ jobs:
       uses: taiki-e/install-action@v2
       with:
         tool: cargo-machete
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - name: Cargo Machete
@@ -108,11 +116,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - name: Installation
@@ -128,11 +138,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - name: Installation
@@ -150,11 +162,13 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    - if: runner.os == 'Linux'
-      name: Install dependencies
-      run: 'sudo apt-get update
-
-        sudo apt-get install -y libwayland-dev libegl-dev
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@main
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@main
+    - name: Install dependencies via Nix
+      run: 'nix-env -i /nix/store/h9grlk1b07l80k6rnmyliawg25bdpsv5-wayland-1.24.0
+        /nix/store/hrkjdbci2xiqr1l18my0dnpqdbzi8mkz-egl-wayland-1.1.20 /nix/store/mm4v6w3wj8wi5qc6rwdrb2rkqs08whp9-libglvnd-1.7.0
 
         '
     - name: Installation
