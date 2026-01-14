@@ -15,7 +15,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - uses: dtolnay/rust-toolchain@clippy
@@ -71,7 +71,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - uses: dtolnay/rust-toolchain@nightly
@@ -96,7 +96,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - name: Cargo Machete
@@ -112,7 +112,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - name: Installation
@@ -132,7 +132,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - name: Installation
@@ -154,7 +154,7 @@ jobs:
       name: Install dependencies
       run: 'sudo apt-get update
 
-        sudo apt-get install -y libwayland-dev
+        sudo apt-get install -y libwayland-dev libegl-dev
 
         '
     - name: Installation
