@@ -34,7 +34,7 @@
             lastSupportedVersion = "nightly-2025-08-01";
             langs = [ "rs" ];
             jobs.default = true;
-            jobs.errors.install = { apt = [ "libwayland-dev" ]; };
+            jobs.warnings.install = { apt = [ "libwayland-dev" ]; };
             jobs.warnings.augment = [ "code-duplication" ];
           };
           readme = v-utils.readme-fw {

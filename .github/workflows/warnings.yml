@@ -11,6 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - uses: actions/checkout@v4
       with:
         path: my_gh_stuff
@@ -35,6 +42,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - uses: dtolnay/rust-toolchain@clippy
     - name: Install mold
       uses: rui314/setup-mold@v1
@@ -53,6 +67,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - uses: dtolnay/rust-toolchain@nightly
     - name: Install mold
       uses: rui314/setup-mold@v1
@@ -71,6 +92,13 @@ jobs:
       uses: taiki-e/install-action@v2
       with:
         tool: cargo-machete
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - name: Cargo Machete
       run: "\t\t\t\t\t\tcargo machete\n\t\t\t\t\t\texit_code=$?\n\t\t\t\t\t\tif [\
         \ $exit_code = 0 ]; then\n\t\t\t\t\t\t\techo \"Found unused dependencies\"\
@@ -80,6 +108,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - name: Installation
       uses: taiki-e/install-action@v2
       with:
@@ -93,6 +128,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - name: Installation
       uses: taiki-e/install-action@v2
       with:
@@ -108,6 +150,13 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+    - if: runner.os == 'Linux'
+      name: Install dependencies
+      run: 'sudo apt-get update
+
+        sudo apt-get install -y libwayland-dev
+
+        '
     - name: Installation
       uses: taiki-e/install-action@v2
       with:
