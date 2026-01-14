@@ -47,7 +47,7 @@ pub struct OpenArgs {
 	pub last: bool,
 
 	/// Skip all network operations - edit locally only, don't sync to GitHub
-	#[arg(long)]
+	#[arg(short, long)]
 	pub offline: bool,
 
 	/// Fetch latest from GitHub before opening. If remote differs from local,

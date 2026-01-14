@@ -34,6 +34,7 @@
             lastSupportedVersion = "nightly-2025-08-01";
             langs = [ "rs" ];
             jobs.default = true;
+            jobs.warnings.augment = [ "code-duplication" ];
           };
           readme = v-utils.readme-fw {
             inherit pkgs pname;
@@ -43,6 +44,16 @@
             badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
           };
           combined = v-utils.utils.combine [ rs github readme ];
+        in
+        let
+          alwaysPkgs = with pkgs; [
+            mold
+            openssl.dev
+            egl-wayland
+            wayland
+            libGL
+            libgbm
+          ];
         in
         {
           packages =
@@ -58,13 +69,7 @@
                 inherit pname;
                 version = manifest.version;
 
-                buildInputs = with pkgs; [
-                  egl-wayland
-                  libgbm
-                  libGL
-                  openssl.dev
-                  wayland
-                ];
+                buildInputs = alwaysPkgs;
                 nativeBuildInputs = with pkgs; [ pkg-config ];
 
                 cargoLock.lockFile = ./Cargo.lock;
@@ -81,17 +86,20 @@
                 combined.shellHook +
                 ''
                   cp -f ${(v-utils.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
+
+                  # qlty
+                  if [ ! -f "$HOME/.qlty/bin/qlty" ]; then
+                    echo "Installing qlty..."
+                    curl -fsSL https://qlty.sh | sh
+                  fi
+                  export PATH="$HOME/.qlty/bin:$PATH"
                 '';
-              packages = [
-                mold
-                openssl
-                pkg-config
-                egl-wayland
-                libGL
-                libgbm
-                rust
-                wayland
-              ] ++ pre-commit-check.enabledPackages ++ combined.enabledPackages;
+              packages =
+                alwaysPkgs ++
+                [
+                  rust
+                  pkg-config
+                ] ++ pre-commit-check.enabledPackages ++ combined.enabledPackages;
 
               env.RUST_BACKTRACE = 1;
               env.RUST_LIB_BACKTRACE = 0;
