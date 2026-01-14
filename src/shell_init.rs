@@ -32,12 +32,12 @@ alias tme="{exe_name} milestones edit"
 
 # {exe_name}s-{exe_name}s
 alias tdo="{exe_name} open"
-alias tda="{exe_name} add"
+alias tdp="{exe_name} open --pull"
 
 # {exe_name}s-blocker
 alias tbp="{exe_name} --offline blocker pop"
 alias tba="{exe_name} --offline blocker add"
-alias tbo="{exe_name} --offline blocker open"
+alias tbo="{exe_name} --offline open --blocker"
 alias tbr="{exe_name} blocker resume"
 alias tbh="{exe_name} blocker halt"
 alias tbs="{exe_name} blocker set-project"

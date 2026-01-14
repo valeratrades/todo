@@ -1,5 +1,7 @@
 //! Sync local issue changes back to GitHub.
 //!
+#![allow(unused_assignments)] // Fields in PushError are read by miette's derive macro via attributes
+//!
 //! ## Unified Sync Workflow
 //!
 //! All sync operations go through `sync_issue`, which:
@@ -83,6 +85,8 @@ impl SyncOptions {
 
 use std::path::Path;
 
+use miette::Diagnostic;
+use thiserror::Error;
 use todo::{CloseState, Extension, FetchedIssue, Issue, ParseContext};
 use v_utils::prelude::*;
 
@@ -96,6 +100,25 @@ use super::{
 	util::expand_blocker_shorthand,
 };
 use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
+
+//=============================================================================
+// Error types
+//=============================================================================
+
+/// Errors that can occur when pushing changes to GitHub.
+#[derive(Debug, Diagnostic, Error)]
+pub enum PushError {
+	/// Local file references a comment ID that doesn't exist on GitHub.
+	/// This typically happens when comment IDs are manually edited in the local file.
+	#[error("comment {comment_id} not found in consensus")]
+	#[diagnostic(
+		code(todo::sync::id_mismatch),
+		help(
+			"The local file references a comment ID that doesn't exist on GitHub.\nThis can happen if comment IDs were manually edited.\nTry re-fetching the issue with `--pull --reset=remote`."
+		)
+	)]
+	IdMismatch { comment_id: u64 },
+}
 
 //=============================================================================
 // Sync implementation
@@ -163,7 +186,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 				}
 			}
 			Some(id) => {
-				eprintln!("Warning: comment {id} not found in consensus, skipping");
+				return Err(PushError::IdMismatch { comment_id: id }.into());
 			}
 			None =>
 				if !comment.body.is_empty() {
@@ -534,7 +557,7 @@ impl Modifier {
 				use crate::blocker_interactions::BlockerSequenceExt;
 
 				issue.blockers.add(text);
-				let output = Some(format!("Added: {text}"));
+				let output = None; // will repeat it when printing the current
 
 				Ok(ModifyResult { output })
 			}
