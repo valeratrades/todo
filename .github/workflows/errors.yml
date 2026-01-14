@@ -25,8 +25,6 @@ jobs:
         toolchain: ${{matrix.rust}}
     - name: Install mold
       uses: rui314/setup-mold@v1
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libwayland-dev
     - if: github.ref == 'refs/heads/release'
       name: Set RUSTFLAGS for release branch
       run: echo "RUSTFLAGS=-Dwarnings" >> $GITHUB_ENV
