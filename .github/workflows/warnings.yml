@@ -11,56 +11,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        path: my_gh_stuff
+        repository: valeratrades/.github
+        sparse-checkout: github/workflows
+        sparse-checkout-cone-mode: false
     - name: Setup nightly Rust
       uses: dtolnay/rust-toolchain@nightly
     - name: Install qlty
       uses: qltysh/qlty-action/install@main
     - name: Initialize qlty
-      run: qlty init --no-ui || true
+      run: qlty init --yes --no-upgrade-check
     - name: Check for code duplication
-      run: "cat > /tmp/qlty-duplication.rs << 'SCRIPT'\n#!/usr/bin/env -S cargo +nightly\
-        \ -Zscript -q\n---cargo\n[package]\nedition = \"2024\"\n\n[dependencies]\n\
-        ---\n\nuse std::io::{BufRead, BufReader};\nuse std::process::{Command, ExitCode,\
-        \ Stdio};\n\nstruct FileBlock {\n    header: String,\n    issues: Vec<Issue>,\n\
-        }\n\nstruct Issue {\n    lines: Vec<String>,\n    is_duplication: bool,\n\
-        }\n\nfn main() -> ExitCode {\n    let mut cmd = Command::new(\"qlty\")\n \
-        \       .args([\"smells\", \"--all\"])\n        .stdout(Stdio::piped())\n\
-        \        .stderr(Stdio::piped())\n        .spawn()\n        .expect(\"Failed\
-        \ to run qlty smells --all\");\n\n    let stdout = cmd.stdout.take().expect(\"\
-        Failed to capture stdout\");\n    let reader = BufReader::new(stdout);\n\n\
-        \    let mut files: Vec<FileBlock> = Vec::new();\n    let mut current_file:\
-        \ Option<FileBlock> = None;\n    let mut current_issue: Option<Issue> = None;\n\
-        \    let mut found_duplication = false;\n\n    for line in reader.lines()\
-        \ {\n        let line = match line {\n            Ok(l) => l,\n          \
-        \  Err(_) => continue,\n        };\n\n        if !line.is_empty() && !line.starts_with('\
-        \ ') && !line.starts_with('\\t') {\n            if let (Some(file), Some(issue))\
-        \ = (&mut current_file, current_issue.take()) {\n                file.issues.push(issue);\n\
-        \            }\n            if let Some(file) = current_file.take() {\n  \
-        \              files.push(file);\n            }\n            current_file\
-        \ = Some(FileBlock {\n                header: line,\n                issues:\
-        \ Vec::new(),\n            });\n            continue;\n        }\n\n     \
-        \   let is_issue_header = line.starts_with(\"    \")\n            && !line.starts_with(\"\
-        \        \")\n            && line.len() > 4\n            && !line.chars().nth(4).unwrap_or('\
-        \ ').is_whitespace();\n\n        if is_issue_header {\n            if let\
-        \ (Some(file), Some(issue)) = (&mut current_file, current_issue.take()) {\n\
-        \                file.issues.push(issue);\n            }\n            let\
-        \ is_dup = line.contains(\"similar code\");\n            if is_dup {\n   \
-        \             found_duplication = true;\n            }\n            current_issue\
-        \ = Some(Issue {\n                is_duplication: is_dup,\n              \
-        \  lines: vec![line],\n            });\n            continue;\n        }\n\
-        \n        if let Some(issue) = &mut current_issue {\n            issue.lines.push(line);\n\
-        \        }\n    }\n\n    if let (Some(file), Some(issue)) = (&mut current_file,\
-        \ current_issue.take()) {\n        file.issues.push(issue);\n    }\n    if\
-        \ let Some(file) = current_file.take() {\n        files.push(file);\n    }\n\
-        \n    for file in files {\n        let dup_issues: Vec<_> = file.issues.into_iter().filter(|i|\
-        \ i.is_duplication).collect();\n        if !dup_issues.is_empty() {\n    \
-        \        println!(\"{}\", file.header);\n            for issue in dup_issues\
-        \ {\n                for line in issue.lines {\n                    println!(\"\
-        {}\", line);\n                }\n                println!();\n           \
-        \ }\n        }\n    }\n\n    let _ = cmd.wait();\n    if found_duplication\
-        \ {\n        ExitCode::from(1)\n    } else {\n        ExitCode::from(0)\n\
-        \    }\n}\n\nSCRIPT\nchmod +x /tmp/qlty-duplication.rs\ncargo +nightly -Zscript\
-        \ -q /tmp/qlty-duplication.rs\n"
+      run: cargo +nightly -Zscript -q my_gh_stuff/github/workflows/code-duplication.rs
     timeout-minutes: 15
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@master

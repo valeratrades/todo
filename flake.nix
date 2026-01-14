@@ -34,6 +34,7 @@
             lastSupportedVersion = "nightly-2025-08-01";
             langs = [ "rs" ];
             jobs.default = true;
+            jobs.errors.install = { apt = [ "libwayland-dev" ]; };
             jobs.warnings.augment = [ "code-duplication" ];
           };
           readme = v-utils.readme-fw {
@@ -87,6 +88,7 @@
                 ''
                   cp -f ${(v-utils.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
 
+                  #DEPRECATE: once GHA is working
                   # qlty
                   if [ ! -f "$HOME/.qlty/bin/qlty" ]; then
                     echo "Installing qlty..."

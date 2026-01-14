@@ -226,7 +226,8 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	};
 
 	// Open the local issue file for editing
-	open_local_issue(&gh, &issue_file_path, effective_offline, sync_opts).await?;
+	// If using blocker mode, open at the last blocker position
+	open_local_issue(&gh, &issue_file_path, effective_offline, sync_opts, use_blocker_mode).await?;
 
 	// If --blocker-set was used, set this issue as the current blocker issue
 	if args.blocker_set {
