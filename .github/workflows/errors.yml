@@ -12,7 +12,7 @@ jobs:
     - name: Setup Nix cache
       uses: DeterminateSystems/magic-nix-cache-action@main
     - name: Install packages
-      run: nix-env -i mold openssl egl-wayland wayland libGL libgbm pkg-config
+      run: nix-env -i mold openssl.dev egl-wayland wayland libGL libgbm pkg-config
   pre_ci:
     uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
   rust-tests:
