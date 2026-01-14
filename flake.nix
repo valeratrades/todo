@@ -41,7 +41,8 @@
           };
           github =
             let
-              jobDeps = { packages = alwaysPkgs; };
+              # nixpkgs attribute names for CI dependencies
+              jobDeps = { packages = [ "mold" "openssl" "egl-wayland" "wayland" "libGL" "libgbm" "pkg-config" ]; };
             in
             v-utils.github {
               inherit pkgs pname rs;
