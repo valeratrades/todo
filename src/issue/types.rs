@@ -492,7 +492,17 @@ impl Issue {
 			// Check for comment marker (including !c shorthand)
 			let is_new_comment_shorthand = content.trim().eq_ignore_ascii_case("!c");
 			if is_new_comment_shorthand || (content.starts_with("<!--") && content.contains("-->")) {
-				// Flush previous
+				let inner = content.strip_prefix("<!--").and_then(|s| s.split("-->").next()).unwrap_or("").trim();
+
+				// vim fold markers are just visual wrappers, not comment separators - skip without flushing
+				if inner.starts_with("omitted") && inner.contains("{{{") {
+					continue;
+				}
+				if inner.starts_with(",}}}") {
+					continue;
+				}
+
+				// Flush previous (only for actual comment markers, not fold markers)
 				if in_body {
 					in_body = false;
 					let body = body_lines.join("\n").trim().to_string();
@@ -513,16 +523,8 @@ impl Issue {
 					continue;
 				}
 
-				let inner = content.strip_prefix("<!--").and_then(|s| s.split("-->").next()).unwrap_or("").trim();
-
 				if inner == "new comment" {
 					current_comment_meta = Some((CommentIdentity::Pending, true));
-				} else if inner.starts_with("omitted") && inner.contains("{{{") {
-					// vim fold start marker - skip it
-					continue;
-				} else if inner.starts_with(",}}}") {
-					// vim fold end marker - skip it
-					continue;
 				} else if inner.contains("#issuecomment-") {
 					let (is_immutable, url) = if let Some(rest) = inner.strip_prefix("immutable ") {
 						(true, rest.trim())
@@ -699,12 +701,15 @@ impl Issue {
 		let title = rest[..marker_start].trim().to_string();
 		let inner = rest[marker_start + 4..marker_end].trim();
 
+		// Handle both root format `<!-- url -->` and sub format `<!--sub url -->`
+		let inner = inner.strip_prefix("sub ").unwrap_or(inner);
+
 		let (owned, identity) = if let Some(url) = inner.strip_prefix("immutable ") {
 			let url = url.trim();
 			let identity = IssueLink::parse(url).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
 			(false, identity)
 		} else if inner.is_empty() {
-			// Empty marker `<!--  -->` means pending
+			// Empty marker `<!--  -->` or `<!--sub -->` means pending
 			(true, IssueIdentity::Pending)
 		} else {
 			let identity = IssueLink::parse(inner).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
@@ -877,7 +882,8 @@ impl Issue {
 					out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub {} -->\n", child.meta.title, link.as_str()));
 				}
 				IssueIdentity::Pending => {
-					out.push_str(&format!("{content_indent}- [{child_checked}] {}\n", child.meta.title));
+					// Pending sub-issues still need a marker for parsing
+					out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub -->\n", child.meta.title));
 				}
 			}
 

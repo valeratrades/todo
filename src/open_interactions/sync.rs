@@ -117,15 +117,6 @@ pub enum PushError {
 		)
 	)]
 	IdMismatch { comment_id: u64 },
-
-	/// Consensus state could not be loaded from git.
-	/// This indicates a bug - if the file is tracked, consensus should always be readable.
-	#[error("failed to load consensus from git for tracked issue")]
-	#[diagnostic(
-		code(todo::sync::consensus_missing),
-		help("The issue file exists but its committed state couldn't be read from git.\nThis is likely a bug. Please report it.")
-	)]
-	ConsensusMissing,
 }
 
 //=============================================================================
@@ -666,22 +657,18 @@ async fn sync_issue_to_github_inner(
 		false
 	};
 
-	// Push sub-issue state updates
+	// Step 3: Push sub-issue state updates
 	let consensus_sub_issues: Vec<_> = consensus
-		.as_ref()
-		.map(|c| {
-			c.children
-				.iter()
-				.filter_map(|child| {
-					let number = child.meta.identity.number()?;
-					Some(crate::github::OriginalSubIssue {
-						number,
-						state: child.meta.close_state.to_github_state().to_string(),
-					})
-				})
-				.collect()
+		.children
+		.iter()
+		.filter_map(|child| {
+			let number = child.meta.identity.number()?;
+			Some(crate::github::OriginalSubIssue {
+				number,
+				state: child.meta.close_state.to_github_state().to_string(),
+			})
 		})
-		.unwrap_or_default();
+		.collect();
 
 	let update_actions = issue.collect_update_actions(&consensus_sub_issues);
 	let has_updates = update_actions.iter().any(|level| !level.is_empty());
@@ -792,15 +779,22 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		// Fetch remote state
 		let remote_issue = fetch_full_issue_tree(gh, &owner, &repo, meta.issue_number).await?;
 
-		// Load consensus from git
-		let consensus = load_consensus_issue(issue_file_path);
+		// Load consensus from git - required for pull
+		let consensus = load_consensus_issue(issue_file_path).ok_or_else(|| {
+			eyre!(
+				"BUG: Consensus missing during pull.\n\
+				 File: {}\n\
+				 This indicates a bug - the file should have been committed before pull.",
+				issue_file_path.display()
+			)
+		})?;
 
 		// Take merge mode (consumes it, so post-editor sync will use Normal)
 		let merge_mode = sync_opts.take_merge_mode();
 
 		// Apply merge mode through unified sync logic
 		let (merged, local_needs_update, _remote_needs_update) =
-			apply_merge_mode(&issue, consensus.as_ref(), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number).await?;
+			apply_merge_mode(&issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number).await?;
 
 		if local_needs_update {
 			// Write merged result to local file
@@ -843,8 +837,8 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 		println!("Issue marked as duplicate of #{dup_number}, removing local file...");
 
 		// Close on GitHub (if not already closed and not offline)
-		let consensus = load_consensus_issue(issue_file_path);
-		let consensus_closed = consensus.map(|c| c.meta.close_state.is_closed()).unwrap_or(false);
+		// If consensus doesn't exist (shouldn't happen), assume we need to close
+		let consensus_closed = load_consensus_issue(issue_file_path).map(|c| c.meta.close_state.is_closed()).unwrap_or(false);
 		if !offline && !consensus_closed {
 			gh.update_issue_state(&owner, &repo, meta.issue_number, "closed").await?;
 		}

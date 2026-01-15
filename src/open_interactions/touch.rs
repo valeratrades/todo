@@ -78,7 +78,7 @@ pub fn parse_touch_path(path: &str) -> Result<TouchPath> {
 }
 
 /// Create an issue on GitHub immediately, then fetch and store it locally.
-/// For sub-issues: finds parent by title in the chain, creates issue, adds as sub-issue.
+/// For sub-issues: requires the immediate parent to already exist on GitHub.
 pub async fn create_and_fetch_issue(gh: &BoxedGitHubClient, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
 	let owner = &touch_path.owner;
 	let repo = &touch_path.repo;
@@ -98,64 +98,36 @@ pub async fn create_and_fetch_issue(gh: &BoxedGitHubClient, touch_path: &TouchPa
 		// Fetch and store the newly created issue
 		fetch_and_store_issue(gh, owner, repo, created.number, extension, None).await
 	} else {
-		// Sub-issue - need to find parent first
-		// Walk up the chain to find/verify parent exists
-		let mut parent_number: Option<u64> = None;
-
-		for (i, parent_title) in parent_chain.iter().enumerate() {
-			let existing = gh.find_issue_by_title(owner, repo, parent_title).await?;
-			match existing {
-				Some(num) => {
-					parent_number = Some(num);
-				}
-				None => {
-					// Parent doesn't exist - create the entire chain
-					println!("Parent issue '{parent_title}' not found, creating it first...");
-
-					let created = if let Some(grandparent_num) = parent_number {
-						// This parent should be a sub-issue of the grandparent
-						let created = gh.create_issue(owner, repo, parent_title, "").await?;
-						gh.add_sub_issue(owner, repo, grandparent_num, created.id).await?;
-						created
-					} else {
-						// This is a top-level issue
-						gh.create_issue(owner, repo, parent_title, "").await?
-					};
-
-					println!("Created parent issue #{}", created.number);
-					parent_number = Some(created.number);
-				}
-			}
-
-			// Verify the parent is actually a sub-issue of its parent (if not at top level)
-			if i > 0 && parent_number.is_some() {
-				// For now, trust the structure - verifying parent relationships
-				// would require additional API calls
-			}
+		// Sub-issue - parent must exist
+		// Only support single parent (immediate parent must exist)
+		if parent_chain.len() > 1 {
+			bail!(
+				"Cannot create nested sub-issue via --touch.\n\
+				 Only immediate sub-issues are supported.\n\
+				 Path: {owner}/{repo}/{}\n\
+				 \n\
+				 Create parent issues first, then create the sub-issue.",
+				touch_path.issue_chain.join("/")
+			);
 		}
 
-		let parent_num = parent_number.ok_or_else(|| eyre!("Failed to determine parent issue"))?;
+		let parent_title = &parent_chain[0];
+		let parent_num = gh.find_issue_by_title(owner, repo, parent_title).await?.ok_or_else(|| {
+			eyre!(
+				"Parent issue '{parent_title}' not found on GitHub.\n\
+				 Create the parent issue first:\n\
+				   todo open --touch {owner}/{repo}/{parent_title}"
+			)
+		})?;
 
-		// Now create the actual issue as a sub-issue
+		// Create the sub-issue
 		println!("Creating sub-issue on GitHub: {issue_title}");
 		let created = gh.create_issue(owner, repo, issue_title, "").await?;
 		gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
 		println!("Created sub-issue #{} under parent #{parent_num}", created.number);
 
-		// Fetch and store the entire tree starting from root
-		// This ensures proper directory structure and relationships
-		let root_number = if parent_chain.len() == 1 {
-			parent_num
-		} else {
-			// Find the root issue number
-			let root_title = &parent_chain[0];
-			gh.find_issue_by_title(owner, repo, root_title)
-				.await?
-				.ok_or_else(|| eyre!("Root issue '{root_title}' not found after creation"))?
-		};
-
-		// Fetch from root to get proper structure
-		let root_path = fetch_and_store_issue(gh, owner, repo, root_number, extension, None).await?;
+		// Fetch and store the parent tree (includes the new sub-issue)
+		let root_path = fetch_and_store_issue(gh, owner, repo, parent_num, extension, None).await?;
 
 		// Find and return the path to the newly created sub-issue
 		find_subissue_path(&root_path, issue_title, extension).ok_or_else(|| eyre!("Failed to find newly created sub-issue file. This is a bug."))
