@@ -7,10 +7,6 @@ use todo::{Issue, ParseContext};
 
 use crate::common::{TestContext, git::GitExt};
 
-const OWNER: &str = "testowner";
-const REPO: &str = "testrepo";
-const NUMBER: u64 = 1;
-
 fn parse(content: &str) -> Issue {
 	let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
 	Issue::parse(content, &ctx).expect("failed to parse test issue")
@@ -23,17 +19,15 @@ fn test_blocker_add_in_integrated_mode() {
 
 	// Create issue with existing blockers section
 	let issue = parse(
-		r#"- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->
-	Body text.
-
-	# Blockers
-	- First task
-"#,
+		"- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tBody text.\n\
+		 \n\
+		 \t# Blockers\n\
+		 \t- First task\n",
 	);
 
 	// Set up: local issue file exists
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &issue);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &issue);
+	let issue_path = ctx.local(&issue);
 
 	// Set this issue as the current blocker issue
 	ctx.xdg.write_cache("current_blocker_issue.txt", issue_path.to_str().unwrap());
@@ -60,19 +54,17 @@ fn test_blocker_pop_in_integrated_mode() {
 
 	// Create issue with multiple blockers
 	let issue = parse(
-		r#"- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->
-	Body text.
-
-	# Blockers
-	- First task
-	- Second task
-	- Third task
-"#,
+		"- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tBody text.\n\
+		 \n\
+		 \t# Blockers\n\
+		 \t- First task\n\
+		 \t- Second task\n\
+		 \t- Third task\n",
 	);
 
 	// Set up: local issue file exists
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &issue);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &issue);
+	let issue_path = ctx.local(&issue);
 
 	// Set this issue as the current blocker issue
 	ctx.xdg.write_cache("current_blocker_issue.txt", issue_path.to_str().unwrap());
@@ -102,15 +94,10 @@ fn test_blocker_add_creates_blockers_section_if_missing() {
 	ctx.init_git();
 
 	// Create issue WITHOUT blockers section
-	let issue = parse(
-		r#"- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->
-	Body text without blockers section.
-"#,
-	);
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tBody text without blockers section.\n");
 
 	// Set up: local issue file exists
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &issue);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &issue);
+	let issue_path = ctx.local(&issue);
 
 	// Set this issue as the current blocker issue
 	ctx.xdg.write_cache("current_blocker_issue.txt", issue_path.to_str().unwrap());
@@ -137,20 +124,18 @@ fn test_blocker_add_with_header_context() {
 
 	// Create issue with blockers section containing headers
 	let issue = parse(
-		r#"- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->
-	Body text.
-
-	# Blockers
-	# Phase 1
-	- Setup task
-	# Phase 2
-	- Implementation task
-"#,
+		"- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tBody text.\n\
+		 \n\
+		 \t# Blockers\n\
+		 \t# Phase 1\n\
+		 \t- Setup task\n\
+		 \t# Phase 2\n\
+		 \t- Implementation task\n",
 	);
 
 	// Set up: local issue file exists
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &issue);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &issue);
+	let issue_path = ctx.local(&issue);
 
 	// Set this issue as the current blocker issue
 	ctx.xdg.write_cache("current_blocker_issue.txt", issue_path.to_str().unwrap());

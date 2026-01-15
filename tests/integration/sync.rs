@@ -13,31 +13,22 @@ use todo::{Issue, ParseContext};
 
 use crate::common::{TestContext, git::GitExt};
 
-const OWNER: &str = "testowner";
-const REPO: &str = "testrepo";
-const NUMBER: u64 = 1;
-
 fn parse(content: &str) -> Issue {
 	let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
 	Issue::parse(content, &ctx).expect("failed to parse test issue")
-}
-
-fn issue(title: &str, body: &str) -> Issue {
-	let content = format!("- [ ] {title} <!-- https://github.com/{OWNER}/{REPO}/issues/{NUMBER} -->\n\t{body}\n");
-	parse(&content)
 }
 
 #[test]
 fn test_both_diverged_triggers_conflict() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let local = issue("Test Issue", "local body");
-	let remote = issue("Test Issue", "remote changed body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote changed body\n");
 
-	// Set up: consensus committed to git, local is uncommitted changes
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&remote);
 
 	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
@@ -54,13 +45,13 @@ fn test_both_diverged_triggers_conflict() {
 fn test_both_diverged_with_git_initiates_merge() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let local = issue("Test Issue", "local body");
-	let remote = issue("Test Issue", "remote changed body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote changed body\n");
 
-	// Set up: consensus committed to git, local is uncommitted changes
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&remote);
 
 	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
@@ -78,12 +69,12 @@ fn test_both_diverged_with_git_initiates_merge() {
 fn test_only_remote_changed_takes_remote() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let remote = issue("Test Issue", "remote changed body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote changed body\n");
 
 	// Local matches consensus (no uncommitted changes)
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &consensus);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.remote(&remote);
 
 	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
@@ -102,13 +93,13 @@ fn test_only_remote_changed_takes_remote() {
 fn test_only_local_changed_pushes_local() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let local = issue("Test Issue", "local changed body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal changed body\n");
 
-	// Set up: consensus committed to git, local is uncommitted changes
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
 	// Remote still matches consensus
-	ctx.setup_remote(OWNER, REPO, NUMBER, &consensus);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&consensus);
 
 	let (status, stdout, stderr) = ctx.run_open(&issue_path);
 
@@ -128,13 +119,13 @@ fn test_only_local_changed_pushes_local() {
 fn test_reset_with_local_source_skips_sync() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let local = issue("Test Issue", "local body");
-	let remote = issue("Test Issue", "remote changed body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote changed body\n");
 
-	// Set up: consensus committed to git, local is uncommitted changes
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&remote);
 
 	// Run with --reset flag
 	let (status, stdout, stderr) = ctx.open(&issue_path).args(&["--reset"]).run();
@@ -157,14 +148,14 @@ fn test_url_open_creates_local_file_from_remote() {
 	let ctx = TestContext::new("");
 	ctx.init_git(); // Need git initialized for commits
 
-	let remote = issue("Test Issue", "remote body content");
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote body content\n");
+	ctx.remote(&remote);
 
 	// No local file exists - URL open should create it
-	let expected_path = ctx.flat_issue_path(OWNER, REPO, NUMBER, "Test Issue");
+	let expected_path = ctx.flat_issue_path("o", "r", 1, "Test Issue");
 	assert!(!expected_path.exists(), "Local file should not exist before open");
 
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, NUMBER).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).run();
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
@@ -183,15 +174,14 @@ fn test_url_open_creates_local_file_from_remote() {
 fn test_reset_with_remote_url_nukes_local_state() {
 	let ctx = TestContext::new("");
 
-	let local = issue("Test Issue", "local body that should be nuked");
-	let remote = issue("Test Issue", "remote body wins");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal body that should be nuked\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote body wins\n");
 
-	// Set up: local file exists with different content
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&local);
+	ctx.remote(&remote);
 
 	// Open via URL with --reset should nuke local and use remote
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, NUMBER).args(&["--reset"]).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).run();
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
@@ -209,16 +199,16 @@ fn test_reset_with_remote_url_nukes_local_state() {
 fn test_reset_with_remote_url_skips_merge_on_divergence() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let local = issue("Test Issue", "local diverged body");
-	let remote = issue("Test Issue", "remote diverged body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal diverged body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote diverged body\n");
 
-	// Set up: consensus committed, local has uncommitted changes, remote is different
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&remote);
 
 	// Open via URL with --reset should NOT trigger merge conflict
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, NUMBER).args(&["--reset"]).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).run();
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
@@ -239,12 +229,11 @@ fn test_reset_with_remote_url_skips_merge_on_divergence() {
 fn test_pull_fetches_before_editor() {
 	let ctx = TestContext::new("");
 
-	let local = issue("Test Issue", "local body");
-	let remote = issue("Test Issue", "remote body from github");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote body from github\n");
 
-	// Set up: local file exists, remote has different content
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&local);
+	ctx.remote(&remote);
 
 	// --pull should fetch from GitHub before opening editor
 	let (status, stdout, stderr) = ctx.open(&issue_path).args(&["--pull"]).run();
@@ -266,13 +255,13 @@ fn test_pull_fetches_before_editor() {
 fn test_pull_with_divergence_runs_sync_before_editor() {
 	let ctx = TestContext::new("");
 
-	let consensus = issue("Test Issue", "consensus body");
-	let local = issue("Test Issue", "local diverged body");
-	let remote = issue("Test Issue", "remote diverged body");
+	let consensus = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tconsensus body\n");
+	let local = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tlocal diverged body\n");
+	let remote = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote diverged body\n");
 
-	// Set up: both local and remote diverged from consensus
-	let issue_path = ctx.setup_issue_with_local_changes(OWNER, REPO, NUMBER, &consensus, &local);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &remote);
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&remote);
 
 	// --pull should attempt to sync/merge BEFORE editor opens
 	let (_status, stdout, stderr) = ctx.open(&issue_path).args(&["--pull"]).run();
@@ -292,10 +281,9 @@ fn test_pull_with_divergence_runs_sync_before_editor() {
 fn test_closing_issue_syncs_state_change() {
 	let ctx = TestContext::new("");
 
-	// Start with open issue
-	let open_issue = issue("Test Issue", "body");
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &open_issue);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &open_issue);
+	let open_issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tbody\n");
+	let issue_path = ctx.consensus(&open_issue);
+	ctx.remote(&open_issue);
 
 	// Edit to close the issue
 	let mut closed_issue = open_issue.clone();
@@ -321,23 +309,22 @@ fn test_duplicate_sub_issues_filtered_from_remote() {
 	ctx.init_git();
 
 	// Create issues with proper CloseState
-	let parent = parse("- [ ] Parent Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tparent body\n");
+	let parent = parse("- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\tparent body\n");
 
-	let mut normal_closed = parse("- [x] Normal Closed Sub <!-- https://github.com/testowner/testrepo/issues/2 -->\n\tsub body\n");
+	let mut normal_closed = parse("- [x] Normal Closed Sub <!-- https://github.com/o/r/issues/2 -->\n\tsub body\n");
 	normal_closed.meta.close_state = todo::CloseState::Closed;
 
-	let mut duplicate = parse("- [x] Duplicate Sub <!-- https://github.com/testowner/testrepo/issues/3 -->\n\tduplicate body\n");
+	let mut duplicate = parse("- [x] Duplicate Sub <!-- https://github.com/o/r/issues/3 -->\n\tduplicate body\n");
 	duplicate.meta.close_state = todo::CloseState::Duplicate(2); // duplicate of #2
 
-	// Set up remote with parent and two sub-issues
-	ctx.remote()
-		.issue(OWNER, REPO, 1, &parent)
-		.sub_issue(OWNER, REPO, 1, 2, &normal_closed)
-		.sub_issue(OWNER, REPO, 1, 3, &duplicate)
-		.build();
+	// Build parent with children for remote
+	let mut parent_with_children = parent.clone();
+	parent_with_children.children = vec![normal_closed, duplicate];
+
+	ctx.remote(&parent_with_children);
 
 	// Open via URL to fetch from remote
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).run();
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
@@ -345,7 +332,7 @@ fn test_duplicate_sub_issues_filtered_from_remote() {
 	assert!(status.success(), "Should succeed. stderr: {stderr}");
 
 	// Check the created file - duplicate sub-issue should NOT be present
-	let issue_path = ctx.dir_issue_path(OWNER, REPO, 1, "Parent Issue");
+	let issue_path = ctx.dir_issue_path("o", "r", 1, "Parent Issue");
 	let content = std::fs::read_to_string(&issue_path).unwrap();
 
 	eprintln!("File content:\n{content}");
@@ -371,17 +358,15 @@ fn test_open_unchanged_succeeds() {
 	let ctx = TestContext::new("");
 	ctx.init_git();
 
-	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tissue body\n");
-
-	// Set up remote with just the issue
-	ctx.remote().issue(OWNER, REPO, 1, &issue).build();
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tissue body\n");
+	ctx.remote(&issue);
 
 	// First open via URL
-	let (status, _stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+	let (status, _stdout, stderr) = ctx.open_url("o", "r", 1).run();
 	assert!(status.success(), "First open should succeed. stderr: {stderr}");
 
 	// Second open - should also succeed (no-op since nothing changed)
-	let issue_path = ctx.flat_issue_path(OWNER, REPO, 1, "Test Issue");
+	let issue_path = ctx.flat_issue_path("o", "r", 1, "Test Issue");
 	let (status, _stdout, stderr) = ctx.open(&issue_path).run();
 	assert!(status.success(), "Second open (unchanged) should succeed. stderr: {stderr}");
 }
@@ -398,20 +383,18 @@ fn test_open_by_number_unchanged_succeeds() {
 	let ctx = TestContext::new("");
 	ctx.init_git();
 
-	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tissue body\n");
-
-	// Set up remote
-	ctx.remote().issue(OWNER, REPO, 1, &issue).build();
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tissue body\n");
+	ctx.remote(&issue);
 
 	// First open via URL with --reset
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).run();
 	eprintln!("First open stdout: {stdout}");
 	eprintln!("First open stderr: {stderr}");
 	assert!(status.success(), "First open should succeed. stderr: {stderr}");
 
 	// Second open by number (simulating the failing case)
 	// This uses the mock, so remote state is the same
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).run();
 	eprintln!("Second open stdout: {stdout}");
 	eprintln!("Second open stderr: {stderr}");
 	assert!(status.success(), "Second open (unchanged) should succeed. stderr: {stderr}");
@@ -425,18 +408,16 @@ fn test_reset_syncs_changes_after_editor() {
 	let ctx = TestContext::new("");
 	ctx.init_git();
 
-	let remote_issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tremote body\n");
-
-	// Set up remote
-	ctx.remote().issue(OWNER, REPO, 1, &remote_issue).build();
+	let remote_issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tremote body\n");
+	ctx.remote(&remote_issue);
 
 	// Create modified version (what user will change to)
 	let mut modified_issue = remote_issue.clone();
 	modified_issue.meta.close_state = todo::CloseState::Closed;
 
 	// Open with --reset and make changes while editor is open
-	let issue_path = ctx.flat_issue_path(OWNER, REPO, 1, "Test Issue");
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).edit_at(&issue_path, &modified_issue).run();
+	let issue_path = ctx.flat_issue_path("o", "r", 1, "Test Issue");
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).edit_at(&issue_path, &modified_issue).run();
 
 	eprintln!("stdout: {stdout}");
 	eprintln!("stderr: {stderr}");
@@ -461,16 +442,16 @@ fn test_comment_shorthand_creates_comment() {
 	ctx.init_git();
 
 	// Start with an issue that has no comments
-	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tissue body\n");
-	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &issue);
-	ctx.setup_remote(OWNER, REPO, NUMBER, &issue);
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tissue body\n");
+	let issue_path = ctx.consensus(&issue);
+	ctx.remote(&issue);
 
 	// Simulate user adding `!c` followed by comment content
 	// After expansion, the file should have `<!-- new comment -->` marker
-	let edited_content = format!("- [ ] Test Issue <!-- https://github.com/{OWNER}/{REPO}/issues/{NUMBER} -->\n\tissue body\n\n\t!c\n\tMy new comment content\n");
+	let edited_content = "- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tissue body\n\n\t!c\n\tMy new comment content\n";
 
 	// Write the edited content (simulating what user typed in editor)
-	std::fs::write(&issue_path, &edited_content).unwrap();
+	std::fs::write(&issue_path, edited_content).unwrap();
 
 	// Run open to trigger sync (which should expand !c and create the comment)
 	let (status, stdout, stderr) = ctx.run_open(&issue_path);
@@ -525,7 +506,9 @@ fn test_force_merge_preserves_both_sub_issues(#[case] args: &[&str], #[case] exp
 		 \tparent body\n",
 	);
 
-	let issue_path = ctx.issue(local.clone()).consensus(consensus).remote(remote).setup();
+	let issue_path = ctx.consensus(&consensus);
+	ctx.local(&local);
+	ctx.remote(&remote);
 
 	let (status, stdout, stderr) = ctx.open(&issue_path).args(args).run();
 

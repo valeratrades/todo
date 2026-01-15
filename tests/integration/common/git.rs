@@ -1,27 +1,100 @@
 //! Git and issue setup extensions for TestContext.
 //!
-//! Consolidates all test setup operations that involve git state and mock GitHub.
+//! Provides simple methods for setting up test scenarios:
+//!
+//! ```ignore
+//! let ctx = TestContext::new("");
+//! ctx.init_git();
+//!
+//! // Set up local file (uncommitted)
+//! ctx.local(&issue);
+//!
+//! // Set up consensus state (committed to git)
+//! ctx.consensus(&issue);
+//!
+//! // Set up mock remote (GitHub API responses)
+//! ctx.remote(&issue);
+//!
+//! // All methods are additive - can call multiple times:
+//! ctx.remote(&issue1);
+//! ctx.remote(&issue2); // Adds to mock, doesn't replace
+//!
+//! // Typical sync test: consensus committed, local uncommitted, remote different
+//! ctx.consensus(&base);
+//! ctx.local(&modified);
+//! ctx.remote(&remote_version);
+//! ```
+//!
+//! Owner/repo/number are extracted from the Issue's identity (IssueLink).
+//! If no link exists, defaults are used: owner="owner", repo="repo", number=1.
 
-use std::path::PathBuf;
+use std::{cell::RefCell, collections::HashSet, path::PathBuf};
 
 use todo::Issue;
 use v_fixtures::fs_standards::git::Git;
 
 use super::TestContext;
 
+/// Default owner for test issues without a link
+const DEFAULT_OWNER: &str = "owner";
+/// Default repo for test issues without a link
+const DEFAULT_REPO: &str = "repo";
+/// Default issue number for test issues without a link
+const DEFAULT_NUMBER: u64 = 1;
+
+/// State tracking for additive operations
+#[derive(Default)]
+pub struct GitState {
+	/// Track which (owner, repo, number) have been used for local files
+	local_issues: HashSet<(String, String, u64)>,
+	/// Track which (owner, repo, number) have been used for consensus commits
+	consensus_issues: HashSet<(String, String, u64)>,
+	/// Accumulated mock remote state
+	remote_issues: Vec<MockIssue>,
+	remote_sub_issues: Vec<SubIssueRelation>,
+	remote_comments: Vec<MockComment>,
+	/// Track which (owner, repo, number) have been added to remote
+	remote_issue_ids: HashSet<(String, String, u64)>,
+}
+
+thread_local! {
+	static GIT_STATE: RefCell<std::collections::HashMap<usize, GitState>> = RefCell::new(std::collections::HashMap::new());
+}
+
+fn get_ctx_id(ctx: &TestContext) -> usize {
+	ctx as *const TestContext as usize
+}
+
+fn with_state<F, R>(ctx: &TestContext, f: F) -> R
+where
+	F: FnOnce(&mut GitState) -> R, {
+	GIT_STATE.with(|state| {
+		let mut map = state.borrow_mut();
+		let id = get_ctx_id(ctx);
+		let entry = map.entry(id).or_default();
+		f(entry)
+	})
+}
+
 /// Extension trait for git and issue setup operations.
 pub trait GitExt {
 	/// Initialize git in the issues directory.
 	fn init_git(&self) -> Git;
 
-	/// Write an issue file and commit to git. Returns the path to the issue file.
-	///
-	/// Uses flat format: `{number}_-_{title}.md`
-	fn setup_issue(&self, owner: &str, repo: &str, number: u64, issue: &Issue) -> PathBuf;
-
-	/// Write consensus state, commit, then write local uncommitted changes.
+	/// Write issue to local file (uncommitted). Additive - can call multiple times.
 	/// Returns the path to the issue file.
-	fn setup_issue_with_local_changes(&self, owner: &str, repo: &str, number: u64, consensus: &Issue, local: &Issue) -> PathBuf;
+	/// Panics if same (owner, repo, number) is submitted twice.
+	fn local(&self, issue: &Issue) -> PathBuf;
+
+	/// Write issue and commit to git as consensus state. Additive - can call multiple times.
+	/// Returns the path to the issue file.
+	/// Panics if same (owner, repo, number) is submitted twice.
+	fn consensus(&self, issue: &Issue) -> PathBuf;
+
+	/// Set up mock GitHub API to return this issue. Additive - can call multiple times.
+	/// Handles sub-issues automatically.
+	/// Panics if same (owner, repo, number) is submitted twice.
+	fn remote(&self, issue: &Issue);
 
 	/// Get the flat format path for an issue: `{number}_-_{title}.md`
 	fn flat_issue_path(&self, owner: &str, repo: &str, number: u64, title: &str) -> PathBuf;
@@ -32,8 +105,8 @@ pub trait GitExt {
 	/// Get the issue path after sync (flat if no children, directory if has children).
 	fn issue_path_after_sync(&self, owner: &str, repo: &str, number: u64, title: &str, has_children: bool) -> PathBuf;
 
-	/// Start building mock remote state.
-	fn remote(&self) -> RemoteBuilder<'_>;
+	/// Get the path where an issue would be stored (flat format), extracting coords from issue.
+	fn issue_path(&self, issue: &Issue) -> PathBuf;
 }
 
 impl GitExt for TestContext {
@@ -41,39 +114,60 @@ impl GitExt for TestContext {
 		Git::init(self.xdg.data_dir().join("issues"))
 	}
 
-	fn setup_issue(&self, owner: &str, repo: &str, number: u64, issue: &Issue) -> PathBuf {
-		let issues_dir = format!("issues/{owner}/{repo}");
-		let sanitized_title = issue.meta.title.replace(' ', "_");
-		let filename = format!("{number}_-_{sanitized_title}.md");
-		let path = self.xdg.data_dir().join(&issues_dir).join(&filename);
+	fn local(&self, issue: &Issue) -> PathBuf {
+		let (owner, repo, number) = extract_issue_coords(issue);
+		let key = (owner.clone(), repo.clone(), number);
 
-		self.xdg.write_data(&format!("{issues_dir}/{filename}"), &issue.serialize());
+		with_state(self, |state| {
+			if state.local_issues.contains(&key) {
+				panic!("local() called twice for same issue: {owner}/{repo}#{number}");
+			}
+			state.local_issues.insert(key);
+		});
+
+		self.write_issue_file(&owner, &repo, number, issue)
+	}
+
+	fn consensus(&self, issue: &Issue) -> PathBuf {
+		let (owner, repo, number) = extract_issue_coords(issue);
+		let key = (owner.clone(), repo.clone(), number);
+
+		with_state(self, |state| {
+			if state.consensus_issues.contains(&key) {
+				panic!("consensus() called twice for same issue: {owner}/{repo}#{number}");
+			}
+			state.consensus_issues.insert(key);
+		});
+
+		let path = self.write_issue_file(&owner, &repo, number, issue);
 
 		let git = self.init_git();
 		git.add_all();
-		git.commit("initial");
+		git.commit(&format!("consensus {owner}/{repo}#{number}"));
 
 		path
 	}
 
-	fn setup_issue_with_local_changes(&self, owner: &str, repo: &str, number: u64, consensus: &Issue, local: &Issue) -> PathBuf {
-		let issues_dir = format!("issues/{owner}/{repo}");
-		let sanitized_title = consensus.meta.title.replace(' ', "_");
-		let filename = format!("{number}_-_{sanitized_title}.md");
-		let path = self.xdg.data_dir().join(&issues_dir).join(&filename);
+	fn remote(&self, issue: &Issue) {
+		let (owner, repo, number) = extract_issue_coords(issue);
+		let key = (owner.clone(), repo.clone(), number);
 
-		// Write consensus state first
-		self.xdg.write_data(&format!("{issues_dir}/{filename}"), &consensus.serialize());
+		with_state(self, |state| {
+			if state.remote_issue_ids.contains(&key) {
+				panic!("remote() called twice for same issue: {owner}/{repo}#{number}");
+			}
 
-		// Initialize git and commit the consensus state
-		let git = self.init_git();
-		git.add_all();
-		git.commit("Initial sync state");
+			// Recursively add issue and all its children
+			add_issue_recursive(state, &owner, &repo, number, None, issue);
+		});
 
-		// Now write the local changes (uncommitted)
-		self.xdg.write_data(&format!("{issues_dir}/{filename}"), &local.serialize());
+		// Rebuild and write mock state
+		self.rebuild_mock_state();
+	}
 
-		path
+	fn issue_path(&self, issue: &Issue) -> PathBuf {
+		let (owner, repo, number) = extract_issue_coords(issue);
+		self.flat_issue_path(&owner, &repo, number, &issue.meta.title)
 	}
 
 	fn flat_issue_path(&self, owner: &str, repo: &str, number: u64, title: &str) -> PathBuf {
@@ -93,165 +187,148 @@ impl GitExt for TestContext {
 			self.flat_issue_path(owner, repo, number, title)
 		}
 	}
-
-	fn remote(&self) -> RemoteBuilder<'_> {
-		RemoteBuilder::new(self)
-	}
 }
 
-/// Mock comment for remote setup
-struct MockComment {
-	owner: String,
-	repo: String,
-	issue_number: u64,
-	comment_id: u64,
-	body: String,
-	owner_login: String,
-}
-
-/// Builder for setting up mock GitHub remote state.
-///
-/// Usage:
-/// ```ignore
-/// ctx.remote()
-///     .issue("owner", "repo", 1, &parent_issue)
-///     .sub_issue("owner", "repo", 1, 2, &child_issue)
-///     .build();
-/// ```
-pub struct RemoteBuilder<'a> {
-	ctx: &'a TestContext,
-	issues: Vec<MockIssue>,
-	sub_issue_relations: Vec<SubIssueRelation>,
-	comments: Vec<MockComment>,
-}
-impl<'a> RemoteBuilder<'a> {
-	fn new(ctx: &'a TestContext) -> Self {
-		Self {
-			ctx,
-			issues: Vec::new(),
-			sub_issue_relations: Vec::new(),
-			comments: Vec::new(),
-		}
+impl TestContext {
+	fn write_issue_file(&self, owner: &str, repo: &str, number: u64, issue: &Issue) -> PathBuf {
+		let issues_dir = format!("issues/{owner}/{repo}");
+		let sanitized_title = issue.meta.title.replace(' ', "_");
+		let filename = format!("{number}_-_{sanitized_title}.md");
+		let path = self.xdg.data_dir().join(&issues_dir).join(&filename);
+		self.xdg.write_data(&format!("{issues_dir}/{filename}"), &issue.serialize());
+		path
 	}
 
-	/// Add an issue to the remote.
-	pub fn issue(mut self, owner: &str, repo: &str, number: u64, issue: &Issue) -> Self {
-		self.issues.push(MockIssue {
-			owner: owner.to_string(),
-			repo: repo.to_string(),
-			number,
-			title: issue.meta.title.clone(),
-			body: issue.body(),
-			state: issue.meta.close_state.to_github_state().to_string(),
-			state_reason: issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
-		});
+	fn rebuild_mock_state(&self) {
+		with_state(self, |state| {
+			let issues: Vec<serde_json::Value> = state
+				.remote_issues
+				.iter()
+				.map(|i| {
+					let mut json = serde_json::json!({
+						"owner": i.owner,
+						"repo": i.repo,
+						"number": i.number,
+						"title": i.title,
+						"body": i.body,
+						"state": i.state,
+						"owner_login": "mock_user"
+					});
+					if let Some(reason) = &i.state_reason {
+						json["state_reason"] = serde_json::Value::String(reason.clone());
+					}
+					json
+				})
+				.collect();
 
-		// Extract comments (skip first which is the body)
-		for comment in issue.comments.iter().skip(1) {
-			if let Some(id) = comment.id {
-				self.comments.push(MockComment {
-					owner: owner.to_string(),
-					repo: repo.to_string(),
-					issue_number: number,
-					comment_id: id,
-					body: comment.body.clone(),
-					owner_login: if comment.owned { "mock_user".to_string() } else { "other_user".to_string() },
-				});
+			// Group sub-issue relations by (owner, repo, parent)
+			let mut sub_issues_map: std::collections::HashMap<(String, String, u64), Vec<u64>> = std::collections::HashMap::new();
+			for rel in &state.remote_sub_issues {
+				sub_issues_map.entry((rel.owner.clone(), rel.repo.clone(), rel.parent)).or_default().push(rel.child);
 			}
-		}
 
-		self
+			let sub_issues: Vec<serde_json::Value> = sub_issues_map
+				.into_iter()
+				.map(|((owner, repo, parent), children)| {
+					serde_json::json!({
+						"owner": owner,
+						"repo": repo,
+						"parent": parent,
+						"children": children
+					})
+				})
+				.collect();
+
+			let comments: Vec<serde_json::Value> = state
+				.remote_comments
+				.iter()
+				.map(|c| {
+					serde_json::json!({
+						"owner": c.owner,
+						"repo": c.repo,
+						"issue_number": c.issue_number,
+						"comment_id": c.comment_id,
+						"body": c.body,
+						"owner_login": c.owner_login
+					})
+				})
+				.collect();
+
+			let mut mock_state = serde_json::json!({ "issues": issues });
+			if !sub_issues.is_empty() {
+				mock_state["sub_issues"] = serde_json::Value::Array(sub_issues);
+			}
+			if !comments.is_empty() {
+				mock_state["comments"] = serde_json::Value::Array(comments);
+			}
+
+			self.setup_mock_state(&mock_state);
+		});
 	}
+}
 
-	/// Add a sub-issue relationship and the child issue.
-	pub fn sub_issue(mut self, owner: &str, repo: &str, parent_number: u64, child_number: u64, child_issue: &Issue) -> Self {
-		// Add the child issue
-		self.issues.push(MockIssue {
+/// Extract owner, repo, number from an Issue's identity, with defaults.
+fn extract_issue_coords(issue: &Issue) -> (String, String, u64) {
+	if let Some(link) = issue.meta.identity.link() {
+		(link.owner().to_string(), link.repo().to_string(), link.number())
+	} else {
+		(DEFAULT_OWNER.to_string(), DEFAULT_REPO.to_string(), DEFAULT_NUMBER)
+	}
+}
+
+/// Extract child issue number from its identity, or use default.
+fn extract_child_number(child: &Issue, default: u64) -> u64 {
+	child.meta.identity.number().unwrap_or(default)
+}
+
+/// Recursively add an issue and all its children to the mock state.
+fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u64, parent_number: Option<u64>, issue: &Issue) {
+	let key = (owner.to_string(), repo.to_string(), number);
+
+	if state.remote_issue_ids.contains(&key) {
+		panic!("remote() would add duplicate issue: {owner}/{repo}#{number}");
+	}
+	state.remote_issue_ids.insert(key);
+
+	// Add the issue itself
+	state.remote_issues.push(MockIssue {
+		owner: owner.to_string(),
+		repo: repo.to_string(),
+		number,
+		title: issue.meta.title.clone(),
+		body: issue.body(),
+		state: issue.meta.close_state.to_github_state().to_string(),
+		state_reason: issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
+	});
+
+	// Add sub-issue relation if this is a child
+	if let Some(parent) = parent_number {
+		state.remote_sub_issues.push(SubIssueRelation {
 			owner: owner.to_string(),
 			repo: repo.to_string(),
-			number: child_number,
-			title: child_issue.meta.title.clone(),
-			body: child_issue.body(),
-			state: child_issue.meta.close_state.to_github_state().to_string(),
-			state_reason: child_issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
+			parent,
+			child: number,
 		});
-
-		// Add the relationship
-		self.sub_issue_relations.push(SubIssueRelation {
-			owner: owner.to_string(),
-			repo: repo.to_string(),
-			parent: parent_number,
-			child: child_number,
-		});
-
-		self
 	}
 
-	/// Build and apply the mock state.
-	pub fn build(self) {
-		let issues: Vec<serde_json::Value> = self
-			.issues
-			.into_iter()
-			.map(|i| {
-				let mut json = serde_json::json!({
-					"owner": i.owner,
-					"repo": i.repo,
-					"number": i.number,
-					"title": i.title,
-					"body": i.body,
-					"state": i.state,
-					"owner_login": "mock_user"
-				});
-				if let Some(reason) = i.state_reason {
-					json["state_reason"] = serde_json::Value::String(reason);
-				}
-				json
-			})
-			.collect();
-
-		// Group sub-issue relations by (owner, repo, parent)
-		let mut sub_issues_map: std::collections::HashMap<(String, String, u64), Vec<u64>> = std::collections::HashMap::new();
-		for rel in self.sub_issue_relations {
-			sub_issues_map.entry((rel.owner, rel.repo, rel.parent)).or_default().push(rel.child);
+	// Extract comments (skip first which is the body)
+	for comment in issue.comments.iter().skip(1) {
+		if let Some(id) = comment.identity.id() {
+			state.remote_comments.push(MockComment {
+				owner: owner.to_string(),
+				repo: repo.to_string(),
+				issue_number: number,
+				comment_id: id,
+				body: comment.body.clone(),
+				owner_login: if comment.owned { "mock_user".to_string() } else { "other_user".to_string() },
+			});
 		}
+	}
 
-		let sub_issues: Vec<serde_json::Value> = sub_issues_map
-			.into_iter()
-			.map(|((owner, repo, parent), children)| {
-				serde_json::json!({
-					"owner": owner,
-					"repo": repo,
-					"parent": parent,
-					"children": children
-				})
-			})
-			.collect();
-
-		// Convert comments to JSON
-		let comments: Vec<serde_json::Value> = self
-			.comments
-			.into_iter()
-			.map(|c| {
-				serde_json::json!({
-					"owner": c.owner,
-					"repo": c.repo,
-					"issue_number": c.issue_number,
-					"comment_id": c.comment_id,
-					"body": c.body,
-					"owner_login": c.owner_login
-				})
-			})
-			.collect();
-
-		let mut state = serde_json::json!({ "issues": issues });
-		if !sub_issues.is_empty() {
-			state["sub_issues"] = serde_json::Value::Array(sub_issues);
-		}
-		if !comments.is_empty() {
-			state["comments"] = serde_json::Value::Array(comments);
-		}
-
-		self.ctx.setup_mock_state(&state);
+	// Recursively add children
+	for (i, child) in issue.children.iter().enumerate() {
+		let child_number = extract_child_number(child, number * 100 + 1 + i as u64);
+		add_issue_recursive(state, owner, repo, child_number, Some(number), child);
 	}
 }
 
@@ -265,6 +342,15 @@ struct MockIssue {
 	state_reason: Option<String>,
 }
 
+struct MockComment {
+	owner: String,
+	repo: String,
+	issue_number: u64,
+	comment_id: u64,
+	body: String,
+	owner_login: String,
+}
+
 struct SubIssueRelation {
 	owner: String,
 	repo: String,
@@ -272,30 +358,64 @@ struct SubIssueRelation {
 	child: u64,
 }
 
-// Legacy compatibility methods - delegate to RemoteBuilder
-impl TestContext {
-	/// Set up mock GitHub with a single issue (no sub-issues).
-	pub fn setup_remote(&self, owner: &str, repo: &str, number: u64, issue: &Issue) {
-		self.remote().issue(owner, repo, number, issue).build();
+#[cfg(test)]
+mod tests {
+	use todo::ParseContext;
+
+	use super::*;
+
+	fn parse(content: &str) -> Issue {
+		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
+		Issue::parse(content, &ctx).expect("failed to parse test issue")
 	}
 
-	/// Set up mock GitHub with an issue and its sub-issues.
-	pub fn setup_remote_with_children(&self, owner: &str, repo: &str, number: u64, issue: &Issue, child_numbers: &[u64]) {
-		let mut builder = self.remote().issue(owner, repo, number, issue);
+	#[test]
+	fn test_remote_handles_2_level_nesting() {
+		let ctx = TestContext::new("");
 
-		for (child, &child_num) in issue.children.iter().zip(child_numbers.iter()) {
-			builder = builder.sub_issue(owner, repo, number, child_num, child);
-		}
+		// Create a 3-level hierarchy: grandparent -> parent -> child
+		let issue = parse(
+			"- [ ] Grandparent <!-- https://github.com/o/r/issues/1 -->\n\
+			 \tgrandparent body\n\
+			 \n\
+			 \t- [ ] Parent <!--sub https://github.com/o/r/issues/2 -->\n\
+			 \t\tparent body\n\
+			 \n\
+			 \t\t- [ ] Child <!--sub https://github.com/o/r/issues/3 -->\n\
+			 \t\t\tchild body\n",
+		);
 
-		builder.build();
-	}
+		ctx.remote(&issue);
 
-	/// Set up mock GitHub with multiple independent issues.
-	pub fn setup_remote_issues(&self, issues: &[((&str, &str, u64), &Issue)]) {
-		let mut builder = self.remote();
-		for ((owner, repo, number), issue) in issues {
-			builder = builder.issue(owner, repo, *number, issue);
-		}
-		builder.build();
+		// Read the mock state that was written
+		let mock_content = std::fs::read_to_string(&ctx.mock_state_path).unwrap();
+		let mock_state: serde_json::Value = serde_json::from_str(&mock_content).unwrap();
+
+		// Should have 3 issues
+		let issues = mock_state["issues"].as_array().unwrap();
+		assert_eq!(issues.len(), 3, "Should have 3 issues (grandparent, parent, child)");
+
+		// Check that all issues are present
+		let numbers: Vec<u64> = issues.iter().map(|i| i["number"].as_u64().unwrap()).collect();
+		assert!(numbers.contains(&1), "Should have grandparent issue #1");
+		assert!(numbers.contains(&2), "Should have parent issue #2");
+		assert!(numbers.contains(&3), "Should have child issue #3");
+
+		// Should have 2 sub-issue relations
+		let sub_issues = mock_state["sub_issues"].as_array().unwrap();
+		assert_eq!(sub_issues.len(), 2, "Should have 2 sub-issue relations");
+
+		// Check relations: 1->2 and 2->3
+		let relations: Vec<(u64, Vec<u64>)> = sub_issues
+			.iter()
+			.map(|r| {
+				let parent = r["parent"].as_u64().unwrap();
+				let children: Vec<u64> = r["children"].as_array().unwrap().iter().map(|c| c.as_u64().unwrap()).collect();
+				(parent, children)
+			})
+			.collect();
+
+		assert!(relations.iter().any(|(p, c)| *p == 1 && c.contains(&2)), "Should have relation: grandparent(1) -> parent(2)");
+		assert!(relations.iter().any(|(p, c)| *p == 2 && c.contains(&3)), "Should have relation: parent(2) -> child(3)");
 	}
 }

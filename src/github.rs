@@ -14,7 +14,7 @@ pub struct GitHubIssue {
 	pub body: Option<String>,
 	pub labels: Vec<GitHubLabel>,
 	pub user: GitHubUser,
-	pub state: String, // "open" or "closed" //TODO!!!!: add an actual enum
+	pub state: String,
 	/// Reason for the state (e.g., "completed", "not_planned", "duplicate")
 	/// Only present for closed issues.
 	pub state_reason: Option<String>,

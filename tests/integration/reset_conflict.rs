@@ -14,12 +14,9 @@
 //! 6. Post-editor sync fetches remote (gets GitHub API content for sub-issues)
 //! 7. Consensus (with local content) != Remote (with API content) → FALSE CONFLICT
 
-use todo::{CloseState, Issue, ParseContext};
+use todo::{Issue, ParseContext};
 
 use crate::common::{TestContext, git::GitExt};
-
-const OWNER: &str = "testowner";
-const REPO: &str = "testrepo";
 
 fn parse(content: &str) -> Issue {
 	let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
@@ -39,28 +36,34 @@ fn test_reset_then_mark_subissue_closed_no_conflict() {
 	ctx.init_git();
 
 	// Set up remote with parent issue and one open sub-issue
-	let parent = parse("- [ ] Parent Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tparent body\n");
-	let sub = parse("- [ ] Sub Issue <!-- https://github.com/testowner/testrepo/issues/2 -->\n\tsub body\n");
+	let parent = parse(
+		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tparent body\n\
+		 \n\
+		 \t- [ ] Sub Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t\tsub body\n",
+	);
 
-	ctx.remote().issue(OWNER, REPO, 1, &parent).sub_issue(OWNER, REPO, 1, 2, &sub).build();
+	ctx.remote(&parent);
 
 	// First: open via URL with --reset (this simulates `todo open --reset <url>`)
 	// This fetches from remote, stores locally, and commits as consensus
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).run();
 	eprintln!("First open stdout: {stdout}");
 	eprintln!("First open stderr: {stderr}");
 	assert!(status.success(), "First open with --reset should succeed. stderr: {stderr}");
 
 	// Now simulate user editing: mark the sub-issue as closed
 	// The user would do this by changing `- [ ]` to `- [x]` in the editor
-	let issue_path = ctx.dir_issue_path(OWNER, REPO, 1, "Parent Issue");
+	let issue_path = ctx.dir_issue_path("o", "r", 1, "Parent Issue");
 
-	let mut closed_sub = sub.clone();
-	closed_sub.meta.close_state = CloseState::Closed;
-
-	// Build the modified parent with closed sub-issue
-	let mut modified_parent = parent.clone();
-	modified_parent.children = vec![closed_sub];
+	let modified_parent = parse(
+		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tparent body\n\
+		 \n\
+		 \t- [x] Sub Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t\tsub body\n",
+	);
 
 	// Second open: this simulates opening the file, making the edit, then closing editor
 	// The post-editor sync should NOT trigger a conflict because:
@@ -85,15 +88,15 @@ fn test_reset_then_edit_body_no_conflict() {
 	let ctx = TestContext::new("");
 	ctx.init_git();
 
-	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\toriginal body\n");
-	ctx.remote().issue(OWNER, REPO, 1, &issue).build();
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\toriginal body\n");
+	ctx.remote(&issue);
 
 	// First: open via URL with --reset
-	let (status, _stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).run();
+	let (status, _stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).run();
 	assert!(status.success(), "First open should succeed. stderr: {stderr}");
 
 	// Now edit the body
-	let issue_path = ctx.flat_issue_path(OWNER, REPO, 1, "Test Issue");
+	let issue_path = ctx.flat_issue_path("o", "r", 1, "Test Issue");
 	let mut modified = issue.clone();
 	modified.comments[0].body = "modified body".to_string();
 
@@ -126,20 +129,23 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 	// Set up remote with 3-level hierarchy:
 	// grandparent (#1) -> parent (#2) -> child (#3)
 	// This ensures parent (#2) gets its own file because it has children
-	let grandparent = parse("- [ ] Grandparent Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tgrandparent body\n");
-	let parent = parse("- [ ] Parent Issue <!-- https://github.com/testowner/testrepo/issues/2 -->\n\toriginal parent body\n");
-	let child = parse("- [ ] Child Issue <!-- https://github.com/testowner/testrepo/issues/3 -->\n\tchild body\n");
+	let grandparent = parse(
+		"- [ ] Grandparent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tgrandparent body\n\
+		 \n\
+		 \t- [ ] Parent Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t\toriginal parent body\n\
+		 \n\
+		 \t\t- [ ] Child Issue <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t\t\tchild body\n",
+	);
 
-	ctx.remote()
-		.issue(OWNER, REPO, 1, &grandparent)
-		.sub_issue(OWNER, REPO, 1, 2, &parent)
-		.sub_issue(OWNER, REPO, 2, 3, &child)
-		.build();
+	ctx.remote(&grandparent);
 
 	// Step 1: First fetch - creates local files
 	// grandparent (#1) is at: 1_-_Grandparent_Issue/__main__.md
 	// parent (#2) gets its own dir because it has children: 1_-_Grandparent_Issue/2_-_Parent_Issue/__main__.md
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).run();
 	eprintln!("First fetch stdout: {stdout}");
 	eprintln!("First fetch stderr: {stderr}");
 	assert!(status.success(), "First fetch should succeed. stderr: {stderr}");
@@ -147,13 +153,13 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 	// Step 2: User modifies the parent sub-issue file locally (adds blockers, expands content)
 	// This simulates what happens when user works on issues over time
 	// Parent file is at: issues/{owner}/{repo}/1_-_Grandparent_Issue/2_-_Parent_Issue/__main__.md
-	let parent_subissue_path = ctx.data_dir().join("issues/testowner/testrepo/1_-_Grandparent_Issue/2_-_Parent_Issue/__main__.md");
+	let parent_subissue_path = ctx.data_dir().join("issues/o/r/1_-_Grandparent_Issue/2_-_Parent_Issue/__main__.md");
 	eprintln!("Looking for parent file at: {parent_subissue_path:?}");
 
 	// Verify the file exists
 	if !parent_subissue_path.exists() {
 		// List what files were created
-		let issues_dir = ctx.data_dir().join("issues/testowner/testrepo");
+		let issues_dir = ctx.data_dir().join("issues/o/r");
 		if issues_dir.exists() {
 			eprintln!("Files in issues dir:");
 			for entry in walkdir::WalkDir::new(&issues_dir).into_iter().filter_map(|e| e.ok()) {
@@ -163,7 +169,7 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 		panic!("Parent sub-issue file not found at expected path");
 	}
 
-	let modified_parent_content = "- [ ] Parent Issue <!-- https://github.com/testowner/testrepo/issues/2 -->\n\toriginal parent body\n\tADDED LOCAL CONTENT - this is only local\n\t\n\t# Blockers\n\t- local blocker task\n\t\n\t- [ ] Child Issue <!--sub https://github.com/testowner/testrepo/issues/3 -->\n\t\tchild body\n";
+	let modified_parent_content = "- [ ] Parent Issue <!-- https://github.com/o/r/issues/2 -->\n\toriginal parent body\n\tADDED LOCAL CONTENT - this is only local\n\t\n\t# Blockers\n\t- local blocker task\n\t\n\t- [ ] Child Issue <!--sub https://github.com/o/r/issues/3 -->\n\t\tchild body\n";
 	std::fs::write(&parent_subissue_path, modified_parent_content).unwrap();
 
 	// Commit the local modifications
@@ -176,20 +182,24 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 
 	// Step 3: User runs --reset on the GRANDPARENT issue
 	// BUG: format_issue will read the MODIFIED parent file and embed that content
-	let (status, stdout, stderr) = ctx.open_url(OWNER, REPO, 1).args(&["--reset"]).run();
+	let (status, stdout, stderr) = ctx.open_url("o", "r", 1).args(&["--reset"]).run();
 	eprintln!("Reset stdout: {stdout}");
 	eprintln!("Reset stderr: {stderr}");
 	assert!(status.success(), "Reset should succeed. stderr: {stderr}");
 
 	// Step 4: User makes a small edit (mark child issue as closed)
-	let grandparent_path = ctx.data_dir().join("issues/testowner/testrepo/1_-_Grandparent_Issue/__main__.md");
+	let grandparent_path = ctx.data_dir().join("issues/o/r/1_-_Grandparent_Issue/__main__.md");
 
-	let mut closed_child = child.clone();
-	closed_child.meta.close_state = CloseState::Closed;
-	let mut modified_parent_issue = parent.clone();
-	modified_parent_issue.children = vec![closed_child];
-	let mut modified_grandparent = grandparent.clone();
-	modified_grandparent.children = vec![modified_parent_issue];
+	let modified_grandparent = parse(
+		"- [ ] Grandparent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tgrandparent body\n\
+		 \n\
+		 \t- [ ] Parent Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t\toriginal parent body\n\
+		 \n\
+		 \t\t- [x] Child Issue <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t\t\tchild body\n",
+	);
 
 	// Step 5: Post-editor sync
 	// BUG: This triggers divergence because:
