@@ -6,9 +6,11 @@ use todo::Extension;
 use v_utils::prelude::*;
 
 use super::{
+	fetch::fetch_and_store_issue,
 	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
 	meta::{allocate_virtual_issue_number, ensure_virtual_project},
 };
+use crate::github::BoxedGitHubClient;
 
 /// Parsed touch path components
 /// Format: workspace/project/issue[.md|.typ] or workspace/project/parent/child[.md|.typ] (for sub-issues)
@@ -75,39 +77,121 @@ pub fn parse_touch_path(path: &str) -> Result<TouchPath> {
 	})
 }
 
-/// Create a pending issue locally. Will be created on GitHub when the file is closed.
-/// For now, sub-issues are not supported in pending mode (parent must exist on GitHub first).
-pub fn create_pending_issue(touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
+/// Create an issue on GitHub immediately, then fetch and store it locally.
+/// For sub-issues: finds parent by title in the chain, creates issue, adds as sub-issue.
+pub async fn create_and_fetch_issue(gh: &BoxedGitHubClient, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
 	let owner = &touch_path.owner;
 	let repo = &touch_path.repo;
 
-	// For now, only support single-level issues (no sub-issues for pending)
-	if touch_path.issue_chain.len() > 1 {
-		bail!(
-			"Sub-issues via --touch require the parent to exist on GitHub first.\n\
-			 Create the parent issue first, then use --touch for the sub-issue."
-		);
-	}
-
+	// Get the issue title (last in chain)
 	let issue_title = touch_path.issue_chain.last().unwrap();
 
-	// No issue number yet - will be assigned after GitHub creation
-	let issue_file_path = get_issue_file_path(owner, repo, None, issue_title, extension, false, &[]);
+	// Determine if this is a sub-issue (has parent issues in chain)
+	let parent_chain = &touch_path.issue_chain[..touch_path.issue_chain.len() - 1];
 
-	if let Some(parent) = issue_file_path.parent() {
-		std::fs::create_dir_all(parent)?;
+	if parent_chain.is_empty() {
+		// Top-level issue - create directly
+		println!("Creating issue on GitHub: {issue_title}");
+		let created = gh.create_issue(owner, repo, issue_title, "").await?;
+		println!("Created issue #{} on GitHub", created.number);
+
+		// Fetch and store the newly created issue
+		fetch_and_store_issue(gh, owner, repo, created.number, extension, None).await
+	} else {
+		// Sub-issue - need to find parent first
+		// Walk up the chain to find/verify parent exists
+		let mut parent_number: Option<u64> = None;
+
+		for (i, parent_title) in parent_chain.iter().enumerate() {
+			let existing = gh.find_issue_by_title(owner, repo, parent_title).await?;
+			match existing {
+				Some(num) => {
+					parent_number = Some(num);
+				}
+				None => {
+					// Parent doesn't exist - create the entire chain
+					println!("Parent issue '{parent_title}' not found, creating it first...");
+
+					let created = if let Some(grandparent_num) = parent_number {
+						// This parent should be a sub-issue of the grandparent
+						let created = gh.create_issue(owner, repo, parent_title, "").await?;
+						gh.add_sub_issue(owner, repo, grandparent_num, created.id).await?;
+						created
+					} else {
+						// This is a top-level issue
+						gh.create_issue(owner, repo, parent_title, "").await?
+					};
+
+					println!("Created parent issue #{}", created.number);
+					parent_number = Some(created.number);
+				}
+			}
+
+			// Verify the parent is actually a sub-issue of its parent (if not at top level)
+			if i > 0 && parent_number.is_some() {
+				// For now, trust the structure - verifying parent relationships
+				// would require additional API calls
+			}
+		}
+
+		let parent_num = parent_number.ok_or_else(|| eyre!("Failed to determine parent issue"))?;
+
+		// Now create the actual issue as a sub-issue
+		println!("Creating sub-issue on GitHub: {issue_title}");
+		let created = gh.create_issue(owner, repo, issue_title, "").await?;
+		gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
+		println!("Created sub-issue #{} under parent #{parent_num}", created.number);
+
+		// Fetch and store the entire tree starting from root
+		// This ensures proper directory structure and relationships
+		let root_number = if parent_chain.len() == 1 {
+			parent_num
+		} else {
+			// Find the root issue number
+			let root_title = &parent_chain[0];
+			gh.find_issue_by_title(owner, repo, root_title)
+				.await?
+				.ok_or_else(|| eyre!("Root issue '{root_title}' not found after creation"))?
+		};
+
+		// Fetch from root to get proper structure
+		let root_path = fetch_and_store_issue(gh, owner, repo, root_number, extension, None).await?;
+
+		// Find and return the path to the newly created sub-issue
+		find_subissue_path(&root_path, issue_title, extension).ok_or_else(|| eyre!("Failed to find newly created sub-issue file. This is a bug."))
+	}
+}
+
+/// Find a sub-issue file path within a parent issue's directory structure.
+fn find_subissue_path(parent_path: &std::path::Path, title: &str, extension: &Extension) -> Option<PathBuf> {
+	// The parent_path is the __main__.md file, get its directory
+	let parent_dir = parent_path.parent()?;
+
+	// Search for a file matching the title in the directory
+	let sanitized_title = sanitize_title_for_filename(title);
+	let ext = extension.as_str();
+
+	// Check both flat format and directory format
+	for entry in std::fs::read_dir(parent_dir).ok()? {
+		let entry = entry.ok()?;
+		let path = entry.path();
+
+		if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+			// Check flat file: {number}_-_{title}.{ext}
+			if file_name.ends_with(&format!(".{ext}")) && file_name.contains(&sanitized_title) {
+				return Some(path);
+			}
+			// Check directory: {number}_-_{title}/__main__.{ext}
+			if path.is_dir() && file_name.contains(&sanitized_title) {
+				let main_file = path.join(format!("__main__.{ext}"));
+				if main_file.exists() {
+					return Some(main_file);
+				}
+			}
+		}
 	}
 
-	// Create file with no URL (signals pending creation)
-	let content = format!("- [ ] {issue_title} <!--  -->\n");
-	std::fs::write(&issue_file_path, &content)?;
-
-	// No longer saving metadata - it's derived from file paths
-
-	println!("Created pending issue: {issue_title}");
-	println!("Will be created on GitHub when you close the editor.");
-
-	Ok(issue_file_path)
+	None
 }
 
 /// Create a new virtual issue locally (no GitHub).

@@ -10,43 +10,93 @@ use v_utils::prelude::*;
 
 use super::files::issues_dir;
 
-/// Read file content from the last commit (HEAD).
-/// Returns None if the file doesn't exist in git or git is not initialized.
-pub fn read_committed_content(file_path: &Path) -> Option<String> {
+/// Result of checking if a file is tracked in git.
+pub enum GitTrackingStatus {
+	/// File is tracked and we have its committed content
+	Tracked(String),
+	/// File is not tracked in git (new file)
+	Untracked,
+	/// Git is not initialized in the issues directory
+	NoGit,
+}
+
+/// Check if a file is tracked in git and read its committed content.
+pub fn read_committed_content(file_path: &Path) -> GitTrackingStatus {
 	let data_dir = issues_dir();
-	let data_dir_str = data_dir.to_str()?;
+	let Some(data_dir_str) = data_dir.to_str() else {
+		return GitTrackingStatus::NoGit;
+	};
 
 	// Get the relative path from issues_dir
-	let rel_path = file_path.strip_prefix(&data_dir).ok()?;
-	let rel_path_str = rel_path.to_str()?;
+	let Some(rel_path) = file_path.strip_prefix(&data_dir).ok() else {
+		return GitTrackingStatus::NoGit;
+	};
+	let Some(rel_path_str) = rel_path.to_str() else {
+		return GitTrackingStatus::NoGit;
+	};
 
 	// Check if git is initialized
-	let git_check = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output().ok()?;
+	let Ok(git_check) = Command::new("git").args(["-C", data_dir_str, "rev-parse", "--git-dir"]).output() else {
+		return GitTrackingStatus::NoGit;
+	};
 	if !git_check.status.success() {
-		return None;
+		return GitTrackingStatus::NoGit;
 	}
 
 	// Check if the file is tracked in git
-	let ls_output = Command::new("git").args(["-C", data_dir_str, "ls-files", rel_path_str]).output().ok()?;
+	let Ok(ls_output) = Command::new("git").args(["-C", data_dir_str, "ls-files", rel_path_str]).output() else {
+		return GitTrackingStatus::NoGit;
+	};
 	if !ls_output.status.success() || ls_output.stdout.is_empty() {
-		// File is not tracked by git
-		return None;
+		// File is not tracked by git - this is valid for new files
+		return GitTrackingStatus::Untracked;
 	}
 
-	// Read file content from HEAD
+	// File IS tracked - we MUST be able to read it. If we can't, that's a bug.
 	// Note: HEAD:./path is needed because git show HEAD:path expects repo-root-relative paths,
 	// but we're running from a subdirectory (issues_dir). The ./ prefix makes it cwd-relative.
-	let output = Command::new("git").args(["-C", data_dir_str, "show", &format!("HEAD:./{rel_path_str}")]).output().ok()?;
+	let output = Command::new("git")
+		.args(["-C", data_dir_str, "show", &format!("HEAD:./{rel_path_str}")])
+		.output()
+		.expect("git show command failed to execute");
 
-	if output.status.success() { String::from_utf8(output.stdout).ok() } else { None }
+	if !output.status.success() {
+		panic!(
+			"BUG: File is tracked in git but cannot read committed content.\n\
+			 File: {}\n\
+			 Git error: {}",
+			file_path.display(),
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+
+	let content = String::from_utf8(output.stdout).expect("git show returned invalid UTF-8");
+	GitTrackingStatus::Tracked(content)
 }
 
 /// Load the consensus Issue from git (last committed state).
-/// Returns None if the file doesn't exist in git or can't be parsed.
+///
+/// Returns:
+/// - `Some(Issue)` if file is tracked and consensus loaded successfully
+/// - `None` if file is not tracked (new file, no consensus yet)
+///
+/// Panics if file is tracked but consensus cannot be loaded (indicates a bug).
 pub fn load_consensus_issue(file_path: &Path) -> Option<Issue> {
-	let content = read_committed_content(file_path)?;
-	let ctx = ParseContext::new(content.clone(), file_path.display().to_string());
-	Issue::parse(&content, &ctx).ok()
+	match read_committed_content(file_path) {
+		GitTrackingStatus::Tracked(content) => {
+			let ctx = ParseContext::new(content.clone(), file_path.display().to_string());
+			let issue = Issue::parse(&content, &ctx).unwrap_or_else(|e| {
+				panic!(
+					"BUG: Failed to parse committed consensus issue.\n\
+					 File: {}\n\
+					 Parse error: {e}",
+					file_path.display()
+				)
+			});
+			Some(issue)
+		}
+		GitTrackingStatus::Untracked | GitTrackingStatus::NoGit => None,
+	}
 }
 
 /// Check if git is initialized in the issues directory.

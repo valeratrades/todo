@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use todo::{CloseState, Comment, Issue, IssueMeta};
+use todo::{CloseState, Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, IssueMeta};
 use v_utils::prelude::*;
 
 use super::github_sync::IssueGitHubExt;
@@ -51,11 +51,7 @@ fn fetch_children_recursive<'a>(
 		}
 
 		// Collect all child issue numbers that need fetching
-		let child_numbers: Vec<u64> = issue
-			.children
-			.iter()
-			.filter_map(|child| child.meta.url.as_ref().and_then(|url| crate::github::extract_issue_number_from_url(url)))
-			.collect();
+		let child_numbers: Vec<u64> = issue.children.iter().filter_map(|child| child.meta.identity.number()).collect();
 
 		if child_numbers.is_empty() {
 			return Ok(());
@@ -78,10 +74,7 @@ fn fetch_children_recursive<'a>(
 
 		// Update each child with full data
 		for child in &mut issue.children {
-			let Some(child_url) = &child.meta.url else {
-				continue;
-			};
-			let Some(child_num) = crate::github::extract_issue_number_from_url(child_url) else {
+			let Some(child_num) = child.meta.identity.number() else {
 				continue;
 			};
 			let Some((comments, sub_issues)) = data_map.get(&child_num) else {
@@ -92,7 +85,7 @@ fn fetch_children_recursive<'a>(
 			for c in comments {
 				let comment_owned = c.user.login == current_user;
 				child.comments.push(Comment {
-					id: Some(c.id),
+					identity: CommentIdentity::Linked(c.id),
 					body: c.body.as_deref().unwrap_or("").to_string(),
 					owned: comment_owned,
 				});
@@ -104,18 +97,19 @@ fn fetch_children_recursive<'a>(
 				.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
 				.map(|si| {
 					let url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
+					let identity = IssueLink::parse(&url).map(IssueIdentity::Linked).expect("just constructed valid URL");
 					let close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 					let timestamp = si.updated_at.parse::<Timestamp>().ok();
 					Issue {
 						meta: IssueMeta {
 							title: si.title.clone(),
-							url: Some(url),
+							identity,
 							close_state,
 							owned: si.user.login == current_user,
 						},
 						labels: si.labels.iter().map(|l| l.name.clone()).collect(),
 						comments: vec![Comment {
-							id: None,
+							identity: CommentIdentity::Body,
 							body: si.body.as_deref().unwrap_or("").to_string(),
 							owned: si.user.login == current_user,
 						}],
@@ -208,9 +202,9 @@ fn node_content_eq(a: &Issue, b: &Issue) -> bool {
 		return false;
 	}
 
-	// Compare other comments (by id and body)
-	let a_comments: Vec<_> = a.comments.iter().skip(1).map(|c| (c.id, &c.body)).collect();
-	let b_comments: Vec<_> = b.comments.iter().skip(1).map(|c| (c.id, &c.body)).collect();
+	// Compare other comments (by identity and body)
+	let a_comments: Vec<_> = a.comments.iter().skip(1).map(|c| (&c.identity, &c.body)).collect();
+	let b_comments: Vec<_> = b.comments.iter().skip(1).map(|c| (&c.identity, &c.body)).collect();
 	if a_comments != b_comments {
 		return false;
 	}
@@ -315,17 +309,17 @@ fn resolve_tree_recursive(
 
 	// Now compare children
 	// Build maps by URL for matching
-	let local_children_by_url: HashMap<&str, &Issue> = local.children.iter().filter_map(|c| c.meta.url.as_deref().map(|url| (url, c))).collect();
+	let local_children_by_url: HashMap<&str, &Issue> = local.children.iter().filter_map(|c| c.meta.identity.url_str().map(|url| (url, c))).collect();
 
 	let consensus_children_by_url: HashMap<&str, &Issue> = consensus
-		.map(|c| c.children.iter().filter_map(|child| child.meta.url.as_deref().map(|url| (url, child))).collect())
+		.map(|c| c.children.iter().filter_map(|child| child.meta.identity.url_str().map(|url| (url, child))).collect())
 		.unwrap_or_default();
 
-	let remote_children_by_url: HashMap<&str, &Issue> = remote.children.iter().filter_map(|c| c.meta.url.as_deref().map(|url| (url, c))).collect();
+	let remote_children_by_url: HashMap<&str, &Issue> = remote.children.iter().filter_map(|c| c.meta.identity.url_str().map(|url| (url, c))).collect();
 
 	// Process each child in resolved (which starts as local's children)
 	for (i, resolved_child) in resolved.children.iter_mut().enumerate() {
-		let Some(url) = resolved_child.meta.url.as_deref() else {
+		let Some(url) = resolved_child.meta.identity.url_str() else {
 			continue;
 		};
 
@@ -384,13 +378,13 @@ mod tests {
 		Issue {
 			meta: IssueMeta {
 				title: "Test".to_string(),
-				url: Some("https://github.com/o/r/issues/1".to_string()),
+				identity: IssueLink::parse("https://github.com/o/r/issues/1").map(IssueIdentity::Linked).unwrap(),
 				close_state: CloseState::Open,
 				owned: true,
 			},
 			labels: vec![],
 			comments: vec![Comment {
-				id: None,
+				identity: CommentIdentity::Body,
 				body: body.to_string(),
 				owned: true,
 			}],
@@ -467,13 +461,13 @@ mod tests {
 		Issue {
 			meta: IssueMeta {
 				title: "Test".to_string(),
-				url: Some(url.to_string()),
+				identity: IssueLink::parse(url).map(IssueIdentity::Linked).unwrap(),
 				close_state: CloseState::Open,
 				owned: true,
 			},
 			labels: vec![],
 			comments: vec![Comment {
-				id: None,
+				identity: CommentIdentity::Body,
 				body: body.to_string(),
 				owned: true,
 			}],

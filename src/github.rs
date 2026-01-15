@@ -585,12 +585,6 @@ pub fn is_github_issue_url(s: &str) -> bool {
 	s.contains("github.com/") && s.contains("/issues/")
 }
 
-/// Extract issue number from a GitHub URL
-pub fn extract_issue_number_from_url(url: &str) -> Option<u64> {
-	// URL format: https://github.com/owner/repo/issues/123
-	url.split('/').next_back().and_then(|s| s.parse().ok())
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;

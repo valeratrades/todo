@@ -11,7 +11,7 @@ use super::{
 	files::{ExactMatchLevel, choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
 	sync::{MergeMode, Side, SyncOptions, open_local_issue},
-	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
+	touch::{create_and_fetch_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 };
 use crate::{
 	config::LiveSettings,
@@ -83,6 +83,34 @@ pub struct OpenArgs {
 	pub reset: bool,
 }
 
+/// Extract issue number from a file path.
+/// Looks for the `{number}_-_{title}` pattern in the filename or parent directory.
+fn extract_issue_number_from_path(path: &Path) -> Option<u64> {
+	// Try the filename first
+	if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+		if let Some(num_str) = stem.split("_-_").next() {
+			if let Ok(num) = num_str.parse::<u64>() {
+				return Some(num);
+			}
+		}
+	}
+
+	// For __main__.md files, check the parent directory name
+	if path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("__main__")).unwrap_or(false) {
+		if let Some(parent) = path.parent() {
+			if let Some(dir_name) = parent.file_name().and_then(|s| s.to_str()) {
+				if let Some(num_str) = dir_name.split("_-_").next() {
+					if let Ok(num) = num_str.parse::<u64>() {
+						return Some(num);
+					}
+				}
+			}
+		}
+	}
+
+	None
+}
+
 /// Get the effective extension from args, config, or default
 fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSettings) -> Extension {
 	// Priority: CLI arg > config > default (md)
@@ -110,7 +138,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 	// Validate and convert exact match level
 	let exact = ExactMatchLevel::try_from(args.exact).map_err(|e| eyre!(e))?;
 
-	// Build merge mode from args
+	// Build merge mode from args with the given side preference
 	let build_merge_mode = |prefer: Side| -> Option<MergeMode> {
 		if args.reset {
 			Some(MergeMode::Reset { prefer })
@@ -121,8 +149,19 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		}
 	};
 
-	// Helper to create sync opts for local source (used in multiple branches)
-	let local_sync_opts = || SyncOptions::new(build_merge_mode(Side::Local), args.pull);
+	// Helper to create sync opts based on side preference
+	// --pull flag OR URL mode: prefer Remote side for --force/--reset
+	// Local file without --pull: prefer Local side for --force/--reset
+	let make_sync_opts = |prefer_remote: bool| {
+		let prefer = if prefer_remote { Side::Remote } else { Side::Local };
+		SyncOptions::new(build_merge_mode(prefer), prefer_remote || args.pull)
+	};
+
+	// Local file paths: prefer Local unless --pull is specified
+	let local_sync_opts = || make_sync_opts(args.pull);
+
+	// URL mode and explicit --pull: prefer Remote
+	let remote_sync_opts = || make_sync_opts(true);
 
 	// Handle --blocker and --blocker-set modes: use current blocker issue file if no pattern provided
 	let use_blocker_mode = args.blocker || args.blocker_set;
@@ -153,48 +192,67 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		// Check if the project is virtual
 		let project_is_virtual = is_virtual_project(&touch_path.owner, &touch_path.repo);
-		let effective_offline = offline || project_is_virtual;
 
 		// First, try to find an existing local issue file
-		let issue_file_path = if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
+		let (issue_file_path, effective_offline) = if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
 			println!("Found existing issue: {existing_path:?}");
-			existing_path
+			(existing_path, offline || project_is_virtual)
 		} else if project_is_virtual {
 			// Virtual project: stays local forever
 			println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
-			create_virtual_issue(&touch_path, &effective_ext)?
+			(create_virtual_issue(&touch_path, &effective_ext)?, true)
 		} else {
-			// Real project: create pending issue (will be created on GitHub when editor closes)
-			create_pending_issue(&touch_path, &effective_ext)?
+			// Real project: create issue on GitHub immediately, then fetch and store
+			if offline {
+				bail!("Cannot create issue on GitHub in offline mode. Use a virtual project or go online.");
+			}
+			let path = create_and_fetch_issue(&gh, &touch_path, &effective_ext).await?;
+
+			// Commit the newly created issue as consensus
+			// Extract owner/repo/number from the path or use touch_path info
+			use super::git::commit_issue_changes;
+			let issue_number = extract_issue_number_from_path(&path);
+			if let Some(num) = issue_number {
+				commit_issue_changes(&path, &touch_path.owner, &touch_path.repo, num, Some("initial touch creation"))?;
+			}
+
+			(path, false)
 		};
 
 		(issue_file_path, local_sync_opts(), effective_offline)
 	} else if github::is_github_issue_url(input) {
-		// GitHub URL mode: fetch issue and store in XDG_DATA (can't be offline)
+		// GitHub URL mode: unified with --pull behavior
+		// URL opening implies pull=true and prefers Remote for --force/--reset
 		if offline {
 			bail!("Cannot fetch issue from URL in offline mode");
 		}
 
 		let (owner, repo, issue_number) = github::parse_github_issue_url(input)?;
 
-		println!("Fetching issue #{issue_number} from {owner}/{repo}...");
+		// Check if we already have this issue locally
+		use super::files::find_issue_file;
+		let existing_path = find_issue_file(&owner, &repo, Some(issue_number), "", &extension, &[]);
 
-		// Fetch and store issue (and sub-issues) in XDG_DATA
-		// This fetch IS the "take remote" action for --force/--reset with remote source
-		let issue_file_path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, None).await?;
+		let issue_file_path = if let Some(path) = existing_path {
+			// File exists locally - proceed with unified sync (like --pull)
+			println!("Found existing local file, will sync with remote...");
+			path
+		} else {
+			// File doesn't exist - fetch and create it
+			println!("Fetching issue #{issue_number} from {owner}/{repo}...");
 
-		println!("Stored issue at: {issue_file_path:?}");
+			let path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, None).await?;
+			println!("Stored issue at: {path:?}");
 
-		// Commit the fetched state as the consensus baseline for post-editor sync
-		// This ensures that changes made during editing can be properly detected
-		use super::git::commit_issue_changes;
-		commit_issue_changes(&issue_file_path, &owner, &repo, issue_number, Some("initial fetch"))?;
+			// Commit the fetched state as the consensus baseline
+			use super::git::commit_issue_changes;
+			commit_issue_changes(&path, &owner, &repo, issue_number, Some("initial fetch"))?;
 
-		// For remote source: the fetch IS the sync action.
-		// Post-editor sync uses Normal mode (changes get synced normally).
-		// Note: --reset and --force are consumed by the fetch itself.
-		let remote_sync_opts = SyncOptions::new(None, false);
-		(issue_file_path, remote_sync_opts, offline)
+			path
+		};
+
+		// URL mode uses remote_sync_opts: pull=true, --force/--reset prefer Remote
+		(issue_file_path, remote_sync_opts(), offline)
 	} else {
 		// Check if input is an existing file path (absolute or relative)
 		let input_path = Path::new(input);

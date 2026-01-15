@@ -9,9 +9,9 @@
 //! - **Post-sync**: Updating existing issue states to match local changes
 
 use jiff::Timestamp;
-use todo::{BlockerSequence, CloseState, Comment, Issue, IssueMeta, split_blockers};
+use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, IssueMeta, split_blockers};
 
-use crate::github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue};
+use crate::github::{GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue};
 
 /// Extension trait for GitHub-specific Issue operations.
 /// These methods are only available in the binary, not the library.
@@ -32,8 +32,8 @@ impl IssueGitHubExt for Issue {
 	fn collect_create_actions(&self) -> Vec<Vec<IssueAction>> {
 		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
 
-		// Check if root issue needs to be created (no URL = pending creation from --touch)
-		if self.meta.url.is_none() {
+		// Check if root issue needs to be created (pending = no URL yet)
+		if self.meta.identity.is_pending() {
 			levels.push(vec![IssueAction::CreateIssue {
 				path: vec![],
 				title: self.meta.title.clone(),
@@ -54,7 +54,7 @@ impl IssueGitHubExt for Issue {
 		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
 
 		// Only collect updates if root exists
-		if self.meta.url.is_some() {
+		if self.meta.identity.is_linked() {
 			collect_update_actions_recursive(self, &[], consensus_sub_issues, &mut levels);
 		}
 
@@ -66,9 +66,10 @@ impl IssueGitHubExt for Issue {
 		let issue_owned = issue.user.login == current_user;
 		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
 
+		let identity = IssueLink::parse(&issue_url).map(IssueIdentity::Linked).expect("just constructed valid URL");
 		let meta = IssueMeta {
 			title: issue.title.clone(),
-			url: Some(issue_url.clone()),
+			identity,
 			close_state,
 			owned: issue_owned,
 		};
@@ -83,13 +84,17 @@ impl IssueGitHubExt for Issue {
 		let mut issue_comments = Vec::new();
 		let raw_body = issue.body.as_deref().unwrap_or("");
 		let (body, blockers) = split_blockers(raw_body);
-		issue_comments.push(Comment { id: None, body, owned: issue_owned });
+		issue_comments.push(Comment {
+			identity: CommentIdentity::Body,
+			body,
+			owned: issue_owned,
+		});
 
 		// Actual comments
 		for c in comments {
 			let comment_owned = c.user.login == current_user;
 			issue_comments.push(Comment {
-				id: Some(c.id),
+				identity: CommentIdentity::Linked(c.id),
 				body: c.body.as_deref().unwrap_or("").to_string(),
 				owned: comment_owned,
 			});
@@ -102,18 +107,19 @@ impl IssueGitHubExt for Issue {
 			.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
 			.map(|si| {
 				let child_url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
+				let child_identity = IssueLink::parse(&child_url).map(IssueIdentity::Linked).expect("just constructed valid URL");
 				let child_close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 				let child_timestamp = si.updated_at.parse::<Timestamp>().ok();
 				Issue {
 					meta: IssueMeta {
 						title: si.title.clone(),
-						url: Some(child_url),
+						identity: child_identity,
 						close_state: child_close_state,
 						owned: si.user.login == current_user,
 					},
 					labels: si.labels.iter().map(|l| l.name.clone()).collect(),
 					comments: vec![Comment {
-						id: None,
+						identity: CommentIdentity::Body,
 						body: si.body.as_deref().unwrap_or("").to_string(),
 						owned: si.user.login == current_user,
 					}],
@@ -144,15 +150,15 @@ fn collect_create_actions_recursive(issue: &Issue, current_path: &[usize], level
 		levels.push(Vec::new());
 	}
 
-	// Get parent issue number from URL
-	let parent_number = issue.meta.url.as_ref().and_then(|url| github::extract_issue_number_from_url(url));
+	// Get parent issue number from identity
+	let parent_number = issue.meta.identity.number();
 
 	// Check each child for create actions
 	for (i, child) in issue.children.iter().enumerate() {
 		let mut child_path = current_path.to_vec();
 		child_path.push(i);
 
-		if child.meta.url.is_none() {
+		if child.meta.identity.is_pending() {
 			// New issue - needs to be created
 			if let Some(parent_num) = parent_number {
 				levels[depth].push(IssueAction::CreateIssue {
@@ -165,8 +171,8 @@ fn collect_create_actions_recursive(issue: &Issue, current_path: &[usize], level
 			}
 		}
 
-		// Recursively process child's children (only if child has URL - can't create under non-existent parent)
-		if child.meta.url.is_some() {
+		// Recursively process child's children (only if child is linked - can't create under non-existent parent)
+		if child.meta.identity.is_linked() {
 			collect_create_actions_recursive(child, &child_path, levels);
 		}
 	}
@@ -186,18 +192,16 @@ fn collect_update_actions_recursive(issue: &Issue, current_path: &[usize], conse
 		let mut child_path = current_path.to_vec();
 		child_path.push(i);
 
-		// Only check for updates if child has URL (exists on GitHub)
-		if let Some(child_url) = &child.meta.url {
-			if let Some(child_number) = github::extract_issue_number_from_url(child_url)
-				&& let Some(consensus) = consensus_sub_issues.iter().find(|o| o.number == child_number)
-			{
-				let consensus_closed = consensus.state == "closed";
-				if child.meta.close_state.is_closed() != consensus_closed {
-					levels[depth].push(IssueAction::UpdateIssueState {
-						issue_number: child_number,
-						closed: child.meta.close_state.is_closed(),
-					});
-				}
+		// Only check for updates if child is linked (exists on GitHub)
+		if let Some(child_number) = child.meta.identity.number()
+			&& let Some(consensus) = consensus_sub_issues.iter().find(|o| o.number == child_number)
+		{
+			let consensus_closed = consensus.state == "closed";
+			if child.meta.close_state.is_closed() != consensus_closed {
+				levels[depth].push(IssueAction::UpdateIssueState {
+					issue_number: child_number,
+					closed: child.meta.close_state.is_closed(),
+				});
 			}
 		}
 
@@ -244,7 +248,7 @@ mod tests {
 		let result = Issue::from_github(&issue, &comments, &sub_issues, "owner", "repo", "me");
 
 		assert_eq!(result.meta.title, "Test Issue");
-		assert_eq!(result.meta.url, Some("https://github.com/owner/repo/issues/123".to_string()));
+		assert_eq!(result.meta.identity.url_str(), Some("https://github.com/owner/repo/issues/123"));
 		assert_eq!(result.meta.close_state, CloseState::Open);
 		assert!(result.meta.owned);
 		assert_eq!(result.labels, vec!["bug".to_string()]);
@@ -253,7 +257,7 @@ mod tests {
 		assert_eq!(result.comments.len(), 2);
 		assert_eq!(result.comments[0].body, "Issue body");
 		assert!(result.comments[0].owned);
-		assert_eq!(result.comments[1].id, Some(456));
+		assert_eq!(result.comments[1].identity.id(), Some(456));
 		assert_eq!(result.comments[1].body, "A comment");
 		assert!(!result.comments[1].owned); // different user
 

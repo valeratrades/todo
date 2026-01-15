@@ -8,6 +8,7 @@
 //! Tests work with `Issue` directly - our canonical representation.
 //! The mock GitHub layer translates to API format at the boundary.
 
+use rstest::rstest;
 use todo::{Issue, ParseContext};
 
 use crate::common::{TestContext, git::GitExt};
@@ -481,4 +482,74 @@ fn test_comment_shorthand_creates_comment() {
 
 	// Verify comment creation was triggered
 	assert!(stdout.contains("Creating new comment"), "Should create a new comment when !c is used. stdout: {stdout}");
+}
+
+/// When local and remote have different sub-issues, force merge should preserve both.
+/// This tests the scenario where:
+/// - Local has sub-issue A that remote doesn't have
+/// - Remote has sub-issue B that local doesn't have
+/// - Local has an extra line in the description
+/// After merge with --force (either side), consensus should contain both sub-issues.
+///
+/// Flag semantics:
+/// - `--force` alone: prefer local on conflicts
+/// - `--pull --force`: prefer remote on conflicts
+#[rstest]
+#[case::prefer_local(&["--force"], true)]
+#[case::prefer_remote(&["--pull", "--force"], false)]
+fn test_force_merge_preserves_both_sub_issues(#[case] args: &[&str], #[case] expect_local_description: bool) {
+	let ctx = TestContext::new("");
+
+	// Local: parent with local-only sub-issue and modified description
+	let local = parse(
+		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tparent body\n\
+		 \textra local line\n\
+		 \n\
+		 \t- [ ] Local Sub <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t\tlocal sub body\n",
+	);
+
+	// Remote: parent with remote-only sub-issue (no extra description line)
+	let remote = parse(
+		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tparent body\n\
+		 \n\
+		 \t- [ ] Remote Sub <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t\tremote sub body\n",
+	);
+
+	// Consensus: original state (no sub-issues, original description)
+	let consensus = parse(
+		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		 \tparent body\n",
+	);
+
+	let issue_path = ctx.issue(local.clone()).consensus(consensus).remote(remote).setup();
+
+	let (status, stdout, stderr) = ctx.open(&issue_path).args(args).run();
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed with {args:?}. stderr: {stderr}");
+
+	// Read the final file (may have moved to directory format due to sub-issues)
+	let content = std::fs::read_to_string(&issue_path).unwrap_or_else(|_| {
+		let dir_path = ctx.issue_path(&local);
+		std::fs::read_to_string(&dir_path).expect("Issue file should exist in flat or dir format")
+	});
+
+	eprintln!("Final content:\n{content}");
+
+	// Both sub-issues should be present regardless of which side is preferred
+	assert!(content.contains("Local Sub"), "Local sub-issue should be preserved with {args:?}. Got: {content}");
+	assert!(content.contains("Remote Sub"), "Remote sub-issue should be added with {args:?}. Got: {content}");
+
+	// Description line depends on which side is preferred
+	if expect_local_description {
+		assert!(content.contains("extra local line"), "Local description should be preserved with {args:?}. Got: {content}");
+	} else {
+		assert!(!content.contains("extra local line"), "Remote description should win with {args:?}. Got: {content}");
+	}
 }

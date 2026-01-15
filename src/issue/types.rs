@@ -80,6 +80,77 @@ impl AsRef<Url> for IssueLink {
 	}
 }
 
+/// Identity of an issue - either linked to GitHub or pending creation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IssueIdentity {
+	/// Issue exists on GitHub with this link
+	Linked(IssueLink),
+	/// Issue is pending creation on GitHub (will be created in post-sync)
+	Pending,
+}
+
+impl IssueIdentity {
+	/// Get the link if this issue is linked to GitHub.
+	pub fn link(&self) -> Option<&IssueLink> {
+		match self {
+			Self::Linked(link) => Some(link),
+			Self::Pending => None,
+		}
+	}
+
+	/// Check if this issue is linked to GitHub.
+	pub fn is_linked(&self) -> bool {
+		matches!(self, Self::Linked(_))
+	}
+
+	/// Check if this issue is pending creation.
+	pub fn is_pending(&self) -> bool {
+		matches!(self, Self::Pending)
+	}
+
+	/// Get the issue number if linked.
+	pub fn number(&self) -> Option<u64> {
+		self.link().map(|l| l.number())
+	}
+
+	/// Get the URL string if linked.
+	pub fn url_str(&self) -> Option<&str> {
+		self.link().map(|l| l.as_str())
+	}
+}
+
+/// Identity of a comment - either linked to GitHub or pending creation.
+/// Note: The first comment (issue body) is always `Body`, not `Linked` or `Pending`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CommentIdentity {
+	/// This is the issue body (first comment), not a separate GitHub comment
+	Body,
+	/// Comment exists on GitHub with this ID
+	Linked(u64),
+	/// Comment is pending creation on GitHub (will be created in post-sync)
+	Pending,
+}
+
+impl CommentIdentity {
+	/// Get the comment ID if linked.
+	pub fn id(&self) -> Option<u64> {
+		match self {
+			Self::Linked(id) => Some(*id),
+			Self::Body | Self::Pending => None,
+		}
+	}
+
+	/// Check if this is a GitHub comment (not the issue body).
+	pub fn is_comment(&self) -> bool {
+		!matches!(self, Self::Body)
+	}
+
+	/// Check if this comment is pending creation.
+	pub fn is_pending(&self) -> bool {
+		matches!(self, Self::Pending)
+	}
+}
+
 /// An issue with its title - used when we need both identity and display name.
 /// This is what we have after fetching an issue from GitHub.
 #[derive(Clone, Debug)]
@@ -242,8 +313,8 @@ impl CloseState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct IssueMeta {
 	pub title: String,
-	/// GitHub URL, None for new issues
-	pub url: Option<String>,
+	/// Issue identity - linked to GitHub or pending creation
+	pub identity: IssueIdentity,
 	pub close_state: CloseState,
 	/// Whether owned by current user (false = immutable)
 	pub owned: bool,
@@ -252,8 +323,8 @@ pub struct IssueMeta {
 /// A comment in the issue conversation (first one is always the issue body)
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
-	/// Comment ID from GitHub URL, None for new comments or issue body
-	pub id: Option<u64>,
+	/// Comment identity - body, linked to GitHub, or pending creation
+	pub identity: CommentIdentity,
 	pub body: String,
 	pub owned: bool,
 }
@@ -284,6 +355,7 @@ impl Issue {
 
 	/// Parse markdown content into an Issue.
 	/// Returns an error with a detailed message if any part of the file cannot be understood.
+	//TODO!!!: remove resource duplication from storing `content` both here and in taken `ParseContext`
 	pub fn parse(content: &str, ctx: &ParseContext) -> Result<Self, ParseError> {
 		let normalized = normalize_issue_indentation(content);
 		let mut lines = normalized.lines().peekable();
@@ -310,7 +382,7 @@ impl Issue {
 		let mut children = Vec::new();
 		let mut blocker_lines = Vec::new();
 		let mut current_comment_lines: Vec<String> = Vec::new();
-		let mut current_comment_meta: Option<(Option<u64>, bool)> = None; // (id, owned)
+		let mut current_comment_meta: Option<(CommentIdentity, bool)> = None; // (identity, owned)
 		let mut in_body = true;
 		let mut in_blockers = false;
 		let mut current_line = line_num;
@@ -349,11 +421,15 @@ impl Issue {
 					in_body = false;
 					if !body_lines.is_empty() {
 						let body = body_lines.join("\n").trim().to_string();
-						comments.push(Comment { id: None, body, owned: meta.owned });
+						comments.push(Comment {
+							identity: CommentIdentity::Body,
+							body,
+							owned: meta.owned,
+						});
 					}
-				} else if let Some((id, owned)) = current_comment_meta.take() {
+				} else if let Some((identity, owned)) = current_comment_meta.take() {
 					let body = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { id, body, owned });
+					comments.push(Comment { identity, body, owned });
 					current_comment_lines.clear();
 				}
 				in_blockers = true;
@@ -408,23 +484,27 @@ impl Issue {
 				if in_body {
 					in_body = false;
 					let body = body_lines.join("\n").trim().to_string();
-					comments.push(Comment { id: None, body, owned: meta.owned });
-				} else if let Some((id, owned)) = current_comment_meta.take() {
+					comments.push(Comment {
+						identity: CommentIdentity::Body,
+						body,
+						owned: meta.owned,
+					});
+				} else if let Some((identity, owned)) = current_comment_meta.take() {
 					let body = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { id, body, owned });
+					comments.push(Comment { identity, body, owned });
 					current_comment_lines.clear();
 				}
 
 				// Handle !c shorthand
 				if is_new_comment_shorthand {
-					current_comment_meta = Some((None, true));
+					current_comment_meta = Some((CommentIdentity::Pending, true));
 					continue;
 				}
 
 				let inner = content.strip_prefix("<!--").and_then(|s| s.split("-->").next()).unwrap_or("").trim();
 
 				if inner == "new comment" {
-					current_comment_meta = Some((None, true));
+					current_comment_meta = Some((CommentIdentity::Pending, true));
 				} else if inner.starts_with("omitted") && inner.contains("{{{") {
 					// vim fold start marker - skip it
 					continue;
@@ -437,8 +517,13 @@ impl Issue {
 					} else {
 						(false, inner)
 					};
-					let id = url.split("#issuecomment-").nth(1).and_then(|s| s.parse().ok());
-					current_comment_meta = Some((id, !is_immutable));
+					let identity = url
+						.split("#issuecomment-")
+						.nth(1)
+						.and_then(|s| s.parse().ok())
+						.map(CommentIdentity::Linked)
+						.unwrap_or(CommentIdentity::Pending);
+					current_comment_meta = Some((identity, !is_immutable));
 				}
 				continue;
 			}
@@ -469,10 +554,14 @@ impl Issue {
 				if in_body {
 					in_body = false;
 					let body = body_lines.join("\n").trim().to_string();
-					comments.push(Comment { id: None, body, owned: meta.owned });
-				} else if let Some((id, owned)) = current_comment_meta.take() {
+					comments.push(Comment {
+						identity: CommentIdentity::Body,
+						body,
+						owned: meta.owned,
+					});
+				} else if let Some((identity, owned)) = current_comment_meta.take() {
 					let body = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { id, body, owned });
+					comments.push(Comment { identity, body, owned });
 					current_comment_lines.clear();
 				}
 
@@ -514,7 +603,7 @@ impl Issue {
 					vec![]
 				} else {
 					vec![Comment {
-						id: None,
+						identity: CommentIdentity::Body,
 						body: child_body,
 						owned: child_meta.owned,
 					}]
@@ -543,10 +632,14 @@ impl Issue {
 		// Flush final
 		if in_body {
 			let body = body_lines.join("\n").trim().to_string();
-			comments.push(Comment { id: None, body, owned: meta.owned });
-		} else if let Some((id, owned)) = current_comment_meta.take() {
+			comments.push(Comment {
+				identity: CommentIdentity::Body,
+				body,
+				owned: meta.owned,
+			});
+		} else if let Some((identity, owned)) = current_comment_meta.take() {
 			let body = current_comment_lines.join("\n").trim().to_string();
-			comments.push(Comment { id, body, owned });
+			comments.push(Comment { identity, body, owned });
 		}
 
 		Ok(Issue {
@@ -613,13 +706,27 @@ impl Issue {
 		let title = rest[..marker_start].trim().to_string();
 		let inner = rest[marker_start + 4..marker_end].trim();
 
-		let (owned, url) = if let Some(url) = inner.strip_prefix("immutable ") {
-			(false, Some(url.trim().to_string()))
+		let (owned, identity) = if let Some(url) = inner.strip_prefix("immutable ") {
+			let url = url.trim();
+			let identity = IssueLink::parse(url).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
+			(false, identity)
+		} else if inner.is_empty() {
+			// Empty marker `<!--  -->` means pending
+			(true, IssueIdentity::Pending)
 		} else {
-			(true, Some(inner.to_string()))
+			let identity = IssueLink::parse(inner).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
+			(true, identity)
 		};
 
-		Ok((IssueMeta { title, url, close_state, owned }, labels))
+		Ok((
+			IssueMeta {
+				title,
+				identity,
+				close_state,
+				owned,
+			},
+			labels,
+		))
 	}
 
 	/// Parse checkbox prefix: `- [CONTENT] ` and return result.
@@ -658,9 +765,10 @@ impl Issue {
 			};
 			let title = rest[..marker_start].trim().to_string();
 			let url = rest[marker_start + 8..marker_end].trim().to_string();
+			let identity = IssueLink::parse(&url).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
 			ChildTitleParseResult::Ok(IssueMeta {
 				title,
-				url: Some(url),
+				identity,
 				close_state,
 				owned: true,
 			})
@@ -669,7 +777,7 @@ impl Issue {
 			if !title.is_empty() {
 				ChildTitleParseResult::Ok(IssueMeta {
 					title,
-					url: None,
+					identity: IssueIdentity::Pending,
 					close_state,
 					owned: true,
 				})
@@ -695,7 +803,7 @@ impl Issue {
 		// Title line: `- [x] [label1, label2] Title <!-- url -->` or `- [ ] Title <!-- url -->` if no labels
 		// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
 		let checked = self.meta.close_state.to_checkbox();
-		let url_part = self.meta.url.as_deref().unwrap_or("");
+		let url_part = self.meta.identity.url_str().unwrap_or("");
 		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
 		if self.meta.owned {
 			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!-- {url_part} -->\n", self.meta.title));
@@ -723,15 +831,22 @@ impl Issue {
 			}
 
 			// Comment with marker
-			if let Some(id) = comment.id {
-				let url = self.meta.url.as_deref().unwrap_or("");
-				if comment.owned {
-					out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
-				} else {
-					out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
+			match &comment.identity {
+				CommentIdentity::Body => {
+					// Body shouldn't appear here (it's always first), but handle gracefully
+					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
-			} else {
-				out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
+				CommentIdentity::Linked(id) => {
+					let url = self.meta.identity.url_str().unwrap_or("");
+					if comment.owned {
+						out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
+					} else {
+						out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
+					}
+				}
+				CommentIdentity::Pending => {
+					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
+				}
 			}
 			if !comment.body.is_empty() {
 				for line in comment.body.lines() {
@@ -764,10 +879,13 @@ impl Issue {
 			}
 
 			// Output child title line
-			if let Some(url) = &child.meta.url {
-				out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub {url} -->\n", child.meta.title));
-			} else {
-				out.push_str(&format!("{content_indent}- [{child_checked}] {}\n", child.meta.title));
+			match &child.meta.identity {
+				IssueIdentity::Linked(link) => {
+					out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub {} -->\n", child.meta.title, link.as_str()));
+				}
+				IssueIdentity::Pending => {
+					out.push_str(&format!("{content_indent}- [{child_checked}] {}\n", child.meta.title));
+				}
 			}
 
 			// Closed sub-issues: wrap content in vim fold markers
@@ -875,7 +993,7 @@ impl PartialEq for Issue {
 		}
 
 		for (sc, oc) in self_comments.iter().zip(other_comments.iter()) {
-			if sc.id != oc.id || sc.body != oc.body {
+			if sc.identity != oc.identity || sc.body != oc.body {
 				return false;
 			}
 		}
@@ -886,8 +1004,8 @@ impl PartialEq for Issue {
 		}
 
 		for (sc, oc) in self.children.iter().zip(other.children.iter()) {
-			// Compare by URL (issue number) and state
-			if sc.meta.url != oc.meta.url || sc.meta.close_state != oc.meta.close_state {
+			// Compare by identity (issue number) and state
+			if sc.meta.identity != oc.meta.identity || sc.meta.close_state != oc.meta.close_state {
 				return false;
 			}
 		}

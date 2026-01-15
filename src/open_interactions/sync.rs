@@ -165,12 +165,13 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 	}
 
 	// Step 2: Sync comments (skip first which is body)
-	let target_ids: std::collections::HashSet<u64> = local.comments.iter().skip(1).filter_map(|c| c.id).collect();
-	let consensus_ids: std::collections::HashSet<u64> = consensus.comments.iter().skip(1).filter_map(|c| c.id).collect();
+	use todo::CommentIdentity;
+	let target_ids: std::collections::HashSet<u64> = local.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
+	let consensus_ids: std::collections::HashSet<u64> = consensus.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
 
 	// Delete comments that were removed
 	for comment in consensus.comments.iter().skip(1) {
-		if let Some(id) = comment.id
+		if let Some(id) = comment.identity.id()
 			&& !target_ids.contains(&id)
 		{
 			println!("Deleting comment {id}...");
@@ -184,19 +185,19 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 		if !comment.owned {
 			continue; // Skip immutable comments
 		}
-		match comment.id {
-			Some(id) if consensus_ids.contains(&id) => {
-				let consensus_body = consensus.comments.iter().skip(1).find(|c| c.id == Some(id)).map(|c| c.body.as_str()).unwrap_or("");
+		match &comment.identity {
+			CommentIdentity::Linked(id) if consensus_ids.contains(id) => {
+				let consensus_body = consensus.comments.iter().skip(1).find(|c| c.identity.id() == Some(*id)).map(|c| c.body.as_str()).unwrap_or("");
 				if comment.body != consensus_body {
 					println!("Updating comment {id}...");
-					gh.update_comment(owner, repo, id, &comment.body).await?;
+					gh.update_comment(owner, repo, *id, &comment.body).await?;
 					updates += 1;
 				}
 			}
-			Some(id) => {
-				return Err(PushError::IdMismatch { comment_id: id }.into());
+			CommentIdentity::Linked(id) => {
+				return Err(PushError::IdMismatch { comment_id: *id }.into());
 			}
-			None =>
+			CommentIdentity::Pending | CommentIdentity::Body =>
 				if !comment.body.is_empty() {
 					println!("Creating new comment...");
 					gh.create_comment(owner, repo, issue_number, &comment.body).await?;
@@ -255,13 +256,14 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 						gh.update_issue_state(owner, repo, created.number, "closed").await?;
 					}
 
-					// Update the Issue struct with the new URL
+					// Update the Issue struct with the new identity
 					let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
+					let identity = todo::IssueLink::parse(&url).map(todo::IssueIdentity::Linked).expect("just constructed valid URL");
 					if is_root {
-						issue.meta.url = Some(url);
+						issue.meta.identity = identity;
 						created_root_number = Some(created.number);
 					} else if let Some(child) = issue.get_child_mut(&path) {
-						child.meta.url = Some(url);
+						child.meta.identity = identity;
 					}
 
 					executed += 1;
@@ -617,7 +619,7 @@ async fn sync_issue_to_github_inner(
 	// SYNC: Merge local and remote state
 	//=========================================================================
 	// Now that all issues have URLs, we can compare and merge.
-	let local_needs_update = if issue.meta.url.is_some() {
+	let local_needs_update = if issue.meta.identity.is_linked() {
 		// Normal flow: fetch remote and merge
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
@@ -667,7 +669,7 @@ async fn sync_issue_to_github_inner(
 			c.children
 				.iter()
 				.filter_map(|child| {
-					let number = child.meta.url.as_ref().and_then(|u| u.rsplit('/').next()).and_then(|n| n.parse().ok())?;
+					let number = child.meta.identity.number()?;
 					Some(crate::github::OriginalSubIssue {
 						number,
 						state: child.meta.close_state.to_github_state().to_string(),
