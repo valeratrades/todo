@@ -589,40 +589,31 @@ async fn sync_issue_to_github_inner(
 	extension: Extension,
 	merge_mode: MergeMode,
 ) -> Result<()> {
-	// Load consensus from git (last committed state)
-	let consensus = load_consensus_issue(issue_file_path);
-
-	//=========================================================================
-	// PRE-SYNC: Create new issues so they have URLs for comparison
-	//=========================================================================
-	// This must happen BEFORE merge because issues without URLs can't be compared.
-	// Includes: root issue if pending (--touch), and any new `- [ ]` sub-issues.
-	let create_actions = issue.collect_create_actions();
-	let has_creates = create_actions.iter().any(|level| !level.is_empty());
-	let mut created_issue_number = None;
-
-	if has_creates {
-		let (executed, created) = execute_issue_actions(gh, owner, repo, issue, create_actions).await?;
-		created_issue_number = created;
-
-		// Re-serialize to save the new URLs
-		if executed > 0 {
-			let serialized = issue.serialize();
-			std::fs::write(issue_file_path, &serialized)?;
-			tracing::debug!("[sync] Pre-sync: created {executed} new issue(s)");
-		}
-	}
+	// Load consensus from git (last committed state).
+	// Consensus is REQUIRED for sync - if we're here, the file should be tracked.
+	// For new issues, --touch creates them on GitHub and commits as consensus.
+	// For URL mode, fetch commits as consensus.
+	let consensus = load_consensus_issue(issue_file_path).ok_or_else(|| {
+		eyre!(
+			"BUG: Consensus missing for tracked issue.\n\
+			 File: {}\n\
+			 This indicates a bug - the file should have been committed before sync.\n\
+			 Please report this issue.",
+			issue_file_path.display()
+		)
+	})?;
 
 	//=========================================================================
 	// SYNC: Merge local and remote state
 	//=========================================================================
-	// Now that all issues have URLs, we can compare and merge.
+	// Pending items (new local sub-issues) are preserved during merge and
+	// created on GitHub in post-sync. No pre-sync phase needed.
 	let local_needs_update = if issue.meta.identity.is_linked() {
 		// Normal flow: fetch remote and merge
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
 		// Apply merge mode to get the merged result
-		let (merged, local_needs_update, remote_needs_update) = apply_merge_mode(issue, consensus.as_ref(), &remote_issue, merge_mode, issue_file_path, owner, repo, issue_number).await?;
+		let (merged, local_needs_update, remote_needs_update) = apply_merge_mode(issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, owner, repo, issue_number).await?;
 
 		// Update issue with merged result
 		*issue = merged;
@@ -649,13 +640,28 @@ async fn sync_issue_to_github_inner(
 	// POST-SYNC: Push differences to remote
 	//=========================================================================
 	// Compare merged state against consensus and push all differences.
-	// This handles: body/comments/state for root, state changes for sub-issues.
-	let final_issue_number = created_issue_number.unwrap_or(issue_number);
+	// This handles:
+	// 1. Create Pending sub-issues on GitHub
+	// 2. Push body/comments/state changes for root issue
+	// 3. Push state changes for sub-issues
 
-	// Push root issue changes (body, comments, state) - skip for newly created issues
-	let state_changed = if created_issue_number.is_none() && final_issue_number != 0 {
-		let consensus_for_sync = consensus.as_ref().ok_or(PushError::ConsensusMissing)?;
-		sync_local_issue_to_github(gh, owner, repo, final_issue_number, consensus_for_sync, issue).await?
+	// Step 1: Create any Pending sub-issues
+	let create_actions = issue.collect_create_actions();
+	let has_creates = create_actions.iter().any(|level| !level.is_empty());
+
+	if has_creates {
+		let (executed, _) = execute_issue_actions(gh, owner, repo, issue, create_actions).await?;
+		if executed > 0 {
+			// Re-serialize to save the new URLs
+			let serialized = issue.serialize();
+			std::fs::write(issue_file_path, &serialized)?;
+			tracing::debug!("[sync] Post-sync: created {executed} new sub-issue(s)");
+		}
+	}
+
+	// Step 2: Push root issue changes (body, comments, state)
+	let state_changed = if issue_number != 0 {
+		sync_local_issue_to_github(gh, owner, repo, issue_number, &consensus, issue).await?
 	} else {
 		false
 	};
@@ -705,13 +711,11 @@ async fn sync_issue_to_github_inner(
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state
-		let new_path = fetch_and_store_issue(gh, owner, repo, final_issue_number, &extension, ancestors).await?;
+		let new_path = fetch_and_store_issue(gh, owner, repo, issue_number, &extension, ancestors).await?;
 
 		// If the path changed, delete the old file
 		if old_path != new_path && old_path.exists() {
-			if created_issue_number.is_some() {
-				println!("Issue created on GitHub, updating local file...");
-			} else if state_changed {
+			if state_changed {
 				println!("Issue state changed, renaming file...");
 			} else {
 				println!("Issue renamed/moved, removing old file: {old_path:?}");
@@ -731,13 +735,13 @@ async fn sync_issue_to_github_inner(
 			}
 		}
 
-		let total_actions = if has_creates { 1 } else { 0 } + updates_executed;
+		let total_actions = updates_executed + if has_creates { 1 } else { 0 };
 		if total_actions > 0 {
 			println!("Synced {total_actions} actions to GitHub.");
 		}
 
 		// Commit the synced changes to local git
-		commit_issue_changes(issue_file_path, owner, repo, final_issue_number, None)?;
+		commit_issue_changes(issue_file_path, owner, repo, issue_number, None)?;
 	} else {
 		println!("No changes made.");
 	}

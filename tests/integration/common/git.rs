@@ -384,15 +384,6 @@ mod tests {
 			 \t\t\tchild body\n",
 		);
 
-		// Debug: check what was parsed
-		eprintln!("Parsed issue children count: {}", issue.children.len());
-		for (i, child) in issue.children.iter().enumerate() {
-			eprintln!("  Child {i}: title={}, children_count={}", child.meta.title, child.children.len());
-			for (j, grandchild) in child.children.iter().enumerate() {
-				eprintln!("    Grandchild {j}: title={}", grandchild.meta.title);
-			}
-		}
-
 		ctx.remote(&issue);
 
 		// Read the mock state that was written
