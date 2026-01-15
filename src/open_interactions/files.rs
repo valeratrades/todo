@@ -301,7 +301,7 @@ pub fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 }
 
 /// Exact match level for fzf queries.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum ExactMatchLevel {
 	/// Default fuzzy matching
 	#[default]

@@ -828,9 +828,8 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
 	// If file was not modified by the user, skip all sync operations and exit early.
-	// This is gated behind cfg to ensure integration tests always run the full sync path.
-	#[cfg(not(feature = "is_integration_test"))]
-	if !result.file_modified {
+	// Skip this check in integration tests to ensure they always run the full sync path.
+	if !result.file_modified && std::env::var("__IS_INTEGRATION_TEST").is_err() {
 		v_utils::log!("Aborted (no changes made)");
 		return Ok(result);
 	}

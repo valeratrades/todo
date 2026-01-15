@@ -91,9 +91,10 @@ async fn main() {
 			v_utils::clientside!();
 		}
 	}
-	#[cfg(feature = "is_integration_test")]
-	// SAFETY: This is called at program start before any other threads are spawned
-	unsafe { std::env::set_var("LOG_DIRECTIVES", "info,todo=debug") };
+	if std::env::var("__IS_INTEGRATION_TEST").is_ok() {
+		// SAFETY: This is called at program start before any other threads are spawned
+		unsafe { std::env::set_var("LOG_DIRECTIVES", "info,todo=debug") };
+	}
 
 	let cli = Cli::parse();
 

@@ -34,10 +34,7 @@ static BINARY_COMPILED: OnceLock<()> = OnceLock::new();
 /// Compile the binary before running any tests
 pub fn ensure_binary_compiled() {
 	BINARY_COMPILED.get_or_init(|| {
-		let status = Command::new("cargo")
-			.args(["build", "--features", "is_integration_test"])
-			.status()
-			.expect("Failed to execute cargo build");
+		let status = Command::new("cargo").arg("build").status().expect("Failed to execute cargo build");
 
 		if !status.success() {
 			panic!("Failed to build binary");
@@ -101,6 +98,7 @@ impl TestContext {
 	pub fn run(&self, args: &[&str]) -> (ExitStatus, String, String) {
 		let mut cmd = Command::new(get_binary_path());
 		cmd.args(args);
+		cmd.env("__IS_INTEGRATION_TEST", "1");
 		for (key, value) in self.xdg.env_vars() {
 			cmd.env(key, value);
 		}
@@ -213,6 +211,7 @@ impl<'a> OpenBuilder<'a> {
 		cmd.arg("--mock").arg("open");
 		cmd.args(&self.extra_args);
 		cmd.arg(self.issue_path.to_str().unwrap());
+		cmd.env("__IS_INTEGRATION_TEST", "1");
 		for (key, value) in self.ctx.xdg.env_vars() {
 			cmd.env(key, value);
 		}
@@ -296,6 +295,7 @@ impl<'a> OpenUrlBuilder<'a> {
 		cmd.arg("--mock").arg("open");
 		cmd.args(&self.extra_args);
 		cmd.arg(&self.url);
+		cmd.env("__IS_INTEGRATION_TEST", "1");
 		for (key, value) in self.ctx.xdg.env_vars() {
 			cmd.env(key, value);
 		}

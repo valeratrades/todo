@@ -9,7 +9,7 @@
 //! - **Post-sync**: Updating existing issue states to match local changes
 
 use jiff::Timestamp;
-use todo::{split_blockers, BlockerSequence, CloseState, Comment, Issue, IssueMeta};
+use todo::{BlockerSequence, CloseState, Comment, Issue, IssueMeta, split_blockers};
 
 use crate::github::{self, GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue};
 

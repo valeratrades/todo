@@ -101,8 +101,7 @@ impl MockGitHubClient {
 			call_log: Mutex::new(Vec::new()),
 		};
 
-		// Load initial state from file if TODO_MOCK_STATE is set
-		#[cfg(feature = "is_integration_test")]
+		// Load initial state from file if TODO_MOCK_STATE is set (integration tests)
 		if let Ok(state_file) = std::env::var("TODO_MOCK_STATE")
 			&& let Ok(content) = std::fs::read_to_string(&state_file)
 		{
@@ -117,7 +116,6 @@ impl MockGitHubClient {
 	}
 
 	/// Load state from JSON content
-	#[cfg(feature = "is_integration_test")]
 	fn load_state_json(&self, content: &str) -> Result<(), String> {
 		use serde_json::Value;
 
