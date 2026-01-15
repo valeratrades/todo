@@ -97,7 +97,6 @@ use super::{
 	github_sync::IssueGitHubExt,
 	meta::load_issue_meta_from_path,
 	tree::{fetch_full_issue_tree, resolve_tree},
-	util::expand_blocker_shorthand,
 };
 use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
 
@@ -541,11 +540,12 @@ impl Modifier {
 				let mtime_after = std::fs::metadata(issue_file_path)?.modified()?;
 				let file_modified = mtime_after != mtime_before;
 
-				// Read edited content, expand !b shorthand, and re-parse
+				// Read edited content, expand shorthands (!b, !c), and re-parse
 				let raw_content = std::fs::read_to_string(issue_file_path)?;
 				let edited_content = expand_blocker_shorthand(&raw_content, extension);
+				let edited_content = expand_comment_shorthand(&edited_content, extension);
 
-				// Write back if !b was expanded
+				// Write back if shorthands were expanded
 				if edited_content != raw_content {
 					std::fs::write(issue_file_path, &edited_content)?;
 				}
@@ -785,6 +785,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	// Read and parse the current issue state
 	let raw_content = std::fs::read_to_string(issue_file_path)?;
 	let content = expand_blocker_shorthand(&raw_content, &extension);
+	let content = expand_comment_shorthand(&content, &extension);
 	if content != raw_content {
 		std::fs::write(issue_file_path, &content)?;
 	}
@@ -913,6 +914,7 @@ pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) ->
 	// Read and parse the current issue state
 	let raw_content = std::fs::read_to_string(issue_file_path)?;
 	let content = expand_blocker_shorthand(&raw_content, &extension);
+	let content = expand_comment_shorthand(&content, &extension);
 	if content != raw_content {
 		std::fs::write(issue_file_path, &content)?;
 	}

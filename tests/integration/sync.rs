@@ -449,3 +449,45 @@ fn test_reset_syncs_changes_after_editor() {
 		"Changes should be synced after editor. stdout: {stdout}"
 	);
 }
+
+/// `!c` shorthand should expand to `<!-- new comment -->` and trigger comment creation.
+/// When the user types `!c` on its own line, it should:
+/// 1. Be expanded to `<!-- new comment -->` in the file
+/// 2. Result in a new comment being created on GitHub
+#[test]
+fn test_comment_shorthand_creates_comment() {
+	let ctx = TestContext::new("");
+	ctx.init_git();
+
+	// Start with an issue that has no comments
+	let issue = parse("- [ ] Test Issue <!-- https://github.com/testowner/testrepo/issues/1 -->\n\tissue body\n");
+	let issue_path = ctx.setup_issue(OWNER, REPO, NUMBER, &issue);
+	ctx.setup_remote(OWNER, REPO, NUMBER, &issue);
+
+	// Simulate user adding `!c` followed by comment content
+	// After expansion, the file should have `<!-- new comment -->` marker
+	let edited_content = format!("- [ ] Test Issue <!-- https://github.com/{OWNER}/{REPO}/issues/{NUMBER} -->\n\tissue body\n\n\t!c\n\tMy new comment content\n");
+
+	// Write the edited content (simulating what user typed in editor)
+	std::fs::write(&issue_path, &edited_content).unwrap();
+
+	// Run open to trigger sync (which should expand !c and create the comment)
+	let (status, stdout, stderr) = ctx.run_open(&issue_path);
+
+	eprintln!("stdout: {stdout}");
+	eprintln!("stderr: {stderr}");
+
+	assert!(status.success(), "Should succeed. stderr: {stderr}");
+
+	// Verify comment creation was triggered
+	assert!(stdout.contains("Creating new comment"), "Should create a new comment when !c is used. stdout: {stdout}");
+
+	//XXX: very very bad assert. Refer to https://matklad.github.io/2021/05/31/how-to-test.html for why
+	//// Verify the file was updated with expanded marker
+	//let final_content = std::fs::read_to_string(&issue_path).unwrap();
+	//assert!(
+	//	final_content.contains("<!-- new comment -->"),
+	//	"!c should be expanded to <!-- new comment -->. Got: {final_content}"
+	//);
+	//assert!(!final_content.contains("!c"), "!c shorthand should be replaced. Got: {final_content}");
+}

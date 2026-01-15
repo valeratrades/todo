@@ -38,6 +38,16 @@ impl Marker {
 	pub fn decode(s: &str, ext: Extension) -> Option<Self> {
 		let trimmed = s.trim();
 
+		// Shorthand: `!c` or `!C` for new comment
+		if trimmed.eq_ignore_ascii_case("!c") {
+			return Some(Marker::NewComment);
+		}
+
+		// Shorthand: `!b` or `!B` for blockers section
+		if trimmed.eq_ignore_ascii_case("!b") {
+			return Some(Marker::BlockersSection(Header::new(1, "Blockers")));
+		}
+
 		// Check for header-based blockers marker using the Header type
 		// This handles both `# Blockers` (md) and `= Blockers` (typ)
 		if let Some(header) = Header::decode(trimmed, ext) {
@@ -324,6 +334,12 @@ mod tests {
 		assert!(is_blockers_section(Marker::decode("// blockers", Extension::Typ)));
 		assert!(is_blockers_section(Marker::decode("// blocker", Extension::Typ)));
 
+		// Shorthand
+		assert!(is_blockers_section(Marker::decode("!b", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("!B", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("  !b  ", Extension::Md)));
+		assert!(is_blockers_section(Marker::decode("!b", Extension::Typ)));
+
 		// Should NOT match if there's other content on the line
 		assert!(!is_blockers_section(Marker::decode("# Blockers and more", Extension::Md)));
 		assert!(!is_blockers_section(Marker::decode("Some text # Blockers", Extension::Md)));
@@ -349,6 +365,12 @@ mod tests {
 	fn test_decode_new_comment() {
 		assert_eq!(Marker::decode("<!--new comment-->", Extension::Md), Some(Marker::NewComment));
 		assert_eq!(Marker::decode("<!-- new comment -->", Extension::Md), Some(Marker::NewComment));
+		// Shorthand
+		assert_eq!(Marker::decode("!c", Extension::Md), Some(Marker::NewComment));
+		assert_eq!(Marker::decode("!C", Extension::Md), Some(Marker::NewComment));
+		assert_eq!(Marker::decode("  !c  ", Extension::Md), Some(Marker::NewComment));
+		// Typst
+		assert_eq!(Marker::decode("!c", Extension::Typ), Some(Marker::NewComment));
 	}
 
 	#[test]

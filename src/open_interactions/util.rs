@@ -16,30 +16,6 @@ pub fn extract_checkbox_title(line: &str) -> Option<String> {
 	if title.is_empty() { None } else { Some(title.to_string()) }
 }
 
-/// Expand `!b` shorthand to the full blockers marker.
-/// Matches lines that are just `!b` or `!B` (with any indentation).
-/// For .md files: expands to `# Blockers`
-/// For .typ files: expands to `= Blockers`
-pub fn expand_blocker_shorthand(content: &str, extension: &Extension) -> String {
-	let blockers_header = Header::new(1, "Blockers");
-	let replacement = blockers_header.encode(*extension);
-
-	content
-		.lines()
-		.map(|line| {
-			let trimmed = line.trim();
-			if trimmed.eq_ignore_ascii_case("!b") {
-				// Preserve the original indentation
-				let indent = &line[..line.len() - trimmed.len()];
-				format!("{indent}{replacement}")
-			} else {
-				line.to_string()
-			}
-		})
-		.collect::<Vec<_>>()
-		.join("\n")
-}
-
 /// Convert markdown headers to typst format
 pub fn convert_markdown_to_typst(body: &str) -> String {
 	body.lines()
