@@ -306,10 +306,12 @@ pub enum ExactMatchLevel {
 	/// Default fuzzy matching
 	#[default]
 	Fuzzy,
-	/// Exact substring match (fzf --exact)
-	Substring,
-	/// Exact line match (query must match entire line)
-	Line,
+	/// Exact substring match with space-separated terms (fzf --exact)
+	ExactTerms,
+	/// Regex pattern matching (substring)
+	RegexSubstring,
+	/// Regex pattern matching (full line)
+	RegexLine,
 }
 
 impl TryFrom<u8> for ExactMatchLevel {
@@ -318,9 +320,10 @@ impl TryFrom<u8> for ExactMatchLevel {
 	fn try_from(count: u8) -> Result<Self, Self::Error> {
 		match count {
 			0 => Ok(Self::Fuzzy),
-			1 => Ok(Self::Substring),
-			2 => Ok(Self::Line),
-			_ => Err("--exact / -E can be specified at most twice"),
+			1 => Ok(Self::ExactTerms),
+			2 => Ok(Self::RegexSubstring),
+			3 => Ok(Self::RegexLine),
+			_ => Err("--exact / -e can be specified at most 3 times"),
 		}
 	}
 }
@@ -335,6 +338,8 @@ pub fn choose_issue_with_fzf(files: &[PathBuf], initial_query: &str, exact: Exac
 		process::{Command, Stdio},
 	};
 
+	use regex::Regex;
+
 	let issues_base = issues_dir();
 
 	// Prepare file list with relative paths for display
@@ -343,19 +348,51 @@ pub fn choose_issue_with_fzf(files: &[PathBuf], initial_query: &str, exact: Exac
 		.filter_map(|p| p.strip_prefix(&issues_base).ok().map(|rel| rel.to_string_lossy().to_string()))
 		.collect();
 
-	// Build fzf command with appropriate exact match flags
-	let mut cmd = Command::new("fzf");
-
-	// Transform query for line-exact mode by wrapping with ^...$
-	let query = match exact {
-		ExactMatchLevel::Line if !initial_query.is_empty() => format!("^{initial_query}$"),
-		_ => initial_query.to_string(),
+	// For regex modes, pre-filter the file list
+	let (filtered_list, fzf_query): (Vec<&String>, String) = match exact {
+		ExactMatchLevel::Fuzzy | ExactMatchLevel::ExactTerms => {
+			// No pre-filtering, pass query to fzf
+			(file_list.iter().collect(), initial_query.to_string())
+		}
+		ExactMatchLevel::RegexSubstring => {
+			// Pre-filter with regex (substring match)
+			if initial_query.is_empty() {
+				(file_list.iter().collect(), String::new())
+			} else {
+				let re = Regex::new(initial_query).map_err(|e| eyre!("Invalid regex pattern: {e}"))?;
+				let filtered: Vec<&String> = file_list.iter().filter(|f| re.is_match(f)).collect();
+				(filtered, String::new()) // Clear query since we already filtered
+			}
+		}
+		ExactMatchLevel::RegexLine => {
+			// Pre-filter with regex (full line match, auto-anchor if needed)
+			if initial_query.is_empty() {
+				(file_list.iter().collect(), String::new())
+			} else {
+				let pattern = {
+					let has_start = initial_query.starts_with('^');
+					let has_end = initial_query.ends_with('$');
+					match (has_start, has_end) {
+						(true, true) => initial_query.to_string(),
+						(true, false) => format!("{initial_query}$"),
+						(false, true) => format!("^{initial_query}"),
+						(false, false) => format!("^{initial_query}$"),
+					}
+				};
+				let re = Regex::new(&pattern).map_err(|e| eyre!("Invalid regex pattern: {e}"))?;
+				let filtered: Vec<&String> = file_list.iter().filter(|f| re.is_match(f)).collect();
+				(filtered, String::new()) // Clear query since we already filtered
+			}
+		}
 	};
 
-	cmd.arg("--query").arg(&query);
+	// Build fzf command
+	let mut cmd = Command::new("fzf");
 
-	// Add --exact flag for substring and line modes
-	if matches!(exact, ExactMatchLevel::Substring | ExactMatchLevel::Line) {
+	cmd.arg("--query").arg(&fzf_query);
+
+	// Add --exact flag for ExactTerms mode
+	if matches!(exact, ExactMatchLevel::ExactTerms) {
 		cmd.arg("--exact");
 	}
 
@@ -372,7 +409,7 @@ pub fn choose_issue_with_fzf(files: &[PathBuf], initial_query: &str, exact: Exac
 
 	// Write file list to fzf stdin
 	if let Some(stdin) = child.stdin.as_mut() {
-		for file in &file_list {
+		for file in &filtered_list {
 			writeln!(stdin, "{file}")?;
 		}
 	}
@@ -480,9 +517,10 @@ mod tests {
 	#[test]
 	fn test_exact_match_level_try_from() {
 		assert!(matches!(ExactMatchLevel::try_from(0), Ok(ExactMatchLevel::Fuzzy)));
-		assert!(matches!(ExactMatchLevel::try_from(1), Ok(ExactMatchLevel::Substring)));
-		assert!(matches!(ExactMatchLevel::try_from(2), Ok(ExactMatchLevel::Line)));
-		assert!(ExactMatchLevel::try_from(3).is_err());
+		assert!(matches!(ExactMatchLevel::try_from(1), Ok(ExactMatchLevel::ExactTerms)));
+		assert!(matches!(ExactMatchLevel::try_from(2), Ok(ExactMatchLevel::RegexSubstring)));
+		assert!(matches!(ExactMatchLevel::try_from(3), Ok(ExactMatchLevel::RegexLine)));
+		assert!(ExactMatchLevel::try_from(4).is_err());
 		assert!(ExactMatchLevel::try_from(255).is_err());
 	}
 }

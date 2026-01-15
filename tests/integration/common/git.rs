@@ -99,6 +99,16 @@ impl GitExt for TestContext {
 	}
 }
 
+/// Mock comment for remote setup
+struct MockComment {
+	owner: String,
+	repo: String,
+	issue_number: u64,
+	comment_id: u64,
+	body: String,
+	owner_login: String,
+}
+
 /// Builder for setting up mock GitHub remote state.
 ///
 /// Usage:
@@ -112,6 +122,7 @@ pub struct RemoteBuilder<'a> {
 	ctx: &'a TestContext,
 	issues: Vec<MockIssue>,
 	sub_issue_relations: Vec<SubIssueRelation>,
+	comments: Vec<MockComment>,
 }
 impl<'a> RemoteBuilder<'a> {
 	fn new(ctx: &'a TestContext) -> Self {
@@ -119,6 +130,7 @@ impl<'a> RemoteBuilder<'a> {
 			ctx,
 			issues: Vec::new(),
 			sub_issue_relations: Vec::new(),
+			comments: Vec::new(),
 		}
 	}
 
@@ -133,6 +145,21 @@ impl<'a> RemoteBuilder<'a> {
 			state: issue.meta.close_state.to_github_state().to_string(),
 			state_reason: issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
 		});
+
+		// Extract comments (skip first which is the body)
+		for comment in issue.comments.iter().skip(1) {
+			if let Some(id) = comment.id {
+				self.comments.push(MockComment {
+					owner: owner.to_string(),
+					repo: repo.to_string(),
+					issue_number: number,
+					comment_id: id,
+					body: comment.body.clone(),
+					owner_login: if comment.owned { "mock_user".to_string() } else { "other_user".to_string() },
+				});
+			}
+		}
+
 		self
 	}
 
@@ -200,14 +227,29 @@ impl<'a> RemoteBuilder<'a> {
 			})
 			.collect();
 
-		let state = if sub_issues.is_empty() {
-			serde_json::json!({ "issues": issues })
-		} else {
-			serde_json::json!({
-				"issues": issues,
-				"sub_issues": sub_issues
+		// Convert comments to JSON
+		let comments: Vec<serde_json::Value> = self
+			.comments
+			.into_iter()
+			.map(|c| {
+				serde_json::json!({
+					"owner": c.owner,
+					"repo": c.repo,
+					"issue_number": c.issue_number,
+					"comment_id": c.comment_id,
+					"body": c.body,
+					"owner_login": c.owner_login
+				})
 			})
-		};
+			.collect();
+
+		let mut state = serde_json::json!({ "issues": issues });
+		if !sub_issues.is_empty() {
+			state["sub_issues"] = serde_json::Value::Array(sub_issues);
+		}
+		if !comments.is_empty() {
+			state["comments"] = serde_json::Value::Array(comments);
+		}
 
 		self.ctx.setup_mock_state(&state);
 	}

@@ -30,7 +30,8 @@ fn test_comments_with_ids_sync_correctly() {
 	);
 	let issue = parse(&content);
 
-	let path = ctx.setup_issue(OWNER, REPO, 1, &issue);
+	// Use setup_issue_with_local_changes to properly initialize git
+	let path = ctx.setup_issue_with_local_changes(OWNER, REPO, 1, &issue, &issue);
 	ctx.setup_remote(OWNER, REPO, 1, &issue);
 
 	let (status, stdout, stderr) = ctx.open(&path).args(&["--force"]).run();

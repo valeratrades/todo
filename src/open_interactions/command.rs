@@ -33,13 +33,14 @@ pub struct OpenArgs {
 	pub url_or_pattern: Option<String>,
 
 	/// File extension for the output file (overrides config default_extension)
-	#[arg(short = "--ext", long)]
+	#[arg(alias = "--ext", long)]
 	pub extension: Option<Extension>,
 
 	/// Use exact matching in fzf. Can be specified multiple times:
-	/// -E: exact substring match (fzf --exact)
-	/// -EE: exact line match (query must match entire line)
-	#[arg(short = 'E', long, action = clap::ArgAction::Count)]
+	/// -e: exact terms (space-separated; exact matches, but no regex)
+	/// -ee: regex pattern (substring match)
+	/// -eee: regex pattern (full line match, auto-anchored)
+	#[arg(short = 'e', long, action = clap::ArgAction::Count)]
 	pub exact: u8,
 
 	/// Create or open an issue from a path. Path format: workspace/project/issue[.md|.typ]

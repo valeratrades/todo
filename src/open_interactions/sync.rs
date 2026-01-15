@@ -497,6 +497,9 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 pub struct ModifyResult {
 	/// The text to display after the operation (e.g., "Popped: task name")
 	pub output: Option<String>,
+	/// Whether the file was modified by the user.
+	/// When false (and not in integration test mode), skip all sync operations.
+	pub file_modified: bool,
 }
 
 /// A modifier that can be applied to an issue file.
@@ -521,6 +524,9 @@ impl Modifier {
 				let content = issue.serialize();
 				std::fs::write(issue_file_path, &content)?;
 
+				// Record file modification time before opening editor
+				let mtime_before = std::fs::metadata(issue_file_path)?.modified()?;
+
 				// Calculate position if opening at blocker
 				let position = if *open_at_blocker {
 					issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)))
@@ -530,6 +536,10 @@ impl Modifier {
 
 				// Open in editor (blocks until editor closes)
 				crate::utils::open_file(issue_file_path, position).await?;
+
+				// Check if file was modified by comparing modification times
+				let mtime_after = std::fs::metadata(issue_file_path)?.modified()?;
+				let file_modified = mtime_after != mtime_before;
 
 				// Read edited content, expand !b shorthand, and re-parse
 				let raw_content = std::fs::read_to_string(issue_file_path)?;
@@ -543,7 +553,7 @@ impl Modifier {
 				let ctx = ParseContext::new(edited_content.clone(), issue_file_path.display().to_string());
 				*issue = Issue::parse(&edited_content, &ctx)?;
 
-				Ok(ModifyResult { output: None })
+				Ok(ModifyResult { output: None, file_modified })
 			}
 			Modifier::BlockerPop => {
 				use crate::blocker_interactions::BlockerSequenceExt;
@@ -551,7 +561,7 @@ impl Modifier {
 				let popped = issue.blockers.pop();
 				let output = popped.map(|text| format!("Popped: {text}"));
 
-				Ok(ModifyResult { output })
+				Ok(ModifyResult { output, file_modified: true })
 			}
 			Modifier::BlockerAdd { text } => {
 				use crate::blocker_interactions::BlockerSequenceExt;
@@ -559,7 +569,7 @@ impl Modifier {
 				issue.blockers.add(text);
 				let output = None; // will repeat it when printing the current
 
-				Ok(ModifyResult { output })
+				Ok(ModifyResult { output, file_modified: true })
 			}
 		}
 	}
@@ -816,6 +826,14 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 	// Apply the modifier (editor, blocker command, etc.)
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
+
+	// If file was not modified by the user, skip all sync operations and exit early.
+	// This is gated behind cfg to ensure integration tests always run the full sync path.
+	#[cfg(not(feature = "is_integration_test"))]
+	if !result.file_modified {
+		v_utils::log!("Aborted (no changes made)");
+		return Ok(result);
+	}
 
 	// Handle duplicate close type: remove from local storage entirely
 	if let CloseState::Duplicate(dup_number) = issue.meta.close_state {

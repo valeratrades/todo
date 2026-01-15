@@ -187,6 +187,29 @@ impl MockGitHubClient {
 			}
 		}
 
+		// Load comments
+		if let Some(comments_arr) = state.get("comments").and_then(|v| v.as_array()) {
+			let mut comments = self.comments.lock().unwrap();
+			for comment in comments_arr {
+				let owner = comment.get("owner").and_then(|v| v.as_str()).ok_or("missing owner")?;
+				let repo = comment.get("repo").and_then(|v| v.as_str()).ok_or("missing repo")?;
+				let issue_number = comment.get("issue_number").and_then(|v| v.as_u64()).ok_or("missing issue_number")?;
+				let comment_id = comment.get("comment_id").and_then(|v| v.as_u64()).ok_or("missing comment_id")?;
+				let body = comment.get("body").and_then(|v| v.as_str()).unwrap_or("");
+				let owner_login = comment.get("owner_login").and_then(|v| v.as_str()).unwrap_or("mock_user");
+
+				let key = RepoKey::new(owner, repo);
+				let comment_data = MockCommentData {
+					id: comment_id,
+					issue_number,
+					body: body.to_string(),
+					owner_login: owner_login.to_string(),
+				};
+
+				comments.entry(key).or_default().insert(comment_id, comment_data);
+			}
+		}
+
 		Ok(())
 	}
 
