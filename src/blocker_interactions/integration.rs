@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, bail, eyre};
-use todo::{DisplayFormat, Issue, Marker, ParseContext};
+use todo::{DisplayFormat, Issue, Marker};
 
 use super::{BlockerSequence, operations::BlockerSequenceExt};
 use crate::open_interactions::files::{ExactMatchLevel, choose_issue_with_fzf, issues_dir, search_issue_files};
@@ -56,17 +56,12 @@ impl IssueSource {
 			.map(|p| p.to_string_lossy().to_string())
 			.unwrap_or_else(|_| self.issue_path.to_string_lossy().to_string())
 	}
-
-	fn filename(&self) -> String {
-		self.issue_path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "issue".to_string())
-	}
 }
 
 impl super::source::BlockerSource for IssueSource {
 	fn load(&self) -> Result<BlockerSequence> {
 		let content = std::fs::read_to_string(&self.issue_path)?;
-		let ctx = ParseContext::new(content.clone(), self.filename());
-		let issue = Issue::parse(&content, &ctx).map_err(|e| eyre!("Failed to parse issue: {e}"))?;
+		let issue = Issue::parse(&content, &self.issue_path).map_err(|e| eyre!("Failed to parse issue: {e}"))?;
 
 		// Clone the blockers before caching the issue
 		let blockers = issue.blockers.clone();
@@ -285,7 +280,7 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 
 #[cfg(test)]
 mod tests {
-	use todo::ParseContext;
+	use std::path::Path;
 
 	use super::*;
 
@@ -310,8 +305,7 @@ mod tests {
 	# Phase 2
 	- Third task
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		assert!(!issue.blockers.is_empty());
 		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
@@ -335,8 +329,7 @@ mod tests {
 	# Phase 2
 	- Third task
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		assert_eq!(issue.blockers.current_with_context(&[]), Some("Phase 2: Third task".to_string()));
 
@@ -354,8 +347,7 @@ mod tests {
 	- Second task
 	- Third task
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let mut issue = Issue::parse(content, &ctx).unwrap();
+		let mut issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		issue.blockers.pop();
 
@@ -374,8 +366,7 @@ mod tests {
 	- First task
 	- Second task
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		let serialized = issue.serialize();
 		assert!(serialized.contains("# Blockers"));
@@ -389,8 +380,7 @@ mod tests {
 	Just some regular body text without blockers marker.
 	- This is NOT a blocker, just body content.
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		assert!(issue.blockers.is_empty());
 	}
@@ -407,8 +397,7 @@ mod tests {
 	- [ ] Sub-issue <!--sub https://github.com/owner/repo/issues/2 -->
 		Sub-issue body
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		// Blockers should only contain the blocker items, not the sub-issue
 		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"

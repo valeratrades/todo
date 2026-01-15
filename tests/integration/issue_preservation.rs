@@ -3,13 +3,14 @@
 //! Tests that nested issues, blockers, and other content survive the
 //! parse -> edit -> serialize -> sync cycle intact.
 
-use todo::{Issue, ParseContext};
+use std::path::Path;
+
+use todo::Issue;
 
 use crate::common::{TestContext, git::GitExt};
 
 fn parse(content: &str) -> Issue {
-	let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-	Issue::parse(content, &ctx).expect("failed to parse test issue")
+	Issue::parse(content, Path::new("test.md")).expect("failed to parse test issue")
 }
 
 #[test]

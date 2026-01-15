@@ -355,12 +355,24 @@ impl Issue {
 
 	/// Parse markdown content into an Issue.
 	/// Returns an error with a detailed message if any part of the file cannot be understood.
-	//TODO!!!: remove resource duplication from storing `content` both here and in taken `ParseContext`
-	pub fn parse(content: &str, ctx: &ParseContext) -> Result<Self, ParseError> {
+	pub fn parse(content: &str, path: &std::path::Path) -> Result<Self, ParseError> {
+		let ctx = ParseContext::new(content.to_string(), path.display().to_string());
+
+		//TODO!!!!!!: make parse aware of Extension
+		let extension = path
+			.extension()
+			.and_then(|e| e.to_str())
+			.map(|ext| match ext {
+				"md" => crate::Extension::Md,
+				"typ" => crate::Extension::Typ,
+				_ => crate::Extension::Md,
+			})
+			.unwrap_or(crate::Extension::Md);
+
 		let normalized = normalize_issue_indentation(content);
 		let mut lines = normalized.lines().peekable();
 
-		Self::parse_at_depth(&mut lines, 0, 1, ctx)
+		Self::parse_at_depth(&mut lines, 0, 1, &ctx)
 	}
 
 	/// Parse an issue at given nesting depth (0 = root, 1 = sub-issue, etc.)
@@ -530,8 +542,8 @@ impl Issue {
 
 			// Check for sub-issue line: `- [x] Title <!--sub url-->` or `- [ ] Title` (new)
 			if content.starts_with("- [") {
-				let child_meta = match Self::parse_child_title_line_detailed(content) {
-					ChildTitleParseResult::Ok(meta) => meta,
+				let is_child_title = match Self::parse_child_title_line_detailed(content) {
+					ChildTitleParseResult::Ok(_) => true,
 					ChildTitleParseResult::InvalidCheckbox(invalid_content) => {
 						return Err(ParseError::InvalidCheckbox {
 							src: ctx.named_source(),
@@ -539,17 +551,20 @@ impl Issue {
 							content: invalid_content,
 						});
 					}
-					ChildTitleParseResult::NotChildTitle => {
-						// Not a sub-issue line, treat as regular content
-						let content_line = content.strip_prefix('\t').unwrap_or(content);
-						if in_body {
-							body_lines.push(content_line.to_string());
-						} else if current_comment_meta.is_some() {
-							current_comment_lines.push(content_line.to_string());
-						}
-						continue;
-					}
+					ChildTitleParseResult::NotChildTitle => false,
 				};
+
+				if !is_child_title {
+					// Not a sub-issue line, treat as regular content
+					let content_line = content.strip_prefix('\t').unwrap_or(content);
+					if in_body {
+						body_lines.push(content_line.to_string());
+					} else if current_comment_meta.is_some() {
+						current_comment_lines.push(content_line.to_string());
+					}
+					continue;
+				}
+
 				// Flush current
 				if in_body {
 					in_body = false;
@@ -565,58 +580,36 @@ impl Issue {
 					current_comment_lines.clear();
 				}
 
-				// Parse child's body content (lines at depth + 2 indentation)
-				let child_body_indent = "\t".repeat(depth + 2);
-				let mut child_body_lines: Vec<String> = Vec::new();
+				// Collect all lines belonging to this child (at depth+1 and deeper)
+				let child_content_indent = "\t".repeat(depth + 2);
+				let mut child_lines: Vec<String> = vec![content.to_string()]; // Start with the title line (without parent indent)
 
 				while let Some(&next_line) = lines.peek() {
-					// Child body lines are at depth + 2 (one more than the child title's depth + 1)
 					if next_line.is_empty() {
-						// Preserve empty lines within child content
+						// Preserve empty lines
 						let _ = lines.next();
-						child_body_lines.push(String::new());
-					} else if next_line.starts_with(&child_body_indent) {
+						child_lines.push(String::new());
+					} else if next_line.starts_with(&child_content_indent) {
 						let _ = lines.next();
-						// Strip the child body indent to get actual content
-						let body_content = next_line.strip_prefix(&child_body_indent).unwrap_or("");
-						// Skip vim fold markers (they're just display markers)
-						if body_content.starts_with("<!--omitted") && body_content.contains("{{{") {
-							continue;
-						}
-						if body_content.starts_with("<!--,}}}") {
-							continue;
-						}
-						child_body_lines.push(body_content.to_string());
+						// Strip one level of indent (the child's content indent) to normalize for recursive parsing
+						let stripped = next_line.strip_prefix(&child_indent).unwrap_or(next_line);
+						child_lines.push(stripped.to_string());
 					} else {
-						// Not a child body line - break
+						// Not a child content line - break
 						break;
 					}
 				}
 
 				// Trim trailing empty lines
-				while child_body_lines.last().is_some_and(|l| l.is_empty()) {
-					child_body_lines.pop();
+				while child_lines.last().is_some_and(|l| l.is_empty()) {
+					child_lines.pop();
 				}
 
-				let child_body = child_body_lines.join("\n").trim().to_string();
-				let child_comments = if child_body.is_empty() {
-					vec![]
-				} else {
-					vec![Comment {
-						identity: CommentIdentity::Body,
-						body: child_body,
-						owned: child_meta.owned,
-					}]
-				};
-
-				children.push(Issue {
-					meta: child_meta,
-					labels: vec![],
-					comments: child_comments,
-					children: vec![],
-					blockers: BlockerSequence::default(),
-					last_contents_change: None, // Set from GitHub when syncing
-				});
+				// Recursively parse the child
+				let child_content = child_lines.join("\n");
+				let mut child_lines_iter = child_content.lines().peekable();
+				let child = Self::parse_at_depth(&mut child_lines_iter, 0, current_line, ctx)?;
+				children.push(child);
 				continue;
 			}
 
@@ -1107,24 +1100,25 @@ mod tests {
 
 	#[test]
 	fn test_parse_invalid_checkbox_returns_error() {
+		use std::path::Path;
+
 		// Invalid checkbox on root issue
 		let content = "- [abc] Invalid issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody\n";
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let result = Issue::parse(content, &ctx);
+		let result = Issue::parse(content, Path::new("test.md"));
 		assert!(matches!(result, Err(ParseError::InvalidCheckbox { content, .. }) if content == "abc"));
 
 		// Invalid checkbox on sub-issue
 		let content = "- [ ] Parent <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t- [xyz] Bad sub <!--sub https://github.com/owner/repo/issues/2 -->\n";
-		let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-		let result = Issue::parse(content, &ctx);
+		let result = Issue::parse(content, Path::new("test.md"));
 		assert!(matches!(result, Err(ParseError::InvalidCheckbox { content, .. }) if content == "xyz"));
 	}
 
 	#[test]
 	fn test_parse_and_serialize_not_planned() {
+		use std::path::Path;
+
 		let content = "- [-] Not planned issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		assert_eq!(issue.meta.close_state, CloseState::NotPlanned);
 		assert_eq!(issue.meta.title, "Not planned issue");
@@ -1136,9 +1130,10 @@ mod tests {
 
 	#[test]
 	fn test_parse_and_serialize_duplicate() {
+		use std::path::Path;
+
 		let content = "- [456] Duplicate issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		assert_eq!(issue.meta.close_state, CloseState::Duplicate(456));
 		assert_eq!(issue.meta.title, "Duplicate issue");
@@ -1150,6 +1145,8 @@ mod tests {
 
 	#[test]
 	fn test_parse_sub_issue_close_types() {
+		use std::path::Path;
+
 		let content = r#"- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
 	Body
 
@@ -1168,8 +1165,7 @@ mod tests {
 		duplicate body
 		<!--,}}}-->
 "#;
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		insta::assert_snapshot!(issue.serialize(), @"
 		- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
 			Body
@@ -1193,17 +1189,19 @@ mod tests {
 
 	#[test]
 	fn test_find_last_blocker_position_empty() {
+		use std::path::Path;
+
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		assert!(issue.find_last_blocker_position().is_none());
 	}
 
 	#[test]
 	fn test_find_last_blocker_position_single_item() {
+		use std::path::Path;
+
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- task 1\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		let pos = issue.find_last_blocker_position();
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
@@ -1214,9 +1212,10 @@ mod tests {
 
 	#[test]
 	fn test_find_last_blocker_position_multiple_items() {
+		use std::path::Path;
+
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- task 1\n\t- task 2\n\t- task 3\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		let pos = issue.find_last_blocker_position();
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
@@ -1226,9 +1225,10 @@ mod tests {
 
 	#[test]
 	fn test_find_last_blocker_position_with_headers() {
+		use std::path::Path;
+
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t# Phase 1\n\t- task a\n\t# Phase 2\n\t- task b\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		let pos = issue.find_last_blocker_position();
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
@@ -1238,10 +1238,11 @@ mod tests {
 
 	#[test]
 	fn test_find_last_blocker_position_before_sub_issues() {
+		use std::path::Path;
+
 		let content =
 			"- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- blocker task\n\n\t- [ ] Sub issue <!--sub https://github.com/owner/repo/issues/2 -->\n";
-		let ctx = ParseContext::new(content.to_string(), "test".to_string());
-		let issue = Issue::parse(content, &ctx).unwrap();
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		let pos = issue.find_last_blocker_position();
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();

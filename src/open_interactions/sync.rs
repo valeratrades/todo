@@ -87,7 +87,7 @@ use std::path::Path;
 
 use miette::Diagnostic;
 use thiserror::Error;
-use todo::{CloseState, Extension, FetchedIssue, Issue, ParseContext};
+use todo::{CloseState, Extension, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
 use super::{
@@ -308,8 +308,7 @@ async fn apply_merge_mode(
 				// handle_divergence bails on conflict, so if we reach here it means merge succeeded
 				// Re-read the merged file
 				let merged_content = std::fs::read_to_string(issue_file_path)?;
-				let ctx = ParseContext::new(merged_content.clone(), issue_file_path.display().to_string());
-				let merged = Issue::parse(&merged_content, &ctx)?;
+				let merged = Issue::parse(&merged_content, issue_file_path)?;
 				Ok((merged, false, true)) // File already written by merge, push to remote
 			} else {
 				// No conflicts, use resolution results
@@ -553,8 +552,7 @@ impl Modifier {
 
 				// Read edited content and re-parse
 				let content = std::fs::read_to_string(issue_file_path)?;
-				let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
-				*issue = Issue::parse(&content, &ctx)?;
+				*issue = Issue::parse(&content, issue_file_path)?;
 
 				Ok(ModifyResult { output: None, file_modified })
 			}
@@ -780,8 +778,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 	// Read and parse the current issue state
 	let content = std::fs::read_to_string(issue_file_path)?;
-	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
-	let mut issue = Issue::parse(&content, &ctx)?;
+	let mut issue = Issue::parse(&content, issue_file_path)?;
 
 	// Handle --pull: fetch and sync from remote BEFORE opening editor
 	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
@@ -903,8 +900,7 @@ pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) ->
 
 	// Read and parse the current issue state
 	let content = std::fs::read_to_string(issue_file_path)?;
-	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
-	let mut issue = Issue::parse(&content, &ctx)?;
+	let mut issue = Issue::parse(&content, issue_file_path)?;
 
 	// Apply the modifier (blocker command)
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;

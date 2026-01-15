@@ -5,7 +5,7 @@
 
 use std::{path::Path, process::Command};
 
-use todo::{Issue, ParseContext};
+use todo::Issue;
 use v_utils::prelude::*;
 
 use super::files::issues_dir;
@@ -84,8 +84,7 @@ pub fn read_committed_content(file_path: &Path) -> GitTrackingStatus {
 pub fn load_consensus_issue(file_path: &Path) -> Option<Issue> {
 	match read_committed_content(file_path) {
 		GitTrackingStatus::Tracked(content) => {
-			let ctx = ParseContext::new(content.clone(), file_path.display().to_string());
-			let issue = Issue::parse(&content, &ctx).unwrap_or_else(|e| {
+			let issue = Issue::parse(&content, file_path).unwrap_or_else(|e| {
 				panic!(
 					"BUG: Failed to parse committed consensus issue.\n\
 					 File: {}\n\

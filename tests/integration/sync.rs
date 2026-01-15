@@ -9,13 +9,14 @@
 //! The mock GitHub layer translates to API format at the boundary.
 
 use rstest::rstest;
-use todo::{Issue, ParseContext};
+use std::path::Path;
+
+use todo::Issue;
 
 use crate::common::{TestContext, git::GitExt};
 
 fn parse(content: &str) -> Issue {
-	let ctx = ParseContext::new(content.to_string(), "test.md".to_string());
-	Issue::parse(content, &ctx).expect("failed to parse test issue")
+	Issue::parse(content, Path::new("test.md")).expect("failed to parse test issue")
 }
 
 #[test]
