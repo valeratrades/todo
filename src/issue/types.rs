@@ -117,7 +117,7 @@ impl FetchedIssue {
 }
 
 use super::{
-	blocker::{join_with_blockers, BlockerSequence, classify_line},
+	blocker::{BlockerSequence, classify_line, join_with_blockers},
 	error::{ParseContext, ParseError},
 	util::{is_blockers_marker, normalize_issue_indentation},
 };
@@ -401,8 +401,9 @@ impl Issue {
 				}
 			}
 
-			// Check for comment marker
-			if content.starts_with("<!--") && content.contains("-->") {
+			// Check for comment marker (including !c shorthand)
+			let is_new_comment_shorthand = content.trim().eq_ignore_ascii_case("!c");
+			if is_new_comment_shorthand || (content.starts_with("<!--") && content.contains("-->")) {
 				// Flush previous
 				if in_body {
 					in_body = false;
@@ -412,6 +413,12 @@ impl Issue {
 					let body = current_comment_lines.join("\n").trim().to_string();
 					comments.push(Comment { id, body, owned });
 					current_comment_lines.clear();
+				}
+
+				// Handle !c shorthand
+				if is_new_comment_shorthand {
+					current_comment_meta = Some((None, true));
+					continue;
 				}
 
 				let inner = content.strip_prefix("<!--").and_then(|s| s.split("-->").next()).unwrap_or("").trim();

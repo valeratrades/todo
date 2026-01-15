@@ -481,13 +481,4 @@ fn test_comment_shorthand_creates_comment() {
 
 	// Verify comment creation was triggered
 	assert!(stdout.contains("Creating new comment"), "Should create a new comment when !c is used. stdout: {stdout}");
-
-	//XXX: very very bad assert. Refer to https://matklad.github.io/2021/05/31/how-to-test.html for why
-	//// Verify the file was updated with expanded marker
-	//let final_content = std::fs::read_to_string(&issue_path).unwrap();
-	//assert!(
-	//	final_content.contains("<!-- new comment -->"),
-	//	"!c should be expanded to <!-- new comment -->. Got: {final_content}"
-	//);
-	//assert!(!final_content.contains("!c"), "!c shorthand should be replaced. Got: {final_content}");
 }

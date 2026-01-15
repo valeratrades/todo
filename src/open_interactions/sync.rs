@@ -515,8 +515,8 @@ pub enum Modifier {
 
 impl Modifier {
 	/// Apply this modifier to an issue. Returns output to display.
-	#[tracing::instrument(level = "debug", skip(issue, extension))]
-	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, extension: &Extension) -> Result<ModifyResult> {
+	#[tracing::instrument(level = "debug", skip(issue, _extension))]
+	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, _extension: &Extension) -> Result<ModifyResult> {
 		match self {
 			Modifier::Editor { open_at_blocker } => {
 				// Serialize current state
@@ -540,18 +540,10 @@ impl Modifier {
 				let mtime_after = std::fs::metadata(issue_file_path)?.modified()?;
 				let file_modified = mtime_after != mtime_before;
 
-				// Read edited content, expand shorthands (!b, !c), and re-parse
-				let raw_content = std::fs::read_to_string(issue_file_path)?;
-				let edited_content = expand_blocker_shorthand(&raw_content, extension);
-				let edited_content = expand_comment_shorthand(&edited_content, extension);
-
-				// Write back if shorthands were expanded
-				if edited_content != raw_content {
-					std::fs::write(issue_file_path, &edited_content)?;
-				}
-
-				let ctx = ParseContext::new(edited_content.clone(), issue_file_path.display().to_string());
-				*issue = Issue::parse(&edited_content, &ctx)?;
+				// Read edited content and re-parse
+				let content = std::fs::read_to_string(issue_file_path)?;
+				let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
+				*issue = Issue::parse(&content, &ctx)?;
 
 				Ok(ModifyResult { output: None, file_modified })
 			}
@@ -783,13 +775,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	};
 
 	// Read and parse the current issue state
-	let raw_content = std::fs::read_to_string(issue_file_path)?;
-	let content = expand_blocker_shorthand(&raw_content, &extension);
-	let content = expand_comment_shorthand(&content, &extension);
-	if content != raw_content {
-		std::fs::write(issue_file_path, &content)?;
-	}
-
+	let content = std::fs::read_to_string(issue_file_path)?;
 	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
 	let mut issue = Issue::parse(&content, &ctx)?;
 
@@ -912,13 +898,7 @@ pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) ->
 	};
 
 	// Read and parse the current issue state
-	let raw_content = std::fs::read_to_string(issue_file_path)?;
-	let content = expand_blocker_shorthand(&raw_content, &extension);
-	let content = expand_comment_shorthand(&content, &extension);
-	if content != raw_content {
-		std::fs::write(issue_file_path, &content)?;
-	}
-
+	let content = std::fs::read_to_string(issue_file_path)?;
 	let ctx = ParseContext::new(content.clone(), issue_file_path.display().to_string());
 	let mut issue = Issue::parse(&content, &ctx)?;
 
