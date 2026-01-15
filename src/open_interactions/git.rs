@@ -34,7 +34,9 @@ pub fn read_committed_content(file_path: &Path) -> Option<String> {
 	}
 
 	// Read file content from HEAD
-	let output = Command::new("git").args(["-C", data_dir_str, "show", &format!("HEAD:{rel_path_str}")]).output().ok()?;
+	// Note: HEAD:./path is needed because git show HEAD:path expects repo-root-relative paths,
+	// but we're running from a subdirectory (issues_dir). The ./ prefix makes it cwd-relative.
+	let output = Command::new("git").args(["-C", data_dir_str, "show", &format!("HEAD:./{rel_path_str}")]).output().ok()?;
 
 	if output.status.success() { String::from_utf8(output.stdout).ok() } else { None }
 }

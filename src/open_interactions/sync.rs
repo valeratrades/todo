@@ -108,7 +108,7 @@ use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient}
 #[derive(Debug, Diagnostic, Error)]
 pub enum PushError {
 	/// Local file references a comment ID that doesn't exist on GitHub.
-	/// This typically happens when comment IDs are manually edited in the local file.
+	/// This typically happens when comment IDs were manually edited in the local file.
 	#[error("comment {comment_id} not found in consensus")]
 	#[diagnostic(
 		code(todo::sync::id_mismatch),
@@ -117,6 +117,15 @@ pub enum PushError {
 		)
 	)]
 	IdMismatch { comment_id: u64 },
+
+	/// Consensus state could not be loaded from git.
+	/// This indicates a bug - if the file is tracked, consensus should always be readable.
+	#[error("failed to load consensus from git for tracked issue")]
+	#[diagnostic(
+		code(todo::sync::consensus_missing),
+		help("The issue file exists but its committed state couldn't be read from git.\nThis is likely a bug. Please report it.")
+	)]
+	ConsensusMissing,
 }
 
 //=============================================================================
@@ -645,15 +654,8 @@ async fn sync_issue_to_github_inner(
 
 	// Push root issue changes (body, comments, state) - skip for newly created issues
 	let state_changed = if created_issue_number.is_none() && final_issue_number != 0 {
-		let consensus_for_sync = consensus.as_ref().cloned().unwrap_or_else(|| Issue {
-			meta: issue.meta.clone(),
-			labels: vec![],
-			comments: vec![],
-			children: vec![],
-			blockers: Default::default(),
-			last_contents_change: None,
-		});
-		sync_local_issue_to_github(gh, owner, repo, final_issue_number, &consensus_for_sync, issue).await?
+		let consensus_for_sync = consensus.as_ref().ok_or(PushError::ConsensusMissing)?;
+		sync_local_issue_to_github(gh, owner, repo, final_issue_number, consensus_for_sync, issue).await?
 	} else {
 		false
 	};
