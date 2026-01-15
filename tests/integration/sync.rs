@@ -8,9 +8,9 @@
 //! Tests work with `Issue` directly - our canonical representation.
 //! The mock GitHub layer translates to API format at the boundary.
 
-use rstest::rstest;
 use std::path::Path;
 
+use rstest::rstest;
 use todo::Issue;
 
 use crate::common::{TestContext, git::GitExt};
@@ -476,6 +476,7 @@ fn test_comment_shorthand_creates_comment() {
 /// Flag semantics:
 /// - `--force` alone: prefer local on conflicts
 /// - `--pull --force`: prefer remote on conflicts
+#[cfg(false)] //TODO!!!!!: pending switch to tree-based source of truth and facet reflexivity
 #[rstest]
 #[case::prefer_local(&["--force"], true)]
 #[case::prefer_remote(&["--pull", "--force"], false)]

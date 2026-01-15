@@ -311,18 +311,43 @@ async fn apply_merge_mode(
 		}
 		MergeMode::Force { prefer } => {
 			if resolution.has_conflicts {
+				// Force mode resolves conflicts by taking the preferred side's content,
+				// but non-conflicting additions from both sides are preserved.
+				// Start with resolution.resolved which has merged non-conflicting changes.
+				let mut merged = resolution.resolved.clone();
+
+				// Apply preferred side's content to conflicting nodes
+				for path in &resolution.conflict_paths {
+					match prefer {
+						Side::Local => {
+							// Apply local content to this node
+							if let Some(local_node) = get_node_at_path(local, path) {
+								if let Some(merged_node) = get_node_at_path_mut(&mut merged, path) {
+									apply_node_content(merged_node, local_node);
+								}
+							}
+						}
+						Side::Remote => {
+							// Apply remote content to this node
+							if let Some(remote_node) = get_node_at_path(remote, path) {
+								if let Some(merged_node) = get_node_at_path_mut(&mut merged, path) {
+									apply_node_content(merged_node, remote_node);
+								}
+							}
+						}
+					}
+				}
+
 				match prefer {
 					Side::Local => {
-						// Force local: keep local version, push to remote
-						tracing::debug!("[sync] Force mode: taking local version, pushing to remote");
-						println!("Force: taking local version (conflicts overwritten)");
-						Ok((local.clone(), false, true))
+						tracing::debug!("[sync] Force mode: resolved conflicts with local, preserving non-conflicting changes");
+						println!("Force: local wins on conflicts (non-conflicting changes merged)");
+						Ok((merged, resolution.local_needs_update, true))
 					}
 					Side::Remote => {
-						// Force remote: take remote version, don't push
-						tracing::debug!("[sync] Force mode: taking remote version");
-						println!("Force: taking remote version (local overwritten)");
-						Ok((remote.clone(), true, false))
+						tracing::debug!("[sync] Force mode: resolved conflicts with remote, preserving non-conflicting changes");
+						println!("Force: remote wins on conflicts (non-conflicting changes merged)");
+						Ok((merged, true, resolution.remote_needs_update))
 					}
 				}
 			} else {
@@ -348,6 +373,44 @@ async fn apply_merge_mode(
 			}
 		}
 	}
+}
+
+/// Get an immutable reference to a node at the given path in the issue tree.
+fn get_node_at_path<'a>(issue: &'a Issue, path: &[usize]) -> Option<&'a Issue> {
+	if path.is_empty() {
+		return Some(issue);
+	}
+	let mut current = issue;
+	for &idx in path {
+		current = current.children.get(idx)?;
+	}
+	Some(current)
+}
+
+/// Get a mutable reference to a node at the given path in the issue tree.
+fn get_node_at_path_mut<'a>(issue: &'a mut Issue, path: &[usize]) -> Option<&'a mut Issue> {
+	if path.is_empty() {
+		return Some(issue);
+	}
+	let mut current = issue;
+	for &idx in path {
+		current = current.children.get_mut(idx)?;
+	}
+	Some(current)
+}
+
+/// Apply the content of one issue node to another (body, comments, state, labels).
+/// Does NOT modify children - only the node's own content.
+fn apply_node_content(target: &mut Issue, source: &Issue) {
+	target.meta.close_state = source.meta.close_state.clone();
+	target.labels = source.labels.clone();
+	target.blockers = source.blockers.clone();
+
+	// Copy comments (body is first comment)
+	target.comments = source.comments.clone();
+
+	// Update timestamp
+	target.last_contents_change = source.last_contents_change;
 }
 
 /// Handle divergence: both local and remote changed since last sync.
