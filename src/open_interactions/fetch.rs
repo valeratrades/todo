@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 
-use todo::{CloseState, Extension, FetchedIssue};
+use todo::{CloseState, Extension, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
 use super::{
 	files::{find_issue_file, get_issue_dir_path, get_issue_file_path, get_main_file_path},
-	format::format_issue,
+	github_sync::IssueGithubExt,
 };
 use crate::github::{BoxedGithubClient, GithubIssue};
 
@@ -138,9 +138,11 @@ async fn store_issue_node(
 		std::fs::create_dir_all(parent)?;
 	}
 
-	// Format and write content
-	// use_local_subissue_content: false because we're fetching fresh from remote - don't mix in stale local content
-	let content = format_issue(issue, comments, &filtered_sub_issues, owner, repo, current_user, *extension, &ancestors, false);
+	// Convert GitHub data to Issue struct, then serialize for filesystem storage
+	// Note: from_github takes sub_issues for building children metadata, but serialize_filesystem
+	// doesn't embed them (they're stored as separate files via the recursive calls below)
+	let issue_struct = Issue::from_github(issue, comments, &filtered_sub_issues, owner, repo, current_user);
+	let content = issue_struct.serialize_filesystem(*extension);
 	std::fs::write(&issue_file_path, &content)?;
 
 	// Build ancestors for children (current issue becomes part of ancestors)

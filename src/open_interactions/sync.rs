@@ -286,6 +286,7 @@ async fn apply_merge_mode(
 	owner: &str,
 	repo: &str,
 	issue_number: u64,
+	extension: Extension,
 ) -> Result<(Issue, bool, bool)> {
 	// First, do the standard tree resolution to detect conflicts
 	let resolution = resolve_tree(local, consensus, remote);
@@ -295,7 +296,7 @@ async fn apply_merge_mode(
 			if resolution.has_conflicts {
 				// Normal mode with conflicts: trigger git merge
 				tracing::debug!("[sync] Unresolvable conflicts detected at paths: {:?}", resolution.conflict_paths);
-				handle_divergence(issue_file_path, owner, repo, issue_number, remote).await?;
+				handle_divergence(issue_file_path, owner, repo, issue_number, remote, extension).await?;
 				// handle_divergence bails on conflict, so if we reach here it means merge succeeded
 				// Re-read the merged file
 				let merged_content = std::fs::read_to_string(issue_file_path)?;
@@ -415,7 +416,7 @@ fn apply_node_content(target: &mut Issue, source: &Issue) {
 
 /// Handle divergence: both local and remote changed since last sync.
 /// Creates a local `remote-state` branch with remote changes and initiates a git merge.
-async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issue_number: u64, remote_issue: &Issue) -> Result<()> {
+async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issue_number: u64, remote_issue: &Issue, extension: Extension) -> Result<()> {
 	use std::process::Command;
 
 	use super::files::issues_dir;
@@ -481,7 +482,7 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 	}
 
 	// Write remote state to the issue file
-	let remote_content = remote_issue.serialize();
+	let remote_content = remote_issue.serialize_virtual(extension);
 	std::fs::write(issue_file_path, &remote_content)?;
 
 	// Commit remote state (if there are any changes)
@@ -579,12 +580,12 @@ pub enum Modifier {
 
 impl Modifier {
 	/// Apply this modifier to an issue. Returns output to display.
-	#[tracing::instrument(level = "debug", skip(issue, _extension))]
-	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, _extension: &Extension) -> Result<ModifyResult> {
+	#[tracing::instrument(level = "debug", skip(issue, extension))]
+	async fn apply(&self, issue: &mut Issue, issue_file_path: &Path, extension: &Extension) -> Result<ModifyResult> {
 		match self {
 			Modifier::Editor { open_at_blocker } => {
 				// Serialize current state
-				let content = issue.serialize();
+				let content = issue.serialize_virtual(*extension);
 				std::fs::write(issue_file_path, &content)?;
 
 				// Record file modification time before opening editor
@@ -592,7 +593,7 @@ impl Modifier {
 
 				// Calculate position if opening at blocker
 				let position = if *open_at_blocker {
-					issue.find_last_blocker_position().map(|(line, col)| crate::utils::Position::new(line, Some(col)))
+					issue.find_last_blocker_position(*extension).map(|(line, col)| crate::utils::Position::new(line, Some(col)))
 				} else {
 					None
 				};
@@ -667,14 +668,15 @@ async fn sync_issue_to_github_inner(
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
 		// Apply merge mode to get the merged result
-		let (merged, local_needs_update, remote_needs_update) = apply_merge_mode(issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, owner, repo, issue_number).await?;
+		let (merged, local_needs_update, remote_needs_update) =
+			apply_merge_mode(issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, owner, repo, issue_number, extension).await?;
 
 		// Update issue with merged result
 		*issue = merged;
 
 		// Write local file if it needs updating
 		if local_needs_update {
-			let content = issue.serialize();
+			let content = issue.serialize_virtual(extension);
 			std::fs::write(issue_file_path, &content)?;
 		}
 
@@ -707,7 +709,7 @@ async fn sync_issue_to_github_inner(
 		let (executed, _) = execute_issue_actions(gh, owner, repo, issue, create_actions).await?;
 		if executed > 0 {
 			// Re-serialize to save the new URLs
-			let serialized = issue.serialize();
+			let serialized = issue.serialize_virtual(extension);
 			std::fs::write(issue_file_path, &serialized)?;
 			tracing::debug!("[sync] Post-sync: created {executed} new sub-issue(s)");
 		}
@@ -857,12 +859,12 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 
 		// Apply merge mode through unified sync logic
 		let (merged, local_needs_update, _remote_needs_update) =
-			apply_merge_mode(&issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number).await?;
+			apply_merge_mode(&issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number, extension).await?;
 
 		if local_needs_update {
 			// Write merged result to local file
 			issue = merged;
-			let content = issue.serialize();
+			let content = issue.serialize_virtual(extension);
 			std::fs::write(issue_file_path, &content)?;
 			commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
 		} else if issue != merged {
@@ -924,7 +926,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 	}
 
 	// Serialize the (potentially updated) Issue back to markdown
-	let serialized = issue.serialize();
+	let serialized = issue.serialize_virtual(extension);
 
 	// Write the normalized/updated content back
 	std::fs::write(issue_file_path, &serialized)?;
@@ -967,7 +969,7 @@ pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) ->
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
 	// Serialize the (potentially updated) Issue back to markdown
-	let serialized = issue.serialize();
+	let serialized = issue.serialize_virtual(extension);
 
 	// Write the normalized/updated content back
 	std::fs::write(issue_file_path, &serialized)?;

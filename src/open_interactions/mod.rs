@@ -7,7 +7,6 @@ mod command;
 mod conflict;
 mod fetch;
 pub(crate) mod files;
-mod format;
 mod git;
 mod github_sync;
 mod meta;

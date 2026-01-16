@@ -787,29 +787,35 @@ impl Issue {
 		}
 	}
 
-	/// Serialize the issue back to markdown
-	pub fn serialize(&self) -> String {
-		self.serialize_at_depth(0)
+	//==========================================================================
+	// Serialization Methods
+	//==========================================================================
+
+	/// Serialize for virtual file representation (human-readable, full tree).
+	/// Creates a complete markdown file with all children recursively embedded.
+	/// Used for temp files in /tmp where user views/edits the full issue tree.
+	pub fn serialize_virtual(&self, ext: crate::Extension) -> String {
+		self.serialize_virtual_at_depth(0, ext)
 	}
 
-	/// Serialize at given nesting depth
-	fn serialize_at_depth(&self, depth: usize) -> String {
+	/// Internal: serialize virtual representation at given depth
+	fn serialize_virtual_at_depth(&self, depth: usize, ext: crate::Extension) -> String {
 		let indent = "\t".repeat(depth);
 		let content_indent = "\t".repeat(depth + 1);
 		let mut out = String::new();
 
-		// Title line: `- [x] [label1, label2] Title <!-- url -->` or `- [ ] Title <!-- url -->` if no labels
-		// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
+		// Title line - root uses `<!-- url -->`, children use `<!--sub url -->`
 		let checked = self.meta.close_state.to_checkbox();
 		let url_part = self.meta.identity.url_str().unwrap_or("");
 		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
+		let marker = if depth == 0 { " " } else { "sub " };
 		if self.meta.owned {
-			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!-- {url_part} -->\n", self.meta.title));
+			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{url_part} -->\n", self.meta.title));
 		} else {
-			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--immutable {url_part} -->\n", self.meta.title));
+			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--immutable{marker}{url_part} -->\n", self.meta.title));
 		}
 
-		// Body (first comment, no marker)
+		// Body (first comment)
 		if let Some(body_comment) = self.comments.first() {
 			let comment_indent = if body_comment.owned { &content_indent } else { &format!("{content_indent}\t") };
 			if !body_comment.body.is_empty() {
@@ -819,19 +825,16 @@ impl Issue {
 			}
 		}
 
-		// Comments (all other comments, part of the description)
+		// Additional comments
 		for comment in self.comments.iter().skip(1) {
 			let comment_indent = if comment.owned { &content_indent } else { &format!("{content_indent}\t") };
 
-			// Add empty line (with indent for LSP) before comment marker if previous line has content
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
 			}
 
-			// Comment with marker
 			match &comment.identity {
 				CommentIdentity::Body => {
-					// Body shouldn't appear here (it's always first), but handle gracefully
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
 				CommentIdentity::Linked(id) => {
@@ -853,61 +856,179 @@ impl Issue {
 			}
 		}
 
-		// Blockers (separate section at bottom, before sub-issues)
+		// Blockers section
 		if !self.blockers.is_empty() {
-			// Add empty line (with indent for LSP) before blockers if previous line has content
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
 			}
-			out.push_str(&format!("{content_indent}# Blockers\n"));
+			let header = crate::Header::new(1, "Blockers");
+			out.push_str(&format!("{content_indent}{}\n", header.encode(ext)));
 			for line in self.blockers.lines() {
 				out.push_str(&format!("{content_indent}{}\n", line.to_raw()));
 			}
 		}
 
-		// Children (sub-issues) at the very end
-		// Closed sub-issues wrap body content in vim fold markers
+		// Children - recursively serialize full tree
+		// Closed children wrap their content in vim fold markers
 		for child in &self.children {
-			let child_checked = child.meta.close_state.to_checkbox();
-			let child_content_indent = "\t".repeat(depth + 2);
-
-			// Add empty line (with indent for LSP) before each sub-issue if previous line has content
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
 			}
 
-			// Output child title line
-			match &child.meta.identity {
-				IssueIdentity::Linked(link) => {
-					out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub {} -->\n", child.meta.title, link.as_str()));
-				}
-				IssueIdentity::Pending => {
-					// Pending sub-issues still need a marker for parsing
-					out.push_str(&format!("{content_indent}- [{child_checked}] {} <!--sub -->\n", child.meta.title));
-				}
-			}
-
-			// Closed sub-issues: wrap content in vim fold markers
+			// For closed children, we need to wrap the body in vim folds
+			// But still recurse for the full structure
 			if child.meta.close_state.is_closed() {
+				// Output child title line
+				let child_checked = child.meta.close_state.to_checkbox();
+				let child_url_part = child.meta.identity.url_str().unwrap_or("");
+				let child_labels_part = if child.labels.is_empty() { String::new() } else { format!("[{}] ", child.labels.join(", ")) };
+				if child.meta.owned {
+					out.push_str(&format!(
+						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_url_part} -->\n",
+						child.meta.title
+					));
+				} else {
+					out.push_str(&format!(
+						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--immutable sub {child_url_part} -->\n",
+						child.meta.title
+					));
+				}
+
+				// Vim fold start
+				let child_content_indent = "\t".repeat(depth + 2);
 				out.push_str(&format!("{child_content_indent}<!--omitted {{{{{{always-->\n"));
-			}
 
-			// Output child body (first comment is body)
-			if let Some(body_comment) = child.comments.first()
-				&& !body_comment.body.is_empty()
-			{
-				for line in body_comment.body.lines() {
-					out.push_str(&format!("{child_content_indent}{line}\n"));
+				// Child body and nested content (without title line - we already output it)
+				let child_serialized = child.serialize_virtual_at_depth(depth + 1, ext);
+				// Skip the first line (title) since we already output it with vim fold handling
+				for line in child_serialized.lines().skip(1) {
+					out.push_str(&format!("{line}\n"));
 				}
-			}
 
-			// Close vim fold for closed sub-issues
-			if child.meta.close_state.is_closed() {
+				// Vim fold end
 				out.push_str(&format!("{child_content_indent}<!--,}}}}}}-->\n"));
+			} else {
+				out.push_str(&child.serialize_virtual_at_depth(depth + 1, ext));
 			}
 		}
 
 		out
+	}
+
+	/// Serialize for filesystem storage (single node, no children).
+	/// Children are stored in separate files within the parent's directory.
+	/// This is the inverse of `deserialize_filesystem`.
+	pub fn serialize_filesystem(&self, ext: crate::Extension) -> String {
+		let content_indent = "\t";
+		let mut out = String::new();
+
+		// Title line (always at root level for filesystem representation)
+		let checked = self.meta.close_state.to_checkbox();
+		let url_part = self.meta.identity.url_str().unwrap_or("");
+		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
+		if self.meta.owned {
+			out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {url_part} -->\n", self.meta.title));
+		} else {
+			out.push_str(&format!("- [{checked}] {labels_part}{} <!--immutable {url_part} -->\n", self.meta.title));
+		}
+
+		// Body (first comment)
+		if let Some(body_comment) = self.comments.first() {
+			let comment_indent = if body_comment.owned { content_indent } else { "\t\t" };
+			if !body_comment.body.is_empty() {
+				for line in body_comment.body.lines() {
+					out.push_str(&format!("{comment_indent}{line}\n"));
+				}
+			}
+		}
+
+		// Additional comments
+		for comment in self.comments.iter().skip(1) {
+			let comment_indent_str = if comment.owned { content_indent } else { "\t\t" };
+
+			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+				out.push_str(&format!("{content_indent}\n"));
+			}
+
+			match &comment.identity {
+				CommentIdentity::Body => {
+					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
+				}
+				CommentIdentity::Linked(id) => {
+					let url = self.meta.identity.url_str().unwrap_or("");
+					if comment.owned {
+						out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
+					} else {
+						out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
+					}
+				}
+				CommentIdentity::Pending => {
+					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
+				}
+			}
+			if !comment.body.is_empty() {
+				for line in comment.body.lines() {
+					out.push_str(&format!("{comment_indent_str}{line}\n"));
+				}
+			}
+		}
+
+		// Blockers section
+		if !self.blockers.is_empty() {
+			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
+				out.push_str(&format!("{content_indent}\n"));
+			}
+			let header = crate::Header::new(1, "Blockers");
+			out.push_str(&format!("{content_indent}{}\n", header.encode(ext)));
+			for line in self.blockers.lines() {
+				out.push_str(&format!("{content_indent}{}\n", line.to_raw()));
+			}
+		}
+
+		// NO children - they are stored as separate files
+
+		out
+	}
+
+	/// Serialize for GitHub API (markdown body only, no local markers).
+	/// This is what gets sent to GitHub as the issue body.
+	/// Always outputs markdown format regardless of local file extension.
+	pub fn serialize_github(&self) -> String {
+		// GitHub body is: body text + blockers section (if any)
+		// No title line, no URL markers, no comments - just the body content
+		self.body()
+	}
+
+	//==========================================================================
+	// Deserialization Methods
+	//==========================================================================
+
+	/// Parse from virtual file content (full tree embedded).
+	/// This is the inverse of `serialize_virtual`.
+	pub fn deserialize_virtual(content: &str, ext: crate::Extension) -> Result<Self, ParseError> {
+		// Virtual format is the same as the current parse format
+		// We create a dummy path with the right extension for parsing
+		let dummy_path = match ext {
+			crate::Extension::Md => std::path::Path::new("virtual.md"),
+			crate::Extension::Typ => std::path::Path::new("virtual.typ"),
+		};
+		Self::parse(content, dummy_path)
+	}
+
+	/// Parse from filesystem content (single node, no children).
+	/// Children must be loaded separately from their own files.
+	/// This is the inverse of `serialize_filesystem`.
+	pub fn deserialize_filesystem(content: &str, ext: crate::Extension) -> Result<Self, ParseError> {
+		// Filesystem format is the same structure but without embedded children
+		// Children field will be empty; caller loads them from directory
+		let dummy_path = match ext {
+			crate::Extension::Md => std::path::Path::new("filesystem.md"),
+			crate::Extension::Typ => std::path::Path::new("filesystem.typ"),
+		};
+		let mut issue = Self::parse(content, dummy_path)?;
+		// Clear any children that might have been parsed (shouldn't happen in filesystem format)
+		issue.children.clear();
+		Ok(issue)
 	}
 
 	/// Get a mutable reference to a child issue by path
@@ -926,17 +1047,18 @@ impl Issue {
 	/// Returns None if there are no blockers.
 	/// Line numbers are 1-indexed to match editor conventions.
 	/// Column points to the first character of the item text (after `- `).
-	pub fn find_last_blocker_position(&self) -> Option<(u32, u32)> {
+	pub fn find_last_blocker_position(&self, ext: crate::Extension) -> Option<(u32, u32)> {
 		if self.blockers.is_empty() {
 			return None;
 		}
 
 		// Serialize and find the last blocker item line
-		let serialized = self.serialize();
+		let serialized = self.serialize_virtual(ext);
 		let lines: Vec<&str> = serialized.lines().collect();
 
-		// Find where blockers section starts (look for `# Blockers` marker)
-		let blockers_start_idx = lines.iter().position(|line| line.trim() == "# Blockers")?;
+		// Find where blockers section starts (format-aware header check)
+		let blockers_header = crate::Header::new(1, "Blockers").encode(ext);
+		let blockers_start_idx = lines.iter().position(|line| line.trim() == blockers_header)?;
 
 		// Track the last line that's a blocker item (starts with `- ` but not `- [` which is sub-issue)
 		let mut last_item_line_num: Option<u32> = None;
@@ -1130,7 +1252,7 @@ mod tests {
 		assert_eq!(issue.meta.title, "Not planned issue");
 
 		// Verify serialization preserves the state
-		let serialized = issue.serialize();
+		let serialized = issue.serialize_virtual(crate::Extension::Md);
 		assert!(serialized.starts_with("- [-] Not planned issue"));
 	}
 
@@ -1145,7 +1267,7 @@ mod tests {
 		assert_eq!(issue.meta.title, "Duplicate issue");
 
 		// Verify serialization preserves the state
-		let serialized = issue.serialize();
+		let serialized = issue.serialize_virtual(crate::Extension::Md);
 		assert!(serialized.starts_with("- [456] Duplicate issue"));
 	}
 
@@ -1172,7 +1294,7 @@ mod tests {
 		<!--,}}}-->
 "#;
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
-		insta::assert_snapshot!(issue.serialize(), @"
+		insta::assert_snapshot!(issue.serialize_virtual(crate::Extension::Md), @"
 		- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
 			Body
 			
@@ -1199,7 +1321,7 @@ mod tests {
 
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
-		assert!(issue.find_last_blocker_position().is_none());
+		assert!(issue.find_last_blocker_position(crate::Extension::Md).is_none());
 	}
 
 	#[test]
@@ -1208,7 +1330,7 @@ mod tests {
 
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- task 1\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
-		let pos = issue.find_last_blocker_position();
+		let pos = issue.find_last_blocker_position(crate::Extension::Md);
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
 		assert_eq!(line, 5); // Line 5: `\t- task 1`
@@ -1222,7 +1344,7 @@ mod tests {
 
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- task 1\n\t- task 2\n\t- task 3\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
-		let pos = issue.find_last_blocker_position();
+		let pos = issue.find_last_blocker_position(crate::Extension::Md);
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
 		assert_eq!(line, 7); // Line 7: `\t- task 3`
@@ -1235,7 +1357,7 @@ mod tests {
 
 		let content = "- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t# Phase 1\n\t- task a\n\t# Phase 2\n\t- task b\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
-		let pos = issue.find_last_blocker_position();
+		let pos = issue.find_last_blocker_position(crate::Extension::Md);
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
 		assert_eq!(line, 8); // Line 8: `\t- task b`
@@ -1249,10 +1371,113 @@ mod tests {
 		let content =
 			"- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->\n\tBody\n\n\t# Blockers\n\t- blocker task\n\n\t- [ ] Sub issue <!--sub https://github.com/owner/repo/issues/2 -->\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
-		let pos = issue.find_last_blocker_position();
+		let pos = issue.find_last_blocker_position(crate::Extension::Md);
 		assert!(pos.is_some());
 		let (line, col) = pos.unwrap();
 		assert_eq!(line, 5); // Line 5: `\t- blocker task`, not the sub-issue line
 		assert_eq!(col, 4);
+	}
+
+	#[test]
+	fn test_serialize_filesystem_no_children() {
+		use std::path::Path;
+
+		// Issue with children
+		let content = r#"- [ ] Parent <!-- https://github.com/owner/repo/issues/1 -->
+	Parent body
+
+	- [ ] Child 1 <!--sub https://github.com/owner/repo/issues/2 -->
+		Child 1 body
+
+	- [ ] Child 2 <!--sub https://github.com/owner/repo/issues/3 -->
+		Child 2 body
+"#;
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
+		assert_eq!(issue.children.len(), 2);
+
+		// Filesystem serialization should NOT include children
+		let fs_serialized = issue.serialize_filesystem(crate::Extension::Md);
+		assert!(!fs_serialized.contains("Child 1"));
+		assert!(!fs_serialized.contains("Child 2"));
+		assert!(fs_serialized.contains("Parent body"));
+	}
+
+	#[test]
+	fn test_serialize_virtual_includes_children() {
+		use std::path::Path;
+
+		let content = r#"- [ ] Parent <!-- https://github.com/owner/repo/issues/1 -->
+	Parent body
+
+	- [ ] Child 1 <!--sub https://github.com/owner/repo/issues/2 -->
+		Child 1 body
+"#;
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
+
+		// Virtual serialization should include children
+		let virtual_serialized = issue.serialize_virtual(crate::Extension::Md);
+		assert!(virtual_serialized.contains("Parent body"));
+		assert!(virtual_serialized.contains("Child 1"));
+		assert!(virtual_serialized.contains("Child 1 body"));
+	}
+
+	#[test]
+	fn test_deserialize_filesystem_clears_children() {
+		// Even if content somehow has children markers, deserialize_filesystem clears them
+		let content = r#"- [ ] Parent <!-- https://github.com/owner/repo/issues/1 -->
+	Parent body
+
+	- [ ] Child <!--sub https://github.com/owner/repo/issues/2 -->
+		Child body
+"#;
+		let issue = Issue::deserialize_filesystem(content, crate::Extension::Md).unwrap();
+		assert!(issue.children.is_empty());
+		assert_eq!(issue.meta.title, "Parent");
+	}
+
+	#[test]
+	fn test_virtual_roundtrip() {
+		use std::path::Path;
+
+		let content = r#"- [ ] Parent <!-- https://github.com/owner/repo/issues/1 -->
+	Parent body
+
+	- [ ] Child <!--sub https://github.com/owner/repo/issues/2 -->
+		Child body
+"#;
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
+
+		// Serialize to virtual, then deserialize back
+		let serialized = issue.serialize_virtual(crate::Extension::Md);
+		let reparsed = Issue::deserialize_virtual(&serialized, crate::Extension::Md).unwrap();
+
+		assert_eq!(issue.meta.title, reparsed.meta.title);
+		assert_eq!(issue.children.len(), reparsed.children.len());
+	}
+
+	#[test]
+	fn test_serialize_github_body_only() {
+		use std::path::Path;
+
+		let content = r#"- [ ] Issue <!-- https://github.com/owner/repo/issues/1 -->
+	This is the body text.
+
+	# Blockers
+	- task 1
+	- task 2
+"#;
+		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
+
+		// GitHub serialization is just the body (with blockers)
+		let github = issue.serialize_github();
+
+		// Should NOT contain the title line or URL markers
+		assert!(!github.contains("- [ ]"));
+		assert!(!github.contains("<!--"));
+
+		// Should contain body and blockers
+		assert!(github.contains("This is the body text."));
+		assert!(github.contains("# Blockers"));
+		assert!(github.contains("- task 1"));
 	}
 }
