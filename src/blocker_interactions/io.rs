@@ -75,7 +75,7 @@ pub enum Command {
 		#[arg(short = 'f', long)]
 		fully_qualified: bool,
 	},
-	/// Open standalone blocker file with $EDITOR (individual files mode, no GitHub sync)
+	/// Open standalone blocker file with $EDITOR (individual files mode, no Github sync)
 	OpenStandalone {
 		/// Optional pattern to open a different file
 		pattern: Option<String>,

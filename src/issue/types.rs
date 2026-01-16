@@ -8,15 +8,15 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-/// A GitHub issue identifier. Wraps a URL and derives all properties on demand.
+/// A Github issue identifier. Wraps a URL and derives all properties on demand.
 /// Format: `https://github.com/{owner}/{repo}/issues/{number}`
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct IssueLink(Url);
 
 impl IssueLink {
-	/// Create from a URL. Returns None if not a valid GitHub issue URL.
+	/// Create from a URL. Returns None if not a valid Github issue URL.
 	pub fn new(url: Url) -> Option<Self> {
-		// Validate it's a GitHub issue URL
+		// Validate it's a Github issue URL
 		if url.host_str() != Some("github.com") {
 			return None;
 		}
@@ -80,17 +80,17 @@ impl AsRef<Url> for IssueLink {
 	}
 }
 
-/// Identity of an issue - either linked to GitHub or pending creation.
+/// Identity of an issue - either linked to Github or pending creation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IssueIdentity {
-	/// Issue exists on GitHub with this link
+	/// Issue exists on Github with this link
 	Linked(IssueLink),
-	/// Issue is pending creation on GitHub (will be created in post-sync)
+	/// Issue is pending creation on Github (will be created in post-sync)
 	Pending,
 }
 
 impl IssueIdentity {
-	/// Get the link if this issue is linked to GitHub.
+	/// Get the link if this issue is linked to Github.
 	pub fn link(&self) -> Option<&IssueLink> {
 		match self {
 			Self::Linked(link) => Some(link),
@@ -98,7 +98,7 @@ impl IssueIdentity {
 		}
 	}
 
-	/// Check if this issue is linked to GitHub.
+	/// Check if this issue is linked to Github.
 	pub fn is_linked(&self) -> bool {
 		matches!(self, Self::Linked(_))
 	}
@@ -119,15 +119,15 @@ impl IssueIdentity {
 	}
 }
 
-/// Identity of a comment - either linked to GitHub or pending creation.
+/// Identity of a comment - either linked to Github or pending creation.
 /// Note: The first comment (issue body) is always `Body`, not `Linked` or `Pending`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CommentIdentity {
-	/// This is the issue body (first comment), not a separate GitHub comment
+	/// This is the issue body (first comment), not a separate Github comment
 	Body,
-	/// Comment exists on GitHub with this ID
+	/// Comment exists on Github with this ID
 	Linked(u64),
-	/// Comment is pending creation on GitHub (will be created in post-sync)
+	/// Comment is pending creation on Github (will be created in post-sync)
 	Pending,
 }
 
@@ -140,7 +140,7 @@ impl CommentIdentity {
 		}
 	}
 
-	/// Check if this is a GitHub comment (not the issue body).
+	/// Check if this is a Github comment (not the issue body).
 	pub fn is_comment(&self) -> bool {
 		!matches!(self, Self::Body)
 	}
@@ -152,7 +152,7 @@ impl CommentIdentity {
 }
 
 /// An issue with its title - used when we need both identity and display name.
-/// This is what we have after fetching an issue from GitHub.
+/// This is what we have after fetching an issue from Github.
 #[derive(Clone, Debug)]
 pub struct FetchedIssue {
 	pub link: IssueLink,
@@ -214,7 +214,7 @@ enum ChildTitleParseResult {
 }
 
 /// Close state of an issue.
-/// Maps to GitHub's binary open/closed, but locally supports additional variants.
+/// Maps to Github's binary open/closed, but locally supports additional variants.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CloseState {
 	/// Issue is open: `- [ ]`
@@ -242,7 +242,7 @@ impl CloseState {
 		matches!(self, CloseState::Duplicate(_))
 	}
 
-	/// Convert to GitHub API state string
+	/// Convert to Github API state string
 	pub fn to_github_state(&self) -> &'static str {
 		match self {
 			CloseState::Open => "open",
@@ -250,7 +250,7 @@ impl CloseState {
 		}
 	}
 
-	/// Convert to GitHub API state_reason string (for closed issues)
+	/// Convert to Github API state_reason string (for closed issues)
 	pub fn to_github_state_reason(&self) -> Option<&'static str> {
 		match self {
 			CloseState::Open => None,
@@ -260,7 +260,7 @@ impl CloseState {
 		}
 	}
 
-	/// Create from GitHub API state and state_reason.
+	/// Create from Github API state and state_reason.
 	///
 	/// # Panics
 	/// Panics if state_reason is "duplicate" - duplicates must be filtered before calling this.
@@ -313,7 +313,7 @@ impl CloseState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct IssueMeta {
 	pub title: String,
-	/// Issue identity - linked to GitHub or pending creation
+	/// Issue identity - linked to Github or pending creation
 	pub identity: IssueIdentity,
 	pub close_state: CloseState,
 	/// Whether owned by current user (false = immutable)
@@ -323,7 +323,7 @@ pub struct IssueMeta {
 /// A comment in the issue conversation (first one is always the issue body)
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
-	/// Comment identity - body, linked to GitHub, or pending creation
+	/// Comment identity - body, linked to Github, or pending creation
 	pub identity: CommentIdentity,
 	pub body: String,
 	pub owned: bool,
@@ -347,7 +347,7 @@ pub struct Issue {
 
 impl Issue {
 	/// Get the full issue body including blockers section.
-	/// This is what should be synced to GitHub as the issue body.
+	/// This is what should be synced to Github as the issue body.
 	pub fn body(&self) -> String {
 		let base_body = self.comments.first().map(|c| c.body.as_str()).unwrap_or("");
 		join_with_blockers(base_body, &self.blockers)
@@ -643,7 +643,7 @@ impl Issue {
 			comments,
 			children,
 			blockers: BlockerSequence::from_lines(blocker_lines),
-			last_contents_change: None, // Set from GitHub when syncing
+			last_contents_change: None, // Set from Github when syncing
 		})
 	}
 

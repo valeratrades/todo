@@ -1,7 +1,7 @@
-//! GitHub issue editing functionality.
+//! Github issue editing functionality.
 //!
-//! This module provides functionality for fetching GitHub issues,
-//! editing them locally, and syncing changes back to GitHub.
+//! This module provides functionality for fetching Github issues,
+//! editing them locally, and syncing changes back to Github.
 
 mod command;
 mod conflict;

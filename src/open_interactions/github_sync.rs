@@ -1,8 +1,8 @@
-//! GitHub synchronization for Issues.
+//! Github synchronization for Issues.
 //!
-//! This module contains all GitHub-specific logic for Issues:
-//! - Converting GitHub API responses to Issue
-//! - Collecting actions needed to sync Issue to GitHub
+//! This module contains all Github-specific logic for Issues:
+//! - Converting Github API responses to Issue
+//! - Collecting actions needed to sync Issue to Github
 //!
 //! Actions are split into two categories:
 //! - **Pre-sync**: Creating new issues (without URLs) so they get URLs before comparison
@@ -11,11 +11,11 @@
 use jiff::Timestamp;
 use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, IssueMeta, split_blockers};
 
-use crate::github::{GitHubComment, GitHubIssue, IssueAction, OriginalSubIssue};
+use crate::github::{GithubComment, GithubIssue, IssueAction, OriginalSubIssue};
 
-/// Extension trait for GitHub-specific Issue operations.
+/// Extension trait for Github-specific Issue operations.
 /// These methods are only available in the binary, not the library.
-pub trait IssueGitHubExt {
+pub trait IssueGithubExt {
 	/// Collect actions for creating new issues (pre-sync).
 	/// These must run BEFORE sync so new issues get URLs for comparison.
 	fn collect_create_actions(&self) -> Vec<Vec<IssueAction>>;
@@ -24,11 +24,11 @@ pub trait IssueGitHubExt {
 	/// These run AFTER sync to push local state changes to remote.
 	fn collect_update_actions(&self, consensus_sub_issues: &[OriginalSubIssue]) -> Vec<Vec<IssueAction>>;
 
-	/// Construct an Issue directly from GitHub API data.
-	fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Issue;
+	/// Construct an Issue directly from Github API data.
+	fn from_github(issue: &GithubIssue, comments: &[GithubComment], sub_issues: &[GithubIssue], owner: &str, repo: &str, current_user: &str) -> Issue;
 }
 
-impl IssueGitHubExt for Issue {
+impl IssueGithubExt for Issue {
 	fn collect_create_actions(&self) -> Vec<Vec<IssueAction>> {
 		let mut levels: Vec<Vec<IssueAction>> = Vec::new();
 
@@ -61,7 +61,7 @@ impl IssueGitHubExt for Issue {
 		levels
 	}
 
-	fn from_github(issue: &GitHubIssue, comments: &[GitHubComment], sub_issues: &[GitHubIssue], owner: &str, repo: &str, current_user: &str) -> Issue {
+	fn from_github(issue: &GithubIssue, comments: &[GithubComment], sub_issues: &[GithubIssue], owner: &str, repo: &str, current_user: &str) -> Issue {
 		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
 		let issue_owned = issue.user.login == current_user;
 		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
@@ -76,7 +76,7 @@ impl IssueGitHubExt for Issue {
 
 		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
 
-		// Parse timestamp from GitHub's ISO 8601 format
+		// Parse timestamp from Github's ISO 8601 format
 		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
 
 		// Build comments: body is first comment
@@ -192,7 +192,7 @@ fn collect_update_actions_recursive(issue: &Issue, current_path: &[usize], conse
 		let mut child_path = current_path.to_vec();
 		child_path.push(i);
 
-		// Only check for updates if child is linked (exists on GitHub)
+		// Only check for updates if child is linked (exists on Github)
 		if let Some(child_number) = child.meta.identity.number()
 			&& let Some(consensus) = consensus_sub_issues.iter().find(|o| o.number == child_number)
 		{
@@ -213,33 +213,33 @@ fn collect_update_actions_recursive(issue: &Issue, current_path: &[usize], conse
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::github::{GitHubLabel, GitHubUser};
+	use crate::github::{GithubLabel, GithubUser};
 
 	#[test]
 	fn test_from_github() {
-		let issue = GitHubIssue {
+		let issue = GithubIssue {
 			number: 123,
 			title: "Test Issue".to_string(),
 			body: Some("Issue body".to_string()),
-			labels: vec![GitHubLabel { name: "bug".to_string() }],
-			user: GitHubUser { login: "me".to_string() },
+			labels: vec![GithubLabel { name: "bug".to_string() }],
+			user: GithubUser { login: "me".to_string() },
 			state: "open".to_string(),
 			state_reason: None,
 			updated_at: "2024-01-15T12:00:00Z".to_string(),
 		};
 
-		let comments = vec![GitHubComment {
+		let comments = vec![GithubComment {
 			id: 456,
 			body: Some("A comment".to_string()),
-			user: GitHubUser { login: "other".to_string() },
+			user: GithubUser { login: "other".to_string() },
 		}];
 
-		let sub_issues = vec![GitHubIssue {
+		let sub_issues = vec![GithubIssue {
 			number: 124,
 			title: "Sub Issue".to_string(),
 			body: Some("Sub body".to_string()),
 			labels: vec![],
-			user: GitHubUser { login: "me".to_string() },
+			user: GithubUser { login: "me".to_string() },
 			state: "closed".to_string(),
 			state_reason: Some("completed".to_string()),
 			updated_at: "2024-01-15T12:00:00Z".to_string(),
@@ -270,12 +270,12 @@ mod tests {
 	#[test]
 	fn test_partial_eq() {
 		let make_issue = |body: &str, state: &str| -> Issue {
-			let gh_issue = GitHubIssue {
+			let gh_issue = GithubIssue {
 				number: 1,
 				title: "Test".to_string(),
 				body: Some(body.to_string()),
 				labels: vec![],
-				user: GitHubUser { login: "me".to_string() },
+				user: GithubUser { login: "me".to_string() },
 				state: state.to_string(),
 				state_reason: None,
 				updated_at: "2024-01-15T12:00:00Z".to_string(),

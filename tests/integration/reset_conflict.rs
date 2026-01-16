@@ -2,16 +2,16 @@
 //!
 //! The root cause: when format_issue runs during --reset, if sub-issue files already
 //! exist locally (from a previous fetch), it embeds the LOCAL content into the parent
-//! file instead of the GitHub API content. This causes the consensus to differ from
+//! file instead of the Github API content. This causes the consensus to differ from
 //! what fetch_full_issue_tree returns, triggering false conflicts.
 //!
 //! Scenario that triggers the bug:
 //! 1. Fetch issue once (creates sub-issue files with original content)
 //! 2. Locally edit sub-issue files (add blockers, expand body, etc.)
 //! 3. Run `--reset` on the parent issue
-//! 4. format_issue embeds LOCAL sub-issue content (not GitHub API content)
+//! 4. format_issue embeds LOCAL sub-issue content (not Github API content)
 //! 5. User makes a small change (e.g., mark sub-issue as closed)
-//! 6. Post-editor sync fetches remote (gets GitHub API content for sub-issues)
+//! 6. Post-editor sync fetches remote (gets Github API content for sub-issues)
 //! 7. Consensus (with local content) != Remote (with API content) → FALSE CONFLICT
 
 use std::path::Path;

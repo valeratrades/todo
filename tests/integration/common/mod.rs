@@ -3,7 +3,7 @@
 //! Provides `TestContext` - a unified test context that handles:
 //! - XDG directory setup with proper environment variables
 //! - Running commands against the compiled binary
-//! - Mock state management for GitHub API simulation
+//! - Mock state management for Github API simulation
 //! - Named pipe communication for editor simulation
 //!
 //! # Example
@@ -59,7 +59,7 @@ fn get_binary_path() -> PathBuf {
 pub struct TestContext {
 	/// The Xdg wrapper managing temp directories
 	pub xdg: Xdg,
-	/// Path to mock GitHub state file (for sync tests)
+	/// Path to mock Github state file (for sync tests)
 	pub mock_state_path: PathBuf,
 	/// Path to named pipe for editor simulation (for sync tests)
 	pub pipe_path: PathBuf,
@@ -110,7 +110,7 @@ impl TestContext {
 		)
 	}
 
-	/// Run `open` command with mock GitHub state and editor pipe.
+	/// Run `open` command with mock Github state and editor pipe.
 	///
 	/// Returns (exit_status, stdout, stderr).
 	pub fn run_open(&self, issue_path: &Path) -> (ExitStatus, String, String) {
@@ -166,14 +166,14 @@ impl TestContext {
 		self.xdg.data_dir()
 	}
 
-	/// Set up mock GitHub to return an issue.
+	/// Set up mock Github to return an issue.
 	///
 	/// The issue parameter should be a serde_json::Value representing the mock state.
 	pub fn setup_mock_state(&self, state: &serde_json::Value) {
 		std::fs::write(&self.mock_state_path, serde_json::to_string_pretty(state).unwrap()).unwrap();
 	}
 
-	/// Create an OpenUrlBuilder for running the `open` command with a GitHub URL.
+	/// Create an OpenUrlBuilder for running the `open` command with a Github URL.
 	pub fn open_url(&self, owner: &str, repo: &str, number: u64) -> OpenUrlBuilder<'_> {
 		let url = format!("https://github.com/{owner}/{repo}/issues/{number}");
 		OpenUrlBuilder {

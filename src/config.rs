@@ -20,7 +20,7 @@ pub struct Open {
 #[derive(Clone, Debug, v_macros::MyConfigPrimitives, v_macros::SettingsNested)]
 pub struct Milestones {
 	pub github_token: String,
-	/// GitHub repo URL for milestones (e.g., "https://github.com/owner/repo" or "owner/repo")
+	/// Github repo URL for milestones (e.g., "https://github.com/owner/repo" or "owner/repo")
 	pub url: String,
 }
 

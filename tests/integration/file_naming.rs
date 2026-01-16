@@ -156,7 +156,7 @@ fn test_duplicate_reference_to_existing_issue_succeeds() {
 	let dup_target = parse("- [ ] Target Issue <!-- https://github.com/o/r/issues/2 -->\n\ttarget body\n");
 	let issue_path = ctx.consensus(&original);
 
-	// Set up mock GitHub with both issues
+	// Set up mock Github with both issues
 	ctx.remote(&original);
 	ctx.remote(&dup_target);
 

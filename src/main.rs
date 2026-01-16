@@ -26,8 +26,8 @@ struct Cli {
 	settings_flags: config::SettingsFlags,
 	#[arg(long, global = true, hide = true)]
 	mock: bool,
-	/// Skip all network operations - edit locally only, don't sync to GitHub.
-	/// Automatically enabled for virtual projects (projects without GitHub remote).
+	/// Skip all network operations - edit locally only, don't sync to Github.
+	/// Automatically enabled for virtual projects (projects without Github remote).
 	#[arg(long, global = true)]
 	offline: bool,
 	/// Log to a specific file (filename only, no path). Logs go to ~/.local/state/todo/{filename}.log
@@ -55,7 +55,7 @@ enum Commands {
 	PerfEval(perf_eval::PerfEvalArgs),
 	/// Watch monitors daemon - takes screenshots every 60s
 	WatchMonitors(watch_monitors::WatchMonitorsArgs),
-	/// Open a GitHub issue in $EDITOR
+	/// Open a Github issue in $EDITOR
 	Open(open_interactions::OpenArgs),
 }
 
@@ -106,20 +106,20 @@ async fn main() {
 		}
 	};
 
-	let github_client: github::BoxedGitHubClient = if cli.mock {
-		std::sync::Arc::new(mock_github::MockGitHubClient::new("mock_user"))
+	let github_client: github::BoxedGithubClient = if cli.mock {
+		std::sync::Arc::new(mock_github::MockGithubClient::new("mock_user"))
 	} else {
-		match github::RealGitHubClient::new(&settings) {
+		match github::RealGithubClient::new(&settings) {
 			Ok(client) => std::sync::Arc::new(client),
 			Err(e) => {
-				// Only error if we're using a command that needs GitHub
+				// Only error if we're using a command that needs Github
 				// For now, create a dummy that will error on use
 				if matches!(cli.command, Commands::Open(_)) {
 					eprintln!("Error: {e}");
 					std::process::exit(1);
 				}
 				// For other commands, create a mock (they won't use it)
-				std::sync::Arc::new(mock_github::MockGitHubClient::new("unused"))
+				std::sync::Arc::new(mock_github::MockGithubClient::new("unused"))
 			}
 		}
 	};

@@ -8,12 +8,12 @@ use v_utils::prelude::*;
 use crate::config::LiveSettings;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GitHubIssue {
+pub struct GithubIssue {
 	pub number: u64,
 	pub title: String,
 	pub body: Option<String>,
-	pub labels: Vec<GitHubLabel>,
-	pub user: GitHubUser,
+	pub labels: Vec<GithubLabel>,
+	pub user: GithubUser,
 	pub state: String,
 	/// Reason for the state (e.g., "completed", "not_planned", "duplicate")
 	/// Only present for closed issues.
@@ -23,20 +23,20 @@ pub struct GitHubIssue {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GitHubLabel {
+pub struct GithubLabel {
 	pub name: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GitHubUser {
+pub struct GithubUser {
 	pub login: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GitHubComment {
+pub struct GithubComment {
 	pub id: u64,
 	pub body: Option<String>,
-	pub user: GitHubUser,
+	pub user: GithubUser,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -45,8 +45,8 @@ pub struct OriginalSubIssue {
 	pub state: String,
 }
 
-impl From<&GitHubIssue> for OriginalSubIssue {
-	fn from(s: &GitHubIssue) -> Self {
+impl From<&GithubIssue> for OriginalSubIssue {
+	fn from(s: &GithubIssue) -> Self {
 		Self {
 			number: s.number,
 			state: s.state.clone(),
@@ -54,7 +54,7 @@ impl From<&GitHubIssue> for OriginalSubIssue {
 	}
 }
 
-/// Response from GitHub when creating an issue
+/// Response from Github when creating an issue
 #[derive(Debug, Deserialize)]
 pub struct CreatedIssue {
 	pub id: u64,
@@ -65,7 +65,7 @@ pub struct CreatedIssue {
 /// Index path to locate an issue in the tree (e.g., [0, 2] = first child's third child)
 pub type IssuePath = Vec<usize>;
 
-/// An action that needs to be performed on GitHub
+/// An action that needs to be performed on Github
 #[derive(Debug)]
 pub enum IssueAction {
 	/// Create a new issue, optionally as a sub-issue of a parent
@@ -86,24 +86,24 @@ pub enum IssueAction {
 }
 
 //==============================================================================
-// GitHub Client Trait
+// Github Client Trait
 //==============================================================================
 
-/// Trait defining all GitHub API operations.
+/// Trait defining all Github API operations.
 /// This allows for both real API calls and mock implementations for testing.
 #[async_trait]
-pub trait GitHubClient: Send + Sync {
+pub trait GithubClient: Send + Sync {
 	/// Fetch the authenticated user's login name
 	async fn fetch_authenticated_user(&self) -> Result<String>;
 
 	/// Fetch a single issue by number
-	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GitHubIssue>;
+	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GithubIssue>;
 
 	/// Fetch all comments on an issue
-	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubComment>>;
+	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GithubComment>>;
 
 	/// Fetch all sub-issues of an issue
-	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubIssue>>;
+	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GithubIssue>>;
 
 	/// Update an issue's body
 	async fn update_issue_body(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()>;
@@ -137,26 +137,26 @@ pub trait GitHubClient: Send + Sync {
 	async fn issue_exists(&self, owner: &str, repo: &str, issue_number: u64) -> Result<bool>;
 
 	/// Fetch the parent issue of a sub-issue (returns None if issue has no parent)
-	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GitHubIssue>>;
+	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GithubIssue>>;
 }
 
 //==============================================================================
-// Real GitHub Client Implementation
+// Real Github Client Implementation
 //==============================================================================
 
-/// Real GitHub API client that makes HTTP requests
-pub struct RealGitHubClient {
+/// Real Github API client that makes HTTP requests
+pub struct RealGithubClient {
 	http_client: Client,
 	github_token: String,
 }
 
-impl RealGitHubClient {
+impl RealGithubClient {
 	pub fn new(settings: &LiveSettings) -> Result<Self> {
 		let config = settings.config()?;
 		let milestones_config = config
 			.milestones
 			.as_ref()
-			.ok_or_else(|| eyre!("milestones config section is required for GitHub token. Add [milestones] section with github_token to your config"))?;
+			.ok_or_else(|| eyre!("milestones config section is required for Github token. Add [milestones] section with github_token to your config"))?;
 
 		Ok(Self {
 			http_client: Client::new(),
@@ -170,12 +170,12 @@ impl RealGitHubClient {
 }
 
 #[async_trait]
-impl GitHubClient for RealGitHubClient {
+impl GithubClient for RealGithubClient {
 	async fn fetch_authenticated_user(&self) -> Result<String> {
 		let res = self
 			.http_client
 			.get("https://api.github.com/user")
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -186,17 +186,17 @@ impl GitHubClient for RealGitHubClient {
 			bail!("Failed to fetch authenticated user: {status} - {body}");
 		}
 
-		let user = res.json::<GitHubUser>().await?;
+		let user = res.json::<GithubUser>().await?;
 		Ok(user.login)
 	}
 
-	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GitHubIssue> {
+	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GithubIssue> {
 		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
 
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -207,17 +207,17 @@ impl GitHubClient for RealGitHubClient {
 			bail!("Failed to fetch issue: {status} - {body}");
 		}
 
-		let issue = res.json::<GitHubIssue>().await?;
+		let issue = res.json::<GithubIssue>().await?;
 		Ok(issue)
 	}
 
-	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubComment>> {
+	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GithubComment>> {
 		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
 
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -228,17 +228,17 @@ impl GitHubClient for RealGitHubClient {
 			bail!("Failed to fetch comments: {status} - {body}");
 		}
 
-		let comments = res.json::<Vec<GitHubComment>>().await?;
+		let comments = res.json::<Vec<GithubComment>>().await?;
 		Ok(comments)
 	}
 
-	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GitHubIssue>> {
+	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GithubIssue>> {
 		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/sub_issues");
 
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -249,7 +249,7 @@ impl GitHubClient for RealGitHubClient {
 			return Ok(Vec::new());
 		}
 
-		let sub_issues = res.json::<Vec<GitHubIssue>>().await?;
+		let sub_issues = res.json::<Vec<GithubIssue>>().await?;
 		Ok(sub_issues)
 	}
 
@@ -259,7 +259,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.patch(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.header("Content-Type", "application/json")
 			.json(&serde_json::json!({ "body": body }))
@@ -281,7 +281,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.patch(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.header("Content-Type", "application/json")
 			.json(&serde_json::json!({ "state": state }))
@@ -303,7 +303,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.patch(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.header("Content-Type", "application/json")
 			.json(&serde_json::json!({ "body": body }))
@@ -325,7 +325,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.post(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.header("Content-Type", "application/json")
 			.json(&serde_json::json!({ "body": body }))
@@ -347,7 +347,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.delete(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -371,7 +371,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -397,7 +397,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.post(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.header("Content-Type", "application/json")
 			.json(&serde_json::json!({ "title": title, "body": body }))
@@ -420,7 +420,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.post(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.header("Content-Type", "application/json")
 			.json(&serde_json::json!({ "sub_issue_id": child_issue_id }))
@@ -444,7 +444,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -481,7 +481,7 @@ impl GitHubClient for RealGitHubClient {
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -489,13 +489,13 @@ impl GitHubClient for RealGitHubClient {
 		Ok(res.status().is_success())
 	}
 
-	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GitHubIssue>> {
+	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GithubIssue>> {
 		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/parent");
 
 		let res = self
 			.http_client
 			.get(&api_url)
-			.header("User-Agent", "Rust GitHub Client")
+			.header("User-Agent", "Rust Github Client")
 			.header("Authorization", self.auth_header())
 			.send()
 			.await?;
@@ -511,7 +511,7 @@ impl GitHubClient for RealGitHubClient {
 			bail!("Failed to fetch parent issue: {status} - {body}");
 		}
 
-		let parent = res.json::<GitHubIssue>().await?;
+		let parent = res.json::<GithubIssue>().await?;
 		Ok(Some(parent))
 	}
 }
@@ -520,19 +520,19 @@ impl GitHubClient for RealGitHubClient {
 // Convenience type alias for boxed client
 //==============================================================================
 
-pub type BoxedGitHubClient = Arc<dyn GitHubClient>;
+pub type BoxedGithubClient = Arc<dyn GithubClient>;
 
-/// Create a GitHub client from settings.
-/// Returns an error if GitHub token is not configured.
-pub fn create_client(settings: &LiveSettings) -> Result<BoxedGitHubClient> {
-	Ok(Arc::new(RealGitHubClient::new(settings)?))
+/// Create a Github client from settings.
+/// Returns an error if Github token is not configured.
+pub fn create_client(settings: &LiveSettings) -> Result<BoxedGithubClient> {
+	Ok(Arc::new(RealGithubClient::new(settings)?))
 }
 
 //==============================================================================
 // Utility functions (URL parsing, etc.) - These don't need the trait
 //==============================================================================
 
-/// Parse a GitHub issue URL and extract owner, repo, and issue number.
+/// Parse a Github issue URL and extract owner, repo, and issue number.
 /// Supports formats like:
 /// - https://github.com/owner/repo/issues/123
 /// - github.com/owner/repo/issues/123
@@ -563,13 +563,13 @@ pub fn parse_github_issue_url(url: &str) -> Result<(String, String, u64)> {
 	let path = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
 
 	// Remove github.com prefix
-	let path = path.strip_prefix("github.com/").ok_or_else(|| eyre!("URL must be a GitHub URL: {url}"))?;
+	let path = path.strip_prefix("github.com/").ok_or_else(|| eyre!("URL must be a Github URL: {url}"))?;
 
 	// Split by /
 	let parts: Vec<&str> = path.split('/').collect();
 
 	if parts.len() < 4 || parts[2] != "issues" {
-		bail!("Invalid GitHub issue URL format. Expected: https://github.com/owner/repo/issues/123");
+		bail!("Invalid Github issue URL format. Expected: https://github.com/owner/repo/issues/123");
 	}
 
 	let owner = parts[0].to_string();
@@ -579,7 +579,7 @@ pub fn parse_github_issue_url(url: &str) -> Result<(String, String, u64)> {
 	Ok((owner, repo, issue_number))
 }
 
-/// Check if a string looks like a GitHub issue URL specifically
+/// Check if a string looks like a Github issue URL specifically
 pub fn is_github_issue_url(s: &str) -> bool {
 	let s = s.trim();
 	s.contains("github.com/") && s.contains("/issues/")
@@ -618,7 +618,7 @@ mod tests {
 
 	#[test]
 	fn test_parse_github_issue_url_errors() {
-		// Not a GitHub URL
+		// Not a Github URL
 		assert!(parse_github_issue_url("https://gitlab.com/owner/repo/issues/123").is_err());
 
 		// Not an issues URL

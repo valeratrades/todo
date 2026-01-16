@@ -26,12 +26,12 @@ pub struct IssueMetaEntry {
 /// Stored at: issues/{owner}/{repo}/.meta.json
 ///
 /// NOTE: This file only exists for virtual projects (offline-only).
-/// Normal GitHub-connected projects don't need this file at all.
+/// Normal Github-connected projects don't need this file at all.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ProjectMeta {
 	pub owner: String,
 	pub repo: String,
-	/// Virtual project: has no GitHub remote, all operations are offline-only.
+	/// Virtual project: has no Github remote, all operations are offline-only.
 	/// Issue numbers are locally generated (starting from 1).
 	#[serde(default)]
 	pub virtual_project: bool,
@@ -176,7 +176,7 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 	})
 }
 
-/// Check if a project is virtual (has no GitHub remote)
+/// Check if a project is virtual (has no Github remote)
 pub fn is_virtual_project(owner: &str, repo: &str) -> bool {
 	load_project_meta(owner, repo).virtual_project
 }

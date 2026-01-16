@@ -1,4 +1,4 @@
-//! Fetch issues from GitHub and store locally.
+//! Fetch issues from Github and store locally.
 
 use std::path::PathBuf;
 
@@ -9,11 +9,11 @@ use super::{
 	files::{find_issue_file, get_issue_dir_path, get_issue_file_path, get_main_file_path},
 	format::format_issue,
 };
-use crate::github::{BoxedGitHubClient, GitHubIssue};
+use crate::github::{BoxedGithubClient, GithubIssue};
 
 /// Traverse up the parent chain to find the root issue and build the ancestry path.
 /// Returns a list of ancestors from root to the immediate parent (not including the target issue).
-async fn find_ancestry_chain(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<FetchedIssue>> {
+async fn find_ancestry_chain(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<FetchedIssue>> {
 	let mut ancestry = Vec::new();
 	let mut current_issue_number = issue_number;
 
@@ -33,7 +33,7 @@ async fn find_ancestry_chain(gh: &BoxedGitHubClient, owner: &str, repo: &str, is
 /// If the issue is a sub-issue, first traverses up to find the root and stores
 /// the entire hierarchy from root down.
 /// Returns the path to the requested issue file.
-pub async fn fetch_and_store_issue(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue_number: u64, extension: &Extension, ancestors: Option<Vec<FetchedIssue>>) -> Result<PathBuf> {
+pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64, extension: &Extension, ancestors: Option<Vec<FetchedIssue>>) -> Result<PathBuf> {
 	// If we already have ancestor info, this is a recursive call - use it directly
 	let ancestors = match ancestors {
 		Some(a) => a,
@@ -67,7 +67,7 @@ pub async fn fetch_and_store_issue(gh: &BoxedGitHubClient, owner: &str, repo: &s
 /// Store an issue and all its sub-issues recursively.
 /// This is the core logic shared by all issue fetching operations.
 fn store_issue_tree<'a>(
-	gh: &'a BoxedGitHubClient,
+	gh: &'a BoxedGithubClient,
 	owner: &'a str,
 	repo: &'a str,
 	issue_number: u64,
@@ -88,14 +88,14 @@ fn store_issue_tree<'a>(
 }
 
 /// Store a single issue node and recurse into its children.
-/// Extracted to allow reuse when we already have the GitHubIssue.
+/// Extracted to allow reuse when we already have the GithubIssue.
 async fn store_issue_node(
-	gh: &BoxedGitHubClient,
+	gh: &BoxedGithubClient,
 	owner: &str,
 	repo: &str,
-	issue: &GitHubIssue,
-	comments: &[crate::github::GitHubComment],
-	sub_issues: &[GitHubIssue],
+	issue: &GithubIssue,
+	comments: &[crate::github::GithubComment],
+	sub_issues: &[GithubIssue],
 	current_user: &str,
 	extension: &Extension,
 	ancestors: Vec<FetchedIssue>,

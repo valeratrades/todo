@@ -12,7 +12,7 @@
 //! // Set up consensus state (committed to git)
 //! ctx.consensus(&issue);
 //!
-//! // Set up mock remote (GitHub API responses)
+//! // Set up mock remote (Github API responses)
 //! ctx.remote(&issue);
 //!
 //! // All methods are additive - can call multiple times:
@@ -91,7 +91,7 @@ pub trait GitExt {
 	/// Panics if same (owner, repo, number) is submitted twice.
 	fn consensus(&self, issue: &Issue) -> PathBuf;
 
-	/// Set up mock GitHub API to return this issue. Additive - can call multiple times.
+	/// Set up mock Github API to return this issue. Additive - can call multiple times.
 	/// Handles sub-issues automatically.
 	/// Panics if same (owner, repo, number) is submitted twice.
 	fn remote(&self, issue: &Issue);

@@ -10,7 +10,7 @@ use super::{
 	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
 	meta::{allocate_virtual_issue_number, ensure_virtual_project},
 };
-use crate::github::BoxedGitHubClient;
+use crate::github::BoxedGithubClient;
 
 /// Parsed touch path components
 /// Format: workspace/project/issue[.md|.typ] or workspace/project/parent/child[.md|.typ] (for sub-issues)
@@ -77,9 +77,9 @@ pub fn parse_touch_path(path: &str) -> Result<TouchPath> {
 	})
 }
 
-/// Create an issue on GitHub immediately, then fetch and store it locally.
-/// For sub-issues: requires the immediate parent to already exist on GitHub.
-pub async fn create_and_fetch_issue(gh: &BoxedGitHubClient, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
+/// Create an issue on Github immediately, then fetch and store it locally.
+/// For sub-issues: requires the immediate parent to already exist on Github.
+pub async fn create_and_fetch_issue(gh: &BoxedGithubClient, touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
 	let owner = &touch_path.owner;
 	let repo = &touch_path.repo;
 
@@ -91,9 +91,9 @@ pub async fn create_and_fetch_issue(gh: &BoxedGitHubClient, touch_path: &TouchPa
 
 	if parent_chain.is_empty() {
 		// Top-level issue - create directly
-		println!("Creating issue on GitHub: {issue_title}");
+		println!("Creating issue on Github: {issue_title}");
 		let created = gh.create_issue(owner, repo, issue_title, "").await?;
-		println!("Created issue #{} on GitHub", created.number);
+		println!("Created issue #{} on Github", created.number);
 
 		// Fetch and store the newly created issue
 		fetch_and_store_issue(gh, owner, repo, created.number, extension, None).await
@@ -114,14 +114,14 @@ pub async fn create_and_fetch_issue(gh: &BoxedGitHubClient, touch_path: &TouchPa
 		let parent_title = &parent_chain[0];
 		let parent_num = gh.find_issue_by_title(owner, repo, parent_title).await?.ok_or_else(|| {
 			eyre!(
-				"Parent issue '{parent_title}' not found on GitHub.\n\
+				"Parent issue '{parent_title}' not found on Github.\n\
 				 Create the parent issue first:\n\
 				   todo open --touch {owner}/{repo}/{parent_title}"
 			)
 		})?;
 
 		// Create the sub-issue
-		println!("Creating sub-issue on GitHub: {issue_title}");
+		println!("Creating sub-issue on Github: {issue_title}");
 		let created = gh.create_issue(owner, repo, issue_title, "").await?;
 		gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
 		println!("Created sub-issue #{} under parent #{parent_num}", created.number);
@@ -166,7 +166,7 @@ fn find_subissue_path(parent_path: &std::path::Path, title: &str, extension: &Ex
 	None
 }
 
-/// Create a new virtual issue locally (no GitHub).
+/// Create a new virtual issue locally (no Github).
 /// Virtual issues have locally-generated issue numbers and are stored in the same format.
 pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Result<PathBuf> {
 	let owner = &touch_path.owner;
@@ -196,7 +196,7 @@ pub fn create_virtual_issue(touch_path: &TouchPath, extension: &Extension) -> Re
 	}
 
 	// Create the issue file with basic structure
-	// Virtual issues don't have a GitHub URL, so we use a special marker
+	// Virtual issues don't have a Github URL, so we use a special marker
 	let content = format!("- [ ] {issue_title} <!--virtual:{owner}/{repo}#{issue_number}-->\n");
 
 	std::fs::write(&issue_file_path, &content)?;

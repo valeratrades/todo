@@ -15,10 +15,10 @@ use super::{
 };
 use crate::{
 	config::LiveSettings,
-	github::{self, BoxedGitHubClient},
+	github::{self, BoxedGithubClient},
 };
 
-/// Open a GitHub issue in $EDITOR.
+/// Open a Github issue in $EDITOR.
 ///
 /// Issue files support a blockers section for tracking sub-tasks. Add a `# Blockers` marker
 /// (or `// blockers` for Typst) in the issue body. Content after this marker until the next sub-issue
@@ -27,7 +27,7 @@ use crate::{
 /// Shorthand: Use `!b` on its own line to auto-expand to `# Blockers` (or `// blockers` for Typst).
 #[derive(Args, Debug)]
 pub struct OpenArgs {
-	/// GitHub issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
+	/// Github issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
 	/// With --touch: path format is workspace/project/{issue.md, issue/sub-issue.md}
 	/// If omitted, opens fzf on all local issue files.
 	pub url_or_pattern: Option<String>,
@@ -44,8 +44,8 @@ pub struct OpenArgs {
 	pub exact: u8,
 
 	/// Create or open an issue from a path. Path format: workspace/project/issue[.md|.typ]
-	/// For sub-issues: workspace/project/parent/child (parent must exist on GitHub)
-	/// If issue already exists locally, opens it. Otherwise creates on GitHub first.
+	/// For sub-issues: workspace/project/parent/child (parent must exist on Github)
+	/// If issue already exists locally, opens it. Otherwise creates on Github first.
 	#[arg(short, long)]
 	pub touch: bool,
 
@@ -53,7 +53,7 @@ pub struct OpenArgs {
 	#[arg(short, long)]
 	pub last: bool,
 
-	/// Fetch latest from GitHub before opening. If remote differs from local,
+	/// Fetch latest from Github before opening. If remote differs from local,
 	/// prompts: [s]kip (use local), [o]verwrite (use remote), [m]erge (attempt merge)
 	#[arg(short, long)]
 	pub pull: bool,
@@ -71,14 +71,14 @@ pub struct OpenArgs {
 
 	/// Force through conflicts by taking the source side.
 	/// When opening via local path: takes local version.
-	/// When opening via GitHub URL: takes remote version.
+	/// When opening via Github URL: takes remote version.
 	#[arg(short, long)]
 	pub force: bool,
 
 	/// Reset to source state, ignoring any local/remote changes.
 	/// Overwrites everything with current source without syncing.
 	/// When opening via local path: keeps local as-is (skips sync).
-	/// When opening via GitHub URL: overwrites local with remote.
+	/// When opening via Github URL: overwrites local with remote.
 	#[arg(short, long)]
 	pub reset: bool,
 }
@@ -131,7 +131,7 @@ fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSet
 }
 
 #[tracing::instrument(level = "debug", skip(settings, gh))]
-pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: OpenArgs, offline: bool) -> Result<()> {
+pub async fn open_command(settings: &LiveSettings, gh: BoxedGithubClient, args: OpenArgs, offline: bool) -> Result<()> {
 	tracing::debug!("open_command entered, blocker={}", args.blocker);
 	let extension = get_effective_extension(args.extension, settings);
 
@@ -179,7 +179,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 		// Handle --last mode: open the most recently modified issue file
 		let all_files = search_issue_files("")?;
 		if all_files.is_empty() {
-			bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
+			bail!("No issue files found. Use a Github URL to fetch an issue first.");
 		}
 		// Files are already sorted by modification time (most recent first)
 		(all_files[0].clone(), local_sync_opts(), offline)
@@ -199,12 +199,12 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			(existing_path, offline || project_is_virtual)
 		} else if project_is_virtual {
 			// Virtual project: stays local forever
-			println!("Project {}/{} is virtual (no GitHub remote)", touch_path.owner, touch_path.repo);
+			println!("Project {}/{} is virtual (no Github remote)", touch_path.owner, touch_path.repo);
 			(create_virtual_issue(&touch_path, &effective_ext)?, true)
 		} else {
-			// Real project: create issue on GitHub immediately, then fetch and store
+			// Real project: create issue on Github immediately, then fetch and store
 			if offline {
-				bail!("Cannot create issue on GitHub in offline mode. Use a virtual project or go online.");
+				bail!("Cannot create issue on Github in offline mode. Use a virtual project or go online.");
 			}
 			let path = create_and_fetch_issue(&gh, &touch_path, &effective_ext).await?;
 
@@ -221,7 +221,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 
 		(issue_file_path, local_sync_opts(), effective_offline)
 	} else if github::is_github_issue_url(input) {
-		// GitHub URL mode: unified with --pull behavior
+		// Github URL mode: unified with --pull behavior
 		// URL opening implies pull=true and prefers Remote for --force/--reset
 		if offline {
 			bail!("Cannot fetch issue from URL in offline mode");
@@ -263,7 +263,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGitHubClient, args: 
 			// Local search mode: always pass all files to fzf, let it handle filtering
 			let all_files = search_issue_files("")?;
 			if all_files.is_empty() {
-				bail!("No issue files found. Use a GitHub URL to fetch an issue first.");
+				bail!("No issue files found. Use a Github URL to fetch an issue first.");
 			}
 			let issue_file_path = match choose_issue_with_fzf(&all_files, input, exact)? {
 				Some(path) => path,

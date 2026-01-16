@@ -4,7 +4,7 @@
 //! including parsing, serialization, and all pure types.
 //!
 //! The issue format is designed for local-first issue tracking with
-//! optional GitHub synchronization.
+//! optional Github synchronization.
 
 mod blocker;
 mod error;

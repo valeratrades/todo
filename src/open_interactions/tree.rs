@@ -1,7 +1,7 @@
 //! Tree operations for issue hierarchies.
 //!
 //! Handles:
-//! - Level-by-level parallel fetching of full issue trees from GitHub
+//! - Level-by-level parallel fetching of full issue trees from Github
 //! - Per-node comparison between local, consensus, and remote states
 //! - Timestamp-based auto-resolution of conflicts
 
@@ -11,14 +11,14 @@ use jiff::Timestamp;
 use todo::{CloseState, Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, IssueMeta};
 use v_utils::prelude::*;
 
-use super::github_sync::IssueGitHubExt;
-use crate::github::{BoxedGitHubClient, GitHubComment, GitHubIssue};
+use super::github_sync::IssueGithubExt;
+use crate::github::{BoxedGithubClient, GithubComment, GithubIssue};
 
-/// Fetch a complete issue tree from GitHub, level by level.
+/// Fetch a complete issue tree from Github, level by level.
 ///
 /// Issues at the same nesting level are fetched in parallel.
 /// This ensures we get the full tree structure, not just shallow children.
-pub async fn fetch_full_issue_tree(gh: &BoxedGitHubClient, owner: &str, repo: &str, root_issue_number: u64) -> Result<Issue> {
+pub async fn fetch_full_issue_tree(gh: &BoxedGithubClient, owner: &str, repo: &str, root_issue_number: u64) -> Result<Issue> {
 	let current_user = gh.fetch_authenticated_user().await?;
 
 	// Fetch root issue with comments and immediate sub-issues
@@ -39,7 +39,7 @@ pub async fn fetch_full_issue_tree(gh: &BoxedGitHubClient, owner: &str, repo: &s
 
 /// Recursively fetch children for all nodes at the current level in parallel.
 fn fetch_children_recursive<'a>(
-	gh: &'a BoxedGitHubClient,
+	gh: &'a BoxedGithubClient,
 	owner: &'a str,
 	repo: &'a str,
 	current_user: &'a str,
@@ -70,7 +70,7 @@ fn fetch_children_recursive<'a>(
 		let results = futures::future::try_join_all(futures).await?;
 
 		// Build a map for quick lookup
-		let data_map: HashMap<u64, (Vec<GitHubComment>, Vec<GitHubIssue>)> = results.into_iter().map(|(num, comments, sub_issues)| (num, (comments, sub_issues))).collect();
+		let data_map: HashMap<u64, (Vec<GithubComment>, Vec<GithubIssue>)> = results.into_iter().map(|(num, comments, sub_issues)| (num, (comments, sub_issues))).collect();
 
 		// Update each child with full data
 		for child in &mut issue.children {

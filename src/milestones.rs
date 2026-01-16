@@ -67,7 +67,7 @@ async fn request_milestones(settings: &LiveSettings) -> Result<Vec<Milestone>> {
 	let client = Client::new();
 	let res = client
 		.get(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
+		.header("User-Agent", "Rust Github Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.send()
 		.await?;
@@ -77,7 +77,7 @@ async fn request_milestones(settings: &LiveSettings) -> Result<Vec<Milestone>> {
 	Ok(milestones)
 }
 
-/// Parse owner and repo from various GitHub URL formats
+/// Parse owner and repo from various Github URL formats
 /// Supports: "owner/repo", "https://github.com/owner/repo", "git@github.com:owner/repo.git", etc.
 fn parse_github_repo(url: &str) -> Result<(String, String)> {
 	let url = url.trim();
@@ -102,7 +102,7 @@ fn parse_github_repo(url: &str) -> Result<(String, String)> {
 		return Ok((owner.to_string(), repo.to_string()));
 	}
 
-	Err(eyre!("Could not parse GitHub repo from URL: {url}"))
+	Err(eyre!("Could not parse Github repo from URL: {url}"))
 }
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq)]
@@ -315,7 +315,7 @@ async fn update_milestone(settings: &LiveSettings, milestone_number: u64, descri
 	let client = Client::new();
 	let res = client
 		.patch(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
+		.header("User-Agent", "Rust Github Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.header("Content-Type", "application/json")
 		.json(&body)
@@ -348,7 +348,7 @@ async fn create_closed_milestone(settings: &LiveSettings, title: &str, descripti
 	let client = Client::new();
 	let res = client
 		.post(&api_url)
-		.header("User-Agent", "Rust GitHub Client")
+		.header("User-Agent", "Rust Github Client")
 		.header("Authorization", format!("token {}", milestones_config.github_token))
 		.header("Content-Type", "application/json")
 		.json(&body)

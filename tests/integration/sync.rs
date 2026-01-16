@@ -6,7 +6,7 @@
 //! - Single-side changes auto-resolve
 //!
 //! Tests work with `Issue` directly - our canonical representation.
-//! The mock GitHub layer translates to API format at the boundary.
+//! The mock Github layer translates to API format at the boundary.
 
 use std::path::Path;
 
@@ -236,7 +236,7 @@ fn test_pull_fetches_before_editor() {
 	let issue_path = ctx.consensus(&local);
 	ctx.remote(&remote);
 
-	// --pull should fetch from GitHub before opening editor
+	// --pull should fetch from Github before opening editor
 	let (status, stdout, stderr) = ctx.open(&issue_path).args(&["--pull"]).run();
 
 	eprintln!("stdout: {stdout}");
@@ -303,7 +303,7 @@ fn test_closing_issue_syncs_state_change() {
 }
 
 /// Sub-issues closed as duplicates should NOT appear in the pulled remote state.
-/// GitHub marks these with state_reason="duplicate" - they should be filtered out entirely.
+/// Github marks these with state_reason="duplicate" - they should be filtered out entirely.
 #[test]
 fn test_duplicate_sub_issues_filtered_from_remote() {
 	let ctx = TestContext::new("");
@@ -436,7 +436,7 @@ fn test_reset_syncs_changes_after_editor() {
 /// `!c` shorthand should expand to `<!-- new comment -->` and trigger comment creation.
 /// When the user types `!c` on its own line, it should:
 /// 1. Be expanded to `<!-- new comment -->` in the file
-/// 2. Result in a new comment being created on GitHub
+/// 2. Result in a new comment being created on Github
 #[test]
 fn test_comment_shorthand_creates_comment() {
 	let ctx = TestContext::new("");

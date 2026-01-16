@@ -1,4 +1,4 @@
-//! Issue formatting for rendering GitHub issues to local files.
+//! Issue formatting for rendering Github issues to local files.
 
 use todo::{Extension, FetchedIssue, Marker};
 
@@ -6,17 +6,17 @@ use super::{
 	files::{find_sub_issue_file, read_sub_issue_body_from_file},
 	util::{convert_markdown_to_typst, extract_checkbox_title},
 };
-use crate::github::{GitHubComment, GitHubIssue};
+use crate::github::{GithubComment, GithubIssue};
 
 /// Format an issue for local file storage.
 /// `ancestors` is the chain of parent issues (for sub-issue file lookup).
-/// `use_local_subissue_content`: if true, prefer local sub-issue file content over GitHub API body.
+/// `use_local_subissue_content`: if true, prefer local sub-issue file content over Github API body.
 ///   Set to false when doing a fresh fetch (e.g., --reset) to ensure only remote content is used.
 #[expect(clippy::too_many_arguments)]
 pub fn format_issue(
-	issue: &GitHubIssue,
-	comments: &[GitHubComment],
-	sub_issues: &[GitHubIssue],
+	issue: &GithubIssue,
+	comments: &[GithubComment],
+	sub_issues: &[GithubIssue],
 	owner: &str,
 	repo: &str,
 	current_user: &str,
@@ -125,7 +125,7 @@ pub fn format_issue(
 	}
 
 	// Sub-issues at the very end - embed their body content
-	// Prefer local file contents over GitHub body when available
+	// Prefer local file contents over Github body when available
 	// Closed sub-issues wrap body content in vim fold markers
 	for sub in sub_issues {
 		// Add empty line (with indent for LSP) before each sub-issue if previous line has content (markdown only)
@@ -156,7 +156,7 @@ pub fn format_issue(
 			None
 		};
 
-		// Use local file contents if available (and allowed), otherwise fall back to GitHub body
+		// Use local file contents if available (and allowed), otherwise fall back to Github body
 		let body_to_embed = local_body.as_deref().or(sub.body.as_deref());
 
 		if let Some(body) = body_to_embed
@@ -190,18 +190,18 @@ mod tests {
 	use insta::assert_snapshot;
 
 	use super::*;
-	use crate::github::{GitHubLabel, GitHubUser};
+	use crate::github::{GithubLabel, GithubUser};
 
-	fn make_user(login: &str) -> GitHubUser {
-		GitHubUser { login: login.to_string() }
+	fn make_user(login: &str) -> GithubUser {
+		GithubUser { login: login.to_string() }
 	}
 
-	fn make_issue(number: u64, title: &str, body: Option<&str>, labels: Vec<&str>, user: &str, state: &str) -> GitHubIssue {
-		GitHubIssue {
+	fn make_issue(number: u64, title: &str, body: Option<&str>, labels: Vec<&str>, user: &str, state: &str) -> GithubIssue {
+		GithubIssue {
 			number,
 			title: title.to_string(),
 			body: body.map(|s| s.to_string()),
-			labels: labels.into_iter().map(|name| GitHubLabel { name: name.to_string() }).collect(),
+			labels: labels.into_iter().map(|name| GithubLabel { name: name.to_string() }).collect(),
 			user: make_user(user),
 			state: state.to_string(),
 			state_reason: None,
@@ -272,12 +272,12 @@ mod tests {
 	fn test_format_issue_md_mixed_ownership() {
 		let issue = make_issue(123, "Test Issue", Some("Issue body text"), vec![], "other", "open");
 		let comments = vec![
-			GitHubComment {
+			GithubComment {
 				id: 1001,
 				body: Some("First comment".to_string()),
 				user: make_user("me"),
 			},
-			GitHubComment {
+			GithubComment {
 				id: 1002,
 				body: Some("Second comment".to_string()),
 				user: make_user("other"),
@@ -312,7 +312,7 @@ mod tests {
 	#[test]
 	fn test_format_issue_typ_not_owned() {
 		let issue = make_issue(456, "Typst Issue", Some("Body"), vec![], "other", "open");
-		let comments = vec![GitHubComment {
+		let comments = vec![GithubComment {
 			id: 2001,
 			body: Some("A comment".to_string()),
 			user: make_user("other"),
@@ -350,12 +350,12 @@ mod tests {
 	fn test_issue_render_order_complete() {
 		let issue = make_issue(123, "Main Issue", Some("This is the body text.\nWith multiple lines."), vec!["bug", "priority"], "me", "open");
 		let comments = vec![
-			GitHubComment {
+			GithubComment {
 				id: 1001,
 				body: Some("First comment from me".to_string()),
 				user: make_user("me"),
 			},
-			GitHubComment {
+			GithubComment {
 				id: 1002,
 				body: Some("Second comment from other".to_string()),
 				user: make_user("other"),

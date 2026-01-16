@@ -9,7 +9,7 @@ use crate::config::LiveSettings;
 
 #[derive(Args, Debug)]
 pub struct PerfEvalArgs {
-	/// GitHub API token (can also be set via GITHUB_KEY env var)
+	/// Github API token (can also be set via GITHUB_KEY env var)
 	#[arg(long)]
 	pub github_key: Option<String>,
 }

@@ -1,4 +1,4 @@
-//! Sync local issue changes back to GitHub.
+//! Sync local issue changes back to Github.
 //!
 #![allow(unused_assignments)] // Fields in PushError are read by miette's derive macro via attributes
 //!
@@ -31,7 +31,7 @@
 pub enum Side {
 	/// Prefer local file state
 	Local,
-	/// Prefer remote GitHub state
+	/// Prefer remote Github state
 	Remote,
 }
 
@@ -94,26 +94,26 @@ use super::{
 	conflict::mark_conflict,
 	fetch::fetch_and_store_issue,
 	git::{commit_issue_changes, is_git_initialized, load_consensus_issue},
-	github_sync::IssueGitHubExt,
+	github_sync::IssueGithubExt,
 	meta::load_issue_meta_from_path,
 	tree::{fetch_full_issue_tree, resolve_tree},
 };
-use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGitHubClient};
+use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGithubClient};
 
 //=============================================================================
 // Error types
 //=============================================================================
 
-/// Errors that can occur when pushing changes to GitHub.
+/// Errors that can occur when pushing changes to Github.
 #[derive(Debug, Diagnostic, Error)]
 pub enum PushError {
-	/// Local file references a comment ID that doesn't exist on GitHub.
+	/// Local file references a comment ID that doesn't exist on Github.
 	/// This typically happens when comment IDs were manually edited in the local file.
 	#[error("comment {comment_id} not found in consensus")]
 	#[diagnostic(
 		code(todo::sync::id_mismatch),
 		help(
-			"The local file references a comment ID that doesn't exist on GitHub.\nThis can happen if comment IDs were manually edited.\nTry re-fetching the issue with `--pull --reset=remote`."
+			"The local file references a comment ID that doesn't exist on Github.\nThis can happen if comment IDs were manually edited.\nTry re-fetching the issue with `--pull --reset=remote`."
 		)
 	)]
 	IdMismatch { comment_id: u64 },
@@ -123,10 +123,10 @@ pub enum PushError {
 // Sync implementation
 //=============================================================================
 
-/// Sync changes from a local issue to GitHub.
+/// Sync changes from a local issue to Github.
 /// Compares local state against remote state using git consensus.
 /// Returns whether the issue state changed (for file renaming).
-pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue_number: u64, consensus: &Issue, local: &Issue) -> Result<bool> {
+pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64, consensus: &Issue, local: &Issue) -> Result<bool> {
 	let mut updates = 0;
 	let mut creates = 0;
 	let mut deletes = 0;
@@ -209,7 +209,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 		if deletes > 0 {
 			parts.push(format!("{deletes} deleted"));
 		}
-		println!("Synced to GitHub: {}", parts.join(", "));
+		println!("Synced to Github: {}", parts.join(", "));
 	}
 
 	Ok(state_changed)
@@ -217,7 +217,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGitHubClient, owner: &str, rep
 
 /// Execute issue actions and update the Issue struct with new URLs.
 /// Returns (executed_count, Option<created_issue_number>) - the issue number is set if a root issue was created.
-pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &str, issue: &mut Issue, actions: Vec<Vec<crate::github::IssueAction>>) -> Result<(usize, Option<u64>)> {
+pub async fn execute_issue_actions(gh: &BoxedGithubClient, owner: &str, repo: &str, issue: &mut Issue, actions: Vec<Vec<crate::github::IssueAction>>) -> Result<(usize, Option<u64>)> {
 	use crate::github::IssueAction;
 
 	let mut executed = 0;
@@ -276,7 +276,7 @@ pub async fn execute_issue_actions(gh: &BoxedGitHubClient, owner: &str, repo: &s
 ///
 /// Returns (merged_issue, local_needs_update, remote_needs_update).
 /// - local_needs_update: true if local file should be rewritten with merged result
-/// - remote_needs_update: true if changes should be pushed to GitHub
+/// - remote_needs_update: true if changes should be pushed to Github
 async fn apply_merge_mode(
 	local: &Issue,
 	consensus: Option<&Issue>,
@@ -634,7 +634,7 @@ impl Modifier {
 ///
 /// This is the unified sync entry point. All sync operations go through here.
 async fn sync_issue_to_github_inner(
-	gh: &BoxedGitHubClient,
+	gh: &BoxedGithubClient,
 	issue_file_path: &Path,
 	owner: &str,
 	repo: &str,
@@ -645,7 +645,7 @@ async fn sync_issue_to_github_inner(
 ) -> Result<()> {
 	// Load consensus from git (last committed state).
 	// Consensus is REQUIRED for sync - if we're here, the file should be tracked.
-	// For new issues, --touch creates them on GitHub and commits as consensus.
+	// For new issues, --touch creates them on Github and commits as consensus.
 	// For URL mode, fetch commits as consensus.
 	let consensus = load_consensus_issue(issue_file_path).ok_or_else(|| {
 		eyre!(
@@ -661,7 +661,7 @@ async fn sync_issue_to_github_inner(
 	// SYNC: Merge local and remote state
 	//=========================================================================
 	// Pending items (new local sub-issues) are preserved during merge and
-	// created on GitHub in post-sync. No pre-sync phase needed.
+	// created on Github in post-sync. No pre-sync phase needed.
 	let local_needs_update = if issue.meta.identity.is_linked() {
 		// Normal flow: fetch remote and merge
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
@@ -695,7 +695,7 @@ async fn sync_issue_to_github_inner(
 	//=========================================================================
 	// Compare merged state against consensus and push all differences.
 	// This handles:
-	// 1. Create Pending sub-issues on GitHub
+	// 1. Create Pending sub-issues on Github
 	// 2. Push body/comments/state changes for root issue
 	// 3. Push state changes for sub-issues
 
@@ -742,12 +742,12 @@ async fn sync_issue_to_github_inner(
 		0
 	};
 
-	// Determine if we need to refresh from GitHub
+	// Determine if we need to refresh from Github
 	let needs_refresh = has_creates || state_changed || local_needs_update || updates_executed > 0;
 
 	if needs_refresh {
 		// Re-fetch and update local file to reflect the synced state
-		println!("Refreshing local issue file from GitHub...");
+		println!("Refreshing local issue file from Github...");
 
 		// Determine parent issue info if this is a sub-issue
 		let meta = load_issue_meta_from_path(issue_file_path)?;
@@ -787,7 +787,7 @@ async fn sync_issue_to_github_inner(
 
 		let total_actions = updates_executed + if has_creates { 1 } else { 0 };
 		if total_actions > 0 {
-			println!("Synced {total_actions} actions to GitHub.");
+			println!("Synced {total_actions} actions to Github.");
 		}
 
 		// Commit the synced changes to local git
@@ -802,14 +802,14 @@ async fn sync_issue_to_github_inner(
 /// Open a local issue file with the default editor modifier.
 /// If `open_at_blocker` is true, opens the editor at the position of the last blocker item.
 #[tracing::instrument(level = "debug", skip(gh, sync_opts), target = "todo::open_interactions::sync")]
-pub async fn open_local_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, sync_opts: SyncOptions, open_at_blocker: bool) -> Result<()> {
+pub async fn open_local_issue(gh: &BoxedGithubClient, issue_file_path: &Path, offline: bool, sync_opts: SyncOptions, open_at_blocker: bool) -> Result<()> {
 	modify_and_sync_issue(gh, issue_file_path, offline, Modifier::Editor { open_at_blocker }, sync_opts).await?;
 	Ok(())
 }
 
-/// Modify a local issue file using the given modifier, then sync changes back to GitHub.
+/// Modify a local issue file using the given modifier, then sync changes back to Github.
 #[tracing::instrument(level = "debug", skip(gh), target = "todo::open_interactions::sync")]
-pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Path, offline: bool, modifier: Modifier, sync_opts: SyncOptions) -> Result<ModifyResult> {
+pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Path, offline: bool, modifier: Modifier, sync_opts: SyncOptions) -> Result<ModifyResult> {
 	use super::{conflict::check_any_conflicts, files::extract_owner_repo_from_path, meta::is_virtual_project};
 
 	// Check for any unresolved conflicts first
@@ -837,7 +837,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	// Handle --pull: fetch and sync from remote BEFORE opening editor
 	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
 	if sync_opts.pull && !offline && meta.issue_number != 0 {
-		println!("Pulling latest from GitHub...");
+		println!("Pulling latest from Github...");
 
 		// Fetch remote state
 		let remote_issue = fetch_full_issue_tree(gh, &owner, &repo, meta.issue_number).await?;
@@ -899,7 +899,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 
 		println!("Issue marked as duplicate of #{dup_number}, removing local file...");
 
-		// Close on GitHub (if not already closed and not offline)
+		// Close on Github (if not already closed and not offline)
 		// If consensus doesn't exist (shouldn't happen), assume we need to close
 		let consensus_closed = load_consensus_issue(issue_file_path).map(|c| c.meta.close_state.is_closed()).unwrap_or(false);
 		if !offline && !consensus_closed {
@@ -944,8 +944,8 @@ pub async fn modify_and_sync_issue(gh: &BoxedGitHubClient, issue_file_path: &Pat
 	Ok(result)
 }
 
-/// Modify a local issue file offline (no GitHub sync).
-/// Use this when you know you're in offline mode and don't want to require a GitHub client.
+/// Modify a local issue file offline (no Github sync).
+/// Use this when you know you're in offline mode and don't want to require a Github client.
 #[tracing::instrument(level = "debug", target = "todo::open_interactions::sync")]
 pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) -> Result<ModifyResult> {
 	use super::meta::load_issue_meta_from_path;

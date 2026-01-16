@@ -151,7 +151,7 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 				get_current_blocker_issue().ok_or_else(|| eyre!("No issue set. Use `todo blocker set <pattern>` first."))?
 			};
 
-			// Open the issue file with $EDITOR (offline, no GitHub sync)
+			// Open the issue file with $EDITOR (offline, no Github sync)
 			v_utils::io::file_open::open(&issue_path).await?;
 
 			// If set_after flag is set, update the current blocker issue
@@ -216,7 +216,7 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 				bail!("No `{marker}` marker found in issue body.");
 			}
 
-			// Use unified modify workflow - offline version skips GitHub client requirement
+			// Use unified modify workflow - offline version skips Github client requirement
 			let result = if offline {
 				modify_issue_offline(&issue_path, Modifier::BlockerPop).await?
 			} else {
@@ -249,7 +249,7 @@ pub async fn main_integrated(settings: &crate::config::LiveSettings, command: su
 			// We just add the blocker to the current issue
 			let issue_path = get_current_blocker_issue().ok_or_else(|| eyre!("No blocker file set. Use `todo blocker set <pattern>` first."))?;
 
-			// Use unified modify workflow - offline version skips GitHub client requirement
+			// Use unified modify workflow - offline version skips Github client requirement
 			let result = if offline {
 				modify_issue_offline(&issue_path, Modifier::BlockerAdd { text: name.clone() }).await?
 			} else {
