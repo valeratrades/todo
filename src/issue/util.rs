@@ -1,4 +1,6 @@
 //! Small utility functions for issue processing.
+//XXX: fundamentally flawed concept, is up for deprecation.
+// Markers should be taking care of all parts of parsing themselves
 
 use super::Marker;
 use crate::Extension;

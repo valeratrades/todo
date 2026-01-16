@@ -106,8 +106,9 @@ fn fetch_children_recursive<'a>(
 							identity,
 							close_state,
 							owned: si.user.login == current_user,
+							labels: si.labels.iter().map(|l| l.name.clone()).collect(),
 						},
-						labels: si.labels.iter().map(|l| l.name.clone()).collect(),
+						contents: Default::default(),
 						comments: vec![Comment {
 							identity: CommentIdentity::Body,
 							body: si.body.as_deref().unwrap_or("").to_string(),
@@ -210,7 +211,7 @@ fn node_content_eq(a: &Issue, b: &Issue) -> bool {
 	}
 
 	// Compare labels
-	if a.labels != b.labels {
+	if a.meta.labels != b.meta.labels {
 		return false;
 	}
 
@@ -350,7 +351,7 @@ fn resolve_tree_recursive(
 /// Apply remote node content to resolved node (excluding children).
 fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 	resolved.meta.close_state = remote.meta.close_state.clone();
-	resolved.labels = remote.labels.clone();
+	resolved.meta.labels = remote.meta.labels.clone();
 
 	// Update comments: keep structure but update content
 	if let Some(remote_body) = remote.comments.first()
@@ -381,8 +382,9 @@ mod tests {
 				identity: IssueLink::parse("https://github.com/o/r/issues/1").map(IssueIdentity::Linked).unwrap(),
 				close_state: CloseState::Open,
 				owned: true,
+				labels: vec![],
 			},
-			labels: vec![],
+			contents: Default::default(),
 			comments: vec![Comment {
 				identity: CommentIdentity::Body,
 				body: body.to_string(),
@@ -464,8 +466,9 @@ mod tests {
 				identity: IssueLink::parse(url).map(IssueIdentity::Linked).unwrap(),
 				close_state: CloseState::Open,
 				owned: true,
+				labels: vec![],
 			},
-			labels: vec![],
+			contents: Default::default(),
 			comments: vec![Comment {
 				identity: CommentIdentity::Body,
 				body: body.to_string(),

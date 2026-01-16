@@ -16,9 +16,9 @@
 	//Q: introducing concept of being "completed" raises a question of whether it's maybe better to compile to use markdown's native todos `- [ ]`
 
 	could argue for them being different degrees of idea processing:
-	1. tg: unstructured thoughts
-	1. issues: strictured thoughts
-	1. blockers: action items
+	+ tg: unstructured thoughts
+	+ issues: strictured thoughts
+	+ blockers: action items
 
 	also, let's put blockers to be an optional ordered list of action items on each issue. Projects of blockers should now mirror structure leading to an issue. `set-project` will now select an issue to set as root. Doesn't have to be synced to git or have an associated repo, but we treat them as if they do
 

@@ -1,4 +1,4 @@
-//! Example: Parse any text file as typst (with preprocessing) and pretty-print the AST
+//! Example: Parse a typst file and pretty-print the AST
 //!
 //! Run with: cargo run --example typst_parse [path]
 
@@ -12,13 +12,9 @@ fn main() {
 	let content = fs::read_to_string(&path).expect("Failed to read file");
 
 	println!("=== Parsing: {path} ===\n");
-
-	let preprocessed = preprocess_to_typst(&content);
-
-	println!("=== Preprocessed ===\n{preprocessed}\n");
 	println!("=== AST ===\n");
 
-	let root = parse(&preprocessed);
+	let root = parse(&content);
 
 	let errors = root.errors();
 	if !errors.is_empty() {
@@ -32,23 +28,9 @@ fn main() {
 	let ast_str = format!("{root:#?}");
 	println!("{ast_str}");
 
-	// Write AST to .rs file next to input
+	// Write AST to .ast.rs.bak file next to input
 	let input_path = Path::new(&path);
-	let ast_path = input_path.with_extension("ast.rs");
+	let ast_path = input_path.with_extension("ast.rs.bak");
 	fs::write(&ast_path, &ast_str).expect("Failed to write AST file");
 	eprintln!("\nWrote AST to {}", ast_path.display());
-}
-
-/// Preprocess raw text into valid typst
-fn preprocess_to_typst(input: &str) -> String {
-	let mut result = String::with_capacity(input.len());
-
-	for line in input.lines() {
-		//let preprocessed = preprocess_line(line);
-		let preprocessed = line.to_string();
-		result.push_str(&preprocessed);
-		result.push('\n');
-	}
-
-	result
 }

@@ -67,14 +67,14 @@ impl IssueGithubExt for Issue {
 		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
 
 		let identity = IssueLink::parse(&issue_url).map(IssueIdentity::Linked).expect("just constructed valid URL");
+		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
 		let meta = IssueMeta {
 			title: issue.title.clone(),
 			identity,
 			close_state,
 			owned: issue_owned,
+			labels,
 		};
-
-		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
 
 		// Parse timestamp from Github's ISO 8601 format
 		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
@@ -116,8 +116,9 @@ impl IssueGithubExt for Issue {
 						identity: child_identity,
 						close_state: child_close_state,
 						owned: si.user.login == current_user,
+						labels: si.labels.iter().map(|l| l.name.clone()).collect(),
 					},
-					labels: si.labels.iter().map(|l| l.name.clone()).collect(),
+					contents: Default::default(),
 					comments: vec![Comment {
 						identity: CommentIdentity::Body,
 						body: si.body.as_deref().unwrap_or("").to_string(),
@@ -132,7 +133,7 @@ impl IssueGithubExt for Issue {
 
 		Issue {
 			meta,
-			labels,
+			contents: Default::default(),
 			comments: issue_comments,
 			children,
 			blockers,
@@ -251,7 +252,7 @@ mod tests {
 		assert_eq!(result.meta.identity.url_str(), Some("https://github.com/owner/repo/issues/123"));
 		assert_eq!(result.meta.close_state, CloseState::Open);
 		assert!(result.meta.owned);
-		assert_eq!(result.labels, vec!["bug".to_string()]);
+		assert_eq!(result.meta.labels, vec!["bug".to_string()]);
 
 		// Body + 1 comment
 		assert_eq!(result.comments.len(), 2);

@@ -405,7 +405,7 @@ fn get_node_at_path_mut<'a>(issue: &'a mut Issue, path: &[usize]) -> Option<&'a 
 /// Does NOT modify children - only the node's own content.
 fn apply_node_content(target: &mut Issue, source: &Issue) {
 	target.meta.close_state = source.meta.close_state.clone();
-	target.labels = source.labels.clone();
+	target.meta.labels = source.meta.labels.clone();
 	target.blockers = source.blockers.clone();
 
 	// Copy comments (body is first comment)

@@ -2,18 +2,18 @@
 //!
 //! This module contains the pure Issue type with parsing and serialization.
 
-use std::fmt;
-
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::issue::contents::Content;
+
 /// A Github issue identifier. Wraps a URL and derives all properties on demand.
 /// Format: `https://github.com/{owner}/{repo}/issues/{number}`
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::Deref, derive_more::DerefMut)]
 pub struct IssueLink(Url);
 
-impl IssueLink {
+impl IssueLink /*{{{1*/ {
 	/// Create from a URL. Returns None if not a valid Github issue URL.
 	pub fn new(url: Url) -> Option<Self> {
 		// Validate it's a Github issue URL
@@ -61,24 +61,7 @@ impl IssueLink {
 		self.0.as_str()
 	}
 }
-
-impl fmt::Display for IssueLink {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", self.0)
-	}
-}
-
-impl From<IssueLink> for Url {
-	fn from(link: IssueLink) -> Url {
-		link.0
-	}
-}
-
-impl AsRef<Url> for IssueLink {
-	fn as_ref(&self) -> &Url {
-		&self.0
-	}
-}
+//,}}}1
 
 /// Identity of an issue - either linked to Github or pending creation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,7 +72,7 @@ pub enum IssueIdentity {
 	Pending,
 }
 
-impl IssueIdentity {
+impl IssueIdentity /*{{{1*/ {
 	/// Get the link if this issue is linked to Github.
 	pub fn link(&self) -> Option<&IssueLink> {
 		match self {
@@ -118,6 +101,7 @@ impl IssueIdentity {
 		self.link().map(|l| l.as_str())
 	}
 }
+//,}}}1
 
 /// Identity of a comment - either linked to Github or pending creation.
 /// Note: The first comment (issue body) is always `Body`, not `Linked` or `Pending`.
@@ -131,7 +115,7 @@ pub enum CommentIdentity {
 	Pending,
 }
 
-impl CommentIdentity {
+impl CommentIdentity /*{{{1*/ {
 	/// Get the comment ID if linked.
 	pub fn id(&self) -> Option<u64> {
 		match self {
@@ -150,6 +134,7 @@ impl CommentIdentity {
 		matches!(self, Self::Pending)
 	}
 }
+//,}}}1
 
 /// An issue with its title - used when we need both identity and display name.
 /// This is what we have after fetching an issue from Github.
@@ -159,7 +144,7 @@ pub struct FetchedIssue {
 	pub title: String,
 }
 
-impl FetchedIssue {
+impl FetchedIssue /*{{{1*/ {
 	pub fn new(link: IssueLink, title: impl Into<String>) -> Self {
 		Self { link, title: title.into() }
 	}
@@ -186,6 +171,7 @@ impl FetchedIssue {
 		self.link.repo()
 	}
 }
+//,}}}1
 
 use super::{
 	blocker::{BlockerSequence, classify_line, join_with_blockers},
@@ -231,7 +217,7 @@ pub enum CloseState {
 	Duplicate(u64),
 }
 
-impl CloseState {
+impl CloseState /*{{{1*/ {
 	/// Returns true if the issue is closed (any close variant)
 	pub fn is_closed(&self) -> bool {
 		!matches!(self, CloseState::Open)
@@ -308,6 +294,7 @@ impl CloseState {
 		}
 	}
 }
+//,}}}1
 
 /// Metadata for an issue (title line info)
 #[derive(Clone, Debug, PartialEq)]
@@ -318,6 +305,8 @@ pub struct IssueMeta {
 	pub close_state: CloseState,
 	/// Whether owned by current user (false = immutable)
 	pub owned: bool,
+	/// Git labels
+	pub labels: Vec<String>,
 }
 
 /// A comment in the issue conversation (first one is always the issue body)
@@ -333,7 +322,7 @@ pub struct Comment {
 #[derive(Clone, Debug)]
 pub struct Issue {
 	pub meta: IssueMeta,
-	pub labels: Vec<String>,
+	pub contents: Content,
 	/// Comments in order. First is always the issue body (serialized without marker).
 	pub comments: Vec<Comment>,
 	/// Sub-issues in order
@@ -345,7 +334,7 @@ pub struct Issue {
 	pub last_contents_change: Option<Timestamp>,
 }
 
-impl Issue {
+impl Issue /*{{{1*/ {
 	/// Get the full issue body including blockers section.
 	/// This is what should be synced to Github as the issue body.
 	pub fn body(&self) -> String {
@@ -388,7 +377,7 @@ impl Issue {
 			span: ctx.line_span(line_num),
 			expected_tabs: depth,
 		})?;
-		let (meta, labels) = Self::parse_title_line(title_content, line_num, ctx)?;
+		let meta = Self::parse_title_line(title_content, line_num, ctx)?;
 
 		let mut comments = Vec::new();
 		let mut children = Vec::new();
@@ -639,7 +628,7 @@ impl Issue {
 
 		Ok(Issue {
 			meta,
-			labels,
+			contents: Content::default(),
 			comments,
 			children,
 			blockers: BlockerSequence::from_lines(blocker_lines),
@@ -649,8 +638,7 @@ impl Issue {
 
 	/// Parse title line: `- [ ] [label1, label2] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
 	/// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
-	/// Returns (IssueMeta, labels)
-	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<(IssueMeta, Vec<String>), ParseError> {
+	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<IssueMeta, ParseError> {
 		// Parse checkbox: `- [CONTENT] `
 		let (close_state, rest) = match Self::parse_checkbox_prefix_detailed(line) {
 			CheckboxParseResult::Ok(state, rest) => (state, rest),
@@ -716,15 +704,13 @@ impl Issue {
 			(true, identity)
 		};
 
-		Ok((
-			IssueMeta {
-				title,
-				identity,
-				close_state,
-				owned,
-			},
+		Ok(IssueMeta {
+			title,
+			identity,
+			close_state,
+			owned,
 			labels,
-		))
+		})
 	}
 
 	/// Parse checkbox prefix: `- [CONTENT] ` and return result.
@@ -769,6 +755,7 @@ impl Issue {
 				identity,
 				close_state,
 				owned: true,
+				labels: vec![],
 			})
 		} else if !rest.contains("<!--") {
 			let title = rest.trim().to_string();
@@ -778,6 +765,7 @@ impl Issue {
 					identity: IssueIdentity::Pending,
 					close_state,
 					owned: true,
+					labels: vec![],
 				})
 			} else {
 				ChildTitleParseResult::NotChildTitle
@@ -807,7 +795,11 @@ impl Issue {
 		// Title line - root uses `<!-- url -->`, children use `<!--sub url -->`
 		let checked = self.meta.close_state.to_checkbox();
 		let url_part = self.meta.identity.url_str().unwrap_or("");
-		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
+		let labels_part = if self.meta.labels.is_empty() {
+			String::new()
+		} else {
+			format!("[{}] ", self.meta.labels.join(", "))
+		};
 		let marker = if depth == 0 { " " } else { "sub " };
 		if self.meta.owned {
 			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{url_part} -->\n", self.meta.title));
@@ -881,7 +873,11 @@ impl Issue {
 				// Output child title line
 				let child_checked = child.meta.close_state.to_checkbox();
 				let child_url_part = child.meta.identity.url_str().unwrap_or("");
-				let child_labels_part = if child.labels.is_empty() { String::new() } else { format!("[{}] ", child.labels.join(", ")) };
+				let child_labels_part = if child.meta.labels.is_empty() {
+					String::new()
+				} else {
+					format!("[{}] ", child.meta.labels.join(", "))
+				};
 				if child.meta.owned {
 					out.push_str(&format!(
 						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_url_part} -->\n",
@@ -925,7 +921,11 @@ impl Issue {
 		// Title line (always at root level for filesystem representation)
 		let checked = self.meta.close_state.to_checkbox();
 		let url_part = self.meta.identity.url_str().unwrap_or("");
-		let labels_part = if self.labels.is_empty() { String::new() } else { format!("[{}] ", self.labels.join(", ")) };
+		let labels_part = if self.meta.labels.is_empty() {
+			String::new()
+		} else {
+			format!("[{}] ", self.meta.labels.join(", "))
+		};
 		if self.meta.owned {
 			out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {url_part} -->\n", self.meta.title));
 		} else {
@@ -1087,10 +1087,12 @@ impl Issue {
 		last_item_line_num.zip(last_item_col)
 	}
 }
+//,}}}1
 
 /// Semantic equality for divergence detection.
 /// Compares the fields that matter for sync: close_state, body, comments, sub-issue states.
 /// Ignores local-only fields like blockers and ownership.
+//TODO!!!!!: update to properly compare based on exact node equality (note that blockers are a very real part of it actually)
 impl PartialEq for Issue {
 	fn eq(&self, other: &Self) -> bool {
 		// Compare close state
