@@ -10,7 +10,7 @@ use crate::issue::contents::Content;
 
 /// A Github issue identifier. Wraps a URL and derives all properties on demand.
 /// Format: `https://github.com/{owner}/{repo}/issues/{number}`
-#[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::Deref, derive_more::DerefMut)]
+#[derive(Clone, Debug, derive_more::Deref, derive_more::DerefMut, Eq, Hash, PartialEq)]
 pub struct IssueLink(Url);
 
 impl IssueLink /*{{{1*/ {
