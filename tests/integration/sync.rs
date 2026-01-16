@@ -332,21 +332,20 @@ fn test_duplicate_sub_issues_filtered_from_remote() {
 
 	assert!(status.success(), "Should succeed. stderr: {stderr}");
 
-	// Check the created file - duplicate sub-issue should NOT be present
-	let issue_path = ctx.dir_issue_path("o", "r", 1, "Parent Issue");
-	let content = std::fs::read_to_string(&issue_path).unwrap();
+	// Check that the normal closed sub-issue file exists (with .bak suffix)
+	let issue_dir = ctx.dir_issue_path("o", "r", 1, "Parent Issue").parent().unwrap().to_path_buf();
+	let normal_closed_path = issue_dir.join("2_-_Normal_Closed_Sub.md.bak");
+	assert!(normal_closed_path.exists(), "Normal closed sub-issue file should exist");
 
-	eprintln!("File content:\n{content}");
+	let closed_content = std::fs::read_to_string(&normal_closed_path).unwrap();
+	assert!(closed_content.contains("Normal Closed Sub"), "Normal closed sub-issue content missing");
+	assert!(closed_content.contains("[x]"), "Normal closed sub should show as [x]. Got: {closed_content}");
 
-	// Normal closed sub-issue should appear
-	assert!(content.contains("Normal Closed Sub"), "Normal closed sub-issue should appear. Got: {content}");
-	assert!(content.contains("[x]"), "Normal closed sub should show as [x]. Got: {content}");
-
-	// Duplicate sub-issue should NOT appear at all
-	assert!(
-		!content.contains("Duplicate Sub"),
-		"Duplicate sub-issue should NOT appear in local representation. Got: {content}"
-	);
+	// Duplicate sub-issue should NOT have a file at all
+	let duplicate_path = issue_dir.join("3_-_Duplicate_Sub.md.bak");
+	let duplicate_path_open = issue_dir.join("3_-_Duplicate_Sub.md");
+	assert!(!duplicate_path.exists(), "Duplicate sub-issue should NOT have a file");
+	assert!(!duplicate_path_open.exists(), "Duplicate sub-issue should NOT have a file");
 }
 
 /// Opening an issue twice when local matches remote should succeed (no-op).

@@ -60,9 +60,16 @@ fn test_nested_issues_preserved_through_sync() {
 
 	assert!(status.success(), "stderr: {stderr}");
 
-	let final_content = std::fs::read_to_string(&path).unwrap();
-	assert!(final_content.contains("nested body b"), "nested issue b body lost");
-	assert!(final_content.contains("nested body c"), "nested issue c body lost");
+	// With the new model, children are stored in separate files in the parent's directory
+	let parent_dir = path.parent().unwrap();
+	let child_b_path = parent_dir.join("2_-_b.md");
+	let child_c_path = parent_dir.join("3_-_c.md");
+
+	let child_b_content = std::fs::read_to_string(&child_b_path).expect("child b file should exist");
+	let child_c_content = std::fs::read_to_string(&child_c_path).expect("child c file should exist");
+
+	assert!(child_b_content.contains("nested body b"), "nested issue b body lost");
+	assert!(child_c_content.contains("nested body c"), "nested issue c body lost");
 }
 
 #[test]
@@ -90,9 +97,16 @@ fn test_mixed_open_closed_nested_issues_preserved() {
 
 	assert!(status.success(), "stderr: {stderr}");
 
-	let final_content = std::fs::read_to_string(&path).unwrap();
-	assert!(final_content.contains("open nested body"), "open nested issue body lost");
-	assert!(final_content.contains("- [x] c"), "closed nested issue state lost");
+	// With the new model, children are stored in separate files
+	let parent_dir = path.parent().unwrap();
+	let child_b_path = parent_dir.join("2_-_b.md");
+	let child_c_path = parent_dir.join("3_-_c.md.bak"); // closed issue has .bak suffix
+
+	let child_b_content = std::fs::read_to_string(&child_b_path).expect("child b file should exist");
+	assert!(child_b_content.contains("open nested body"), "open nested issue body lost");
+
+	let child_c_content = std::fs::read_to_string(&child_c_path).expect("child c file should exist");
+	assert!(child_c_content.contains("- [x] c"), "closed nested issue state lost");
 }
 
 #[test]
@@ -199,25 +213,28 @@ fn test_nested_issues_and_blockers_together() {
 		 \t\tnested body\n",
 	);
 
-	ctx.consensus(&issue);
+	// Use the path returned by consensus (which is in directory format for issues with children)
+	let path = ctx.consensus(&issue);
 	ctx.remote(&issue);
 
-	let path = ctx.issue_path(&issue);
 	let (status, stdout, stderr) = ctx.run_open(&path);
 	eprintln!("stdout: {stdout}\nstderr: {stderr}");
 
 	assert!(status.success(), "stderr: {stderr}");
 
-	// File moves to directory format when nested issues exist
-	let final_path = ctx.issue_path_after_sync("o", "r", 1, "a", true);
-	let final_content = std::fs::read_to_string(&final_path).unwrap();
+	// File is in directory format (path points to __main__.md)
+	let final_content = std::fs::read_to_string(&path).unwrap();
 	assert!(final_content.contains("# Blockers"), "blockers section lost");
 	assert!(final_content.contains("blocker one"), "blocker one lost");
-	assert!(final_content.contains("nested body"), "nested issue body lost");
+
+	// With the new model, nested issue is in a separate file
+	let child_path = path.parent().unwrap().join("2_-_b.md");
+	let child_content = std::fs::read_to_string(&child_path).expect("child file should exist");
+	assert!(child_content.contains("nested body"), "nested issue body lost");
 }
 
 #[test]
-fn test_closing_nested_issue_adds_fold_markers() {
+fn test_closing_nested_issue_creates_bak_file() {
 	let ctx = TestContext::new("");
 
 	// Start with open nested issue
@@ -229,10 +246,9 @@ fn test_closing_nested_issue_adds_fold_markers() {
 		 \t\tnested body content\n",
 	);
 
-	ctx.consensus(&initial_issue);
+	// Use the path returned by consensus (which is in directory format for issues with children)
+	let path = ctx.consensus(&initial_issue);
 	ctx.remote(&initial_issue);
-
-	let path = ctx.issue_path(&initial_issue);
 
 	// User closes nested issue during edit
 	let edited_issue = parse(
@@ -248,9 +264,11 @@ fn test_closing_nested_issue_adds_fold_markers() {
 
 	assert!(status.success(), "stderr: {stderr}");
 
-	// File moves to directory format when nested issues exist
-	let final_path = ctx.issue_path_after_sync("o", "r", 1, "a", true);
-	let final_content = std::fs::read_to_string(&final_path).unwrap();
-	assert!(final_content.contains("- [x] b"), "nested issue not marked closed");
-	assert!(final_content.contains("<!--omitted"), "fold marker not added for closed nested issue");
+	// With the new model, closed child is in a separate .bak file
+	let closed_child_path = path.parent().unwrap().join("2_-_b.md.bak");
+	assert!(closed_child_path.exists(), "closed nested issue should have .bak file");
+
+	let child_content = std::fs::read_to_string(&closed_child_path).unwrap();
+	assert!(child_content.contains("- [x] b"), "nested issue not marked closed");
+	assert!(child_content.contains("nested body content"), "child body should be preserved");
 }

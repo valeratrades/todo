@@ -125,7 +125,7 @@ impl GitExt for TestContext {
 			state.local_issues.insert(key);
 		});
 
-		self.write_issue_file(&owner, &repo, number, issue)
+		self.write_issue_tree(&owner, &repo, number, issue)
 	}
 
 	fn consensus(&self, issue: &Issue) -> PathBuf {
@@ -139,7 +139,7 @@ impl GitExt for TestContext {
 			state.consensus_issues.insert(key);
 		});
 
-		let path = self.write_issue_file(&owner, &repo, number, issue);
+		let path = self.write_issue_tree(&owner, &repo, number, issue);
 
 		let git = self.init_git();
 		git.add_all();
@@ -190,12 +190,46 @@ impl GitExt for TestContext {
 }
 
 impl TestContext {
-	fn write_issue_file(&self, owner: &str, repo: &str, number: u64, issue: &Issue) -> PathBuf {
-		let issues_dir = format!("issues/{owner}/{repo}");
+	/// Write an issue tree to the filesystem, with each node in its own file.
+	/// Returns the path to the root issue file.
+	fn write_issue_tree(&self, owner: &str, repo: &str, number: u64, issue: &Issue) -> PathBuf {
+		self.write_issue_tree_recursive(owner, repo, number, issue, &[])
+	}
+
+	fn write_issue_tree_recursive(&self, owner: &str, repo: &str, number: u64, issue: &Issue, ancestors: &[String]) -> PathBuf {
 		let sanitized_title = issue.meta.title.replace(' ', "_");
-		let filename = format!("{number}_-_{sanitized_title}.md");
-		let path = self.xdg.data_dir().join(&issues_dir).join(&filename);
-		self.xdg.write_data(&format!("{issues_dir}/{filename}"), &issue.serialize());
+		let has_children = !issue.children.is_empty();
+
+		// Build base path: issues/{owner}/{repo}/{ancestors...}
+		let mut base_path = format!("issues/{owner}/{repo}");
+		for ancestor in ancestors {
+			base_path = format!("{base_path}/{ancestor}");
+		}
+
+		let path = if has_children {
+			// Directory format: {base}/{number}_-_{title}/__main__.md
+			let dir_name = format!("{number}_-_{sanitized_title}");
+			let dir_path = format!("{base_path}/{dir_name}");
+			let file_path = format!("{dir_path}/__main__.md");
+			self.xdg.write_data(&file_path, &issue.serialize_filesystem(todo::Extension::Md));
+
+			// Write each child recursively
+			let mut child_ancestors = ancestors.to_vec();
+			child_ancestors.push(dir_name);
+			for child in &issue.children {
+				let child_number = child.meta.identity.number().unwrap_or(0);
+				self.write_issue_tree_recursive(owner, repo, child_number, child, &child_ancestors);
+			}
+
+			self.xdg.data_dir().join(&dir_path).join("__main__.md")
+		} else {
+			// Flat format: {base}/{number}_-_{title}.md
+			let filename = format!("{number}_-_{sanitized_title}.md");
+			let file_path = format!("{base_path}/{filename}");
+			self.xdg.write_data(&file_path, &issue.serialize_filesystem(todo::Extension::Md));
+			self.xdg.data_dir().join(&base_path).join(&filename)
+		};
+
 		path
 	}
 

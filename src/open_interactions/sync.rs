@@ -93,6 +93,7 @@ use v_utils::prelude::*;
 use super::{
 	conflict::mark_conflict,
 	fetch::fetch_and_store_issue,
+	files::{load_issue_tree, save_issue_tree},
 	git::{commit_issue_changes, is_git_initialized, load_consensus_issue},
 	github_sync::IssueGithubExt,
 	meta::load_issue_meta_from_path,
@@ -481,9 +482,8 @@ async fn handle_divergence(issue_file_path: &Path, owner: &str, repo: &str, issu
 		bail!("Failed to checkout remote-state branch");
 	}
 
-	// Write remote state to the issue file
-	let remote_content = remote_issue.serialize_virtual(extension);
-	std::fs::write(issue_file_path, &remote_content)?;
+	// Write remote state to filesystem (each node to its own file)
+	save_issue_tree(remote_issue, owner, repo, extension, &[])?;
 
 	// Commit remote state (if there are any changes)
 	let _ = Command::new("git").args(["-C", data_dir_str, "add", "-A"]).status()?;
@@ -676,8 +676,7 @@ async fn sync_issue_to_github_inner(
 
 		// Write local file if it needs updating
 		if local_needs_update {
-			let content = issue.serialize_virtual(extension);
-			std::fs::write(issue_file_path, &content)?;
+			save_issue_tree(issue, owner, repo, extension, &[])?;
 		}
 
 		if !local_needs_update && !remote_needs_update {
@@ -708,9 +707,8 @@ async fn sync_issue_to_github_inner(
 	if has_creates {
 		let (executed, _) = execute_issue_actions(gh, owner, repo, issue, create_actions).await?;
 		if executed > 0 {
-			// Re-serialize to save the new URLs
-			let serialized = issue.serialize_virtual(extension);
-			std::fs::write(issue_file_path, &serialized)?;
+			// Save to filesystem with the new URLs
+			save_issue_tree(issue, owner, repo, extension, &[])?;
 			tracing::debug!("[sync] Post-sync: created {executed} new sub-issue(s)");
 		}
 	}
@@ -832,9 +830,8 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 		_ => Extension::Md,
 	};
 
-	// Read and parse the current issue state
-	let content = std::fs::read_to_string(issue_file_path)?;
-	let mut issue = Issue::parse(&content, issue_file_path)?;
+	// Load the issue tree from filesystem (assembles from separate files)
+	let mut issue = load_issue_tree(issue_file_path, extension)?;
 
 	// Handle --pull: fetch and sync from remote BEFORE opening editor
 	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
@@ -862,10 +859,9 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 			apply_merge_mode(&issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number, extension).await?;
 
 		if local_needs_update {
-			// Write merged result to local file
+			// Write merged result to filesystem
 			issue = merged;
-			let content = issue.serialize_virtual(extension);
-			std::fs::write(issue_file_path, &content)?;
+			save_issue_tree(&issue, &owner, &repo, extension, &[])?;
 			commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
 		} else if issue != merged {
 			// Issue changed but doesn't need file update (keeping local)
@@ -925,11 +921,8 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 		return Ok(result);
 	}
 
-	// Serialize the (potentially updated) Issue back to markdown
-	let serialized = issue.serialize_virtual(extension);
-
-	// Write the normalized/updated content back
-	std::fs::write(issue_file_path, &serialized)?;
+	// Save the issue tree to filesystem (writes each node to its own file)
+	save_issue_tree(&issue, &owner, &repo, extension, &[])?;
 
 	// If offline mode, skip all network operations
 	if offline {
@@ -950,7 +943,10 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 /// Use this when you know you're in offline mode and don't want to require a Github client.
 #[tracing::instrument(level = "debug", target = "todo::open_interactions::sync")]
 pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) -> Result<ModifyResult> {
-	use super::meta::load_issue_meta_from_path;
+	use super::{files::extract_owner_repo_from_path, meta::load_issue_meta_from_path};
+
+	// Extract owner and repo from path
+	let (owner, repo) = extract_owner_repo_from_path(issue_file_path)?;
 
 	// Load metadata from path
 	let meta = load_issue_meta_from_path(issue_file_path)?;
@@ -961,18 +957,14 @@ pub async fn modify_issue_offline(issue_file_path: &Path, modifier: Modifier) ->
 		_ => Extension::Md,
 	};
 
-	// Read and parse the current issue state
-	let content = std::fs::read_to_string(issue_file_path)?;
-	let mut issue = Issue::parse(&content, issue_file_path)?;
+	// Load the issue tree from filesystem (assembles from separate files)
+	let mut issue = load_issue_tree(issue_file_path, extension)?;
 
 	// Apply the modifier (blocker command)
 	let result = modifier.apply(&mut issue, issue_file_path, &extension).await?;
 
-	// Serialize the (potentially updated) Issue back to markdown
-	let serialized = issue.serialize_virtual(extension);
-
-	// Write the normalized/updated content back
-	std::fs::write(issue_file_path, &serialized)?;
+	// Save the issue tree to filesystem (writes each node to its own file)
+	save_issue_tree(&issue, &owner, &repo, extension, &[])?;
 
 	println!("Offline mode: changes saved locally only.");
 
