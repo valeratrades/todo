@@ -112,7 +112,7 @@ impl IssueIdentity /*{{{1*/ {
 	/// Encode identity for serialization: `@user url` or empty for Pending.
 	pub fn encode(&self) -> String {
 		match self {
-			Self::Created { user, link } => format!("@{} {}", user, link.as_str()),
+			Self::Created { user, link } => format!("@{user} {}", link.as_str()),
 			Self::Pending => String::new(),
 		}
 	}
