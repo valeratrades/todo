@@ -61,9 +61,8 @@ impl IssueGithubExt for Issue {
 		levels
 	}
 
-	fn from_github(issue: &GithubIssue, comments: &[GithubComment], sub_issues: &[GithubIssue], owner: &str, repo: &str, current_user: &str) -> Issue {
+	fn from_github(issue: &GithubIssue, comments: &[GithubComment], sub_issues: &[GithubIssue], owner: &str, repo: &str, _current_user: &str) -> Issue {
 		let issue_url = format!("https://github.com/{owner}/{repo}/issues/{}", issue.number);
-		let issue_owned = issue.user.login == current_user;
 		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
 
 		let link = IssueLink::parse(&issue_url).expect("just constructed valid URL");
@@ -76,7 +75,6 @@ impl IssueGithubExt for Issue {
 			title: issue.title.clone(),
 			identity,
 			close_state,
-			owned: issue_owned,
 			labels,
 		};
 
@@ -91,19 +89,16 @@ impl IssueGithubExt for Issue {
 		issue_comments.push(Comment {
 			identity: CommentIdentity::Body,
 			body: todo::Events::parse(&body),
-			owned: issue_owned,
 		});
 
 		// Actual comments
 		for c in comments {
-			let comment_owned = c.user.login == current_user;
 			issue_comments.push(Comment {
 				identity: CommentIdentity::Created {
 					user: c.user.login.clone(),
 					id: c.id,
 				},
 				body: todo::Events::parse(c.body.as_deref().unwrap_or("")),
-				owned: comment_owned,
 			});
 		}
 
@@ -126,14 +121,12 @@ impl IssueGithubExt for Issue {
 						title: si.title.clone(),
 						identity: child_identity,
 						close_state: child_close_state,
-						owned: si.user.login == current_user,
 						labels: si.labels.iter().map(|l| l.name.clone()).collect(),
 					},
 					contents: Default::default(),
 					comments: vec![Comment {
 						identity: CommentIdentity::Body,
 						body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
-						owned: si.user.login == current_user,
 					}],
 					children: Vec::new(),
 					blockers: BlockerSequence::default(),
@@ -262,16 +255,16 @@ mod tests {
 		assert_eq!(result.meta.title, "Test Issue");
 		assert_eq!(result.meta.identity.url_str(), Some("https://github.com/owner/repo/issues/123"));
 		assert_eq!(result.meta.close_state, CloseState::Open);
-		assert!(result.meta.owned);
+		assert_eq!(result.meta.identity.user(), Some("me"));
 		assert_eq!(result.meta.labels, vec!["bug".to_string()]);
 
 		// Body + 1 comment
 		assert_eq!(result.comments.len(), 2);
 		assert_eq!(result.comments[0].body.plain_text(), "Issue body");
-		assert!(result.comments[0].owned);
+		assert_eq!(result.comments[0].identity, CommentIdentity::Body);
 		assert_eq!(result.comments[1].identity.id(), Some(456));
 		assert_eq!(result.comments[1].body.plain_text(), "A comment");
-		assert!(!result.comments[1].owned); // different user
+		assert_eq!(result.comments[1].identity.user(), Some("other")); // different user
 
 		// Sub-issue
 		assert_eq!(result.children.len(), 1);

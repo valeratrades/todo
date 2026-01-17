@@ -83,14 +83,12 @@ fn fetch_children_recursive<'a>(
 
 			// Update comments (keep first comment which is body, add actual comments)
 			for c in comments {
-				let comment_owned = c.user.login == current_user;
 				child.comments.push(Comment {
 					identity: CommentIdentity::Created {
 						user: c.user.login.clone(),
 						id: c.id,
 					},
 					body: todo::Events::parse(c.body.as_deref().unwrap_or("")),
-					owned: comment_owned,
 				});
 			}
 
@@ -109,14 +107,12 @@ fn fetch_children_recursive<'a>(
 							title: si.title.clone(),
 							identity,
 							close_state,
-							owned: si.user.login == current_user,
 							labels: si.labels.iter().map(|l| l.name.clone()).collect(),
 						},
 						contents: Default::default(),
 						comments: vec![Comment {
 							identity: CommentIdentity::Body,
 							body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
-							owned: si.user.login == current_user,
 						}],
 						children: Vec::new(),
 						blockers: Default::default(),
@@ -389,14 +385,12 @@ mod tests {
 					link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
 				},
 				close_state: CloseState::Open,
-				owned: true,
 				labels: vec![],
 			},
 			contents: Default::default(),
 			comments: vec![Comment {
 				identity: CommentIdentity::Body,
 				body: todo::Events::parse(body),
-				owned: true,
 			}],
 			children: vec![],
 			blockers: BlockerSequence::default(),
@@ -476,14 +470,12 @@ mod tests {
 					link: IssueLink::parse(url).unwrap(),
 				},
 				close_state: CloseState::Open,
-				owned: true,
 				labels: vec![],
 			},
 			contents: Default::default(),
 			comments: vec![Comment {
 				identity: CommentIdentity::Body,
 				body: todo::Events::parse(body),
-				owned: true,
 			}],
 			children: vec![],
 			blockers: BlockerSequence::default(),

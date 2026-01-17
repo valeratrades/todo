@@ -1,5 +1,30 @@
 pub mod issue;
 
+pub mod current_user {
+	use std::cell::RefCell;
+
+	thread_local! {
+		static CURRENT_USER: RefCell<Option<String>> = const { RefCell::new(None) };
+	}
+
+	/// Set the current authenticated user for ownership checks.
+	/// Must be called before serializing issues.
+	pub fn set(user: String) {
+		CURRENT_USER.with(|u| *u.borrow_mut() = Some(user));
+	}
+
+	/// Get the current authenticated user.
+	/// Returns None if not set.
+	pub fn get() -> Option<String> {
+		CURRENT_USER.with(|u| u.borrow().clone())
+	}
+
+	/// Check if the given user is the current authenticated user.
+	pub fn is(user: &str) -> bool {
+		CURRENT_USER.with(|u| u.borrow().as_deref() == Some(user))
+	}
+}
+
 // Re-export all public types from issue module at crate root for convenience
 pub use issue::{
 	BlockerItem, BlockerSequence, CloseState, Comment, CommentIdentity, DisplayFormat, Events, FetchedIssue, HeaderLevel, Issue, IssueIdentity, IssueLink, IssueMeta, Line, Marker,

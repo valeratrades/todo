@@ -328,8 +328,6 @@ pub struct IssueMeta {
 	/// Issue identity - linked to Github or pending creation
 	pub identity: IssueIdentity,
 	pub close_state: CloseState,
-	/// Whether owned by current user (false = immutable)
-	pub owned: bool,
 	/// Git labels
 	pub labels: Vec<String>,
 }
@@ -341,7 +339,6 @@ pub struct Comment {
 	pub identity: CommentIdentity,
 	/// The markdown body stored as parsed events for lossless roundtripping
 	pub body: super::Events,
-	pub owned: bool,
 }
 
 /// Complete representation of an issue file
@@ -398,7 +395,7 @@ impl Issue /*{{{1*/ {
 		let mut children = Vec::new();
 		let mut blocker_lines = Vec::new();
 		let mut current_comment_lines: Vec<String> = Vec::new();
-		let mut current_comment_meta: Option<(CommentIdentity, bool)> = None; // (identity, owned)
+		let mut current_comment_meta: Option<CommentIdentity> = None;
 		let mut in_body = true;
 		let mut in_blockers = false;
 		let mut current_line = line_num;
@@ -440,15 +437,13 @@ impl Issue /*{{{1*/ {
 						comments.push(Comment {
 							identity: CommentIdentity::Body,
 							body: super::Events::parse(&body_text),
-							owned: meta.owned,
 						});
 					}
-				} else if let Some((identity, owned)) = current_comment_meta.take() {
+				} else if let Some(identity) = current_comment_meta.take() {
 					let body_text = current_comment_lines.join("\n").trim().to_string();
 					comments.push(Comment {
 						identity,
 						body: super::Events::parse(&body_text),
-						owned,
 					});
 					current_comment_lines.clear();
 				}
@@ -517,34 +512,27 @@ impl Issue /*{{{1*/ {
 					comments.push(Comment {
 						identity: CommentIdentity::Body,
 						body: super::Events::parse(&body_text),
-						owned: meta.owned,
 					});
-				} else if let Some((identity, owned)) = current_comment_meta.take() {
+				} else if let Some(identity) = current_comment_meta.take() {
 					let body_text = current_comment_lines.join("\n").trim().to_string();
 					comments.push(Comment {
 						identity,
 						body: super::Events::parse(&body_text),
-						owned,
 					});
 					current_comment_lines.clear();
 				}
 
 				// Handle !c shorthand
 				if is_new_comment_shorthand {
-					current_comment_meta = Some((CommentIdentity::Pending, true));
+					current_comment_meta = Some(CommentIdentity::Pending);
 					continue;
 				}
 
 				if inner == "new comment" {
-					current_comment_meta = Some((CommentIdentity::Pending, true));
+					current_comment_meta = Some(CommentIdentity::Pending);
 				} else if inner.contains("#issuecomment-") {
-					let (is_immutable, rest) = if let Some(rest) = inner.strip_prefix("immutable ") {
-						(true, rest.trim())
-					} else {
-						(false, inner)
-					};
-					let identity = Self::parse_comment_identity(rest);
-					current_comment_meta = Some((identity, !is_immutable));
+					let identity = Self::parse_comment_identity(inner);
+					current_comment_meta = Some(identity);
 				}
 				continue;
 			}
@@ -581,14 +569,12 @@ impl Issue /*{{{1*/ {
 					comments.push(Comment {
 						identity: CommentIdentity::Body,
 						body: super::Events::parse(&body_text),
-						owned: meta.owned,
 					});
-				} else if let Some((identity, owned)) = current_comment_meta.take() {
+				} else if let Some(identity) = current_comment_meta.take() {
 					let body_text = current_comment_lines.join("\n").trim().to_string();
 					comments.push(Comment {
 						identity,
 						body: super::Events::parse(&body_text),
-						owned,
 					});
 					current_comment_lines.clear();
 				}
@@ -641,14 +627,12 @@ impl Issue /*{{{1*/ {
 			comments.push(Comment {
 				identity: CommentIdentity::Body,
 				body: super::Events::parse(&body_text),
-				owned: meta.owned,
 			});
-		} else if let Some((identity, owned)) = current_comment_meta.take() {
+		} else if let Some(identity) = current_comment_meta.take() {
 			let body_text = current_comment_lines.join("\n").trim().to_string();
 			comments.push(Comment {
 				identity,
 				body: super::Events::parse(&body_text),
-				owned,
 			});
 		}
 
@@ -718,23 +702,17 @@ impl Issue /*{{{1*/ {
 		// Handle both root format `<!-- @user url -->` and sub format `<!--sub @user url -->`
 		let inner = inner.strip_prefix("sub ").unwrap_or(inner);
 
-		let (owned, identity) = if let Some(rest) = inner.strip_prefix("immutable ") {
-			let rest = rest.trim();
-			let identity = Self::parse_user_and_link(rest);
-			(false, identity)
-		} else if inner.is_empty() {
+		let identity = if inner.is_empty() {
 			// Empty marker `<!--  -->` or `<!--sub -->` means pending
-			(true, IssueIdentity::Pending)
+			IssueIdentity::Pending
 		} else {
-			let identity = Self::parse_user_and_link(inner);
-			(true, identity)
+			Self::parse_user_and_link(inner)
 		};
 
 		Ok(IssueMeta {
 			title,
 			identity,
 			close_state,
-			owned,
 			labels,
 		})
 	}
@@ -854,15 +832,12 @@ impl Issue /*{{{1*/ {
 			format!("[{}] ", self.meta.labels.join(", "))
 		};
 		let marker = if depth == 0 { " " } else { "sub " };
-		if self.meta.owned {
-			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.meta.title));
-		} else {
-			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--immutable {marker}{identity_part} -->\n", self.meta.title));
-		}
+		let is_owned = self.meta.identity.user().is_some_and(crate::current_user::is);
+		out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.meta.title));
 
-		// Body (first comment)
+		// Body (first comment) - add extra indent if not owned
 		if let Some(body_comment) = self.comments.first() {
-			let comment_indent = if body_comment.owned { &content_indent } else { &format!("{content_indent}\t") };
+			let comment_indent = if is_owned { &content_indent } else { &format!("{content_indent}\t") };
 			if !body_comment.body.is_empty() {
 				let body_rendered = body_comment.body.render();
 				for line in body_rendered.lines() {
@@ -873,7 +848,8 @@ impl Issue /*{{{1*/ {
 
 		// Additional comments
 		for comment in self.comments.iter().skip(1) {
-			let comment_indent = if comment.owned { &content_indent } else { &format!("{content_indent}\t") };
+			let comment_is_owned = comment.identity.user().is_some_and(crate::current_user::is);
+			let comment_indent = if comment_is_owned { &content_indent } else { &format!("{content_indent}\t") };
 
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
@@ -885,11 +861,7 @@ impl Issue /*{{{1*/ {
 				}
 				CommentIdentity::Created { user, id } => {
 					let url = self.meta.identity.url_str().unwrap_or("");
-					if comment.owned {
-						out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
-					} else {
-						out.push_str(&format!("{content_indent}<!--immutable @{user} {url}#issuecomment-{id} -->\n"));
-					}
+					out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 				}
 				CommentIdentity::Pending => {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
@@ -933,17 +905,10 @@ impl Issue /*{{{1*/ {
 				} else {
 					format!("[{}] ", child.meta.labels.join(", "))
 				};
-				if child.meta.owned {
-					out.push_str(&format!(
-						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_identity_part} -->\n",
-						child.meta.title
-					));
-				} else {
-					out.push_str(&format!(
-						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--immutable sub {child_identity_part} -->\n",
-						child.meta.title
-					));
-				}
+				out.push_str(&format!(
+					"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_identity_part} -->\n",
+					child.meta.title
+				));
 
 				// Vim fold start
 				let child_content_indent = "\t".repeat(depth + 2);
@@ -981,15 +946,12 @@ impl Issue /*{{{1*/ {
 		} else {
 			format!("[{}] ", self.meta.labels.join(", "))
 		};
-		if self.meta.owned {
-			out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.meta.title));
-		} else {
-			out.push_str(&format!("- [{checked}] {labels_part}{} <!--immutable {identity_part} -->\n", self.meta.title));
-		}
+		let is_owned = self.meta.identity.user().is_some_and(crate::current_user::is);
+		out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.meta.title));
 
-		// Body (first comment)
+		// Body (first comment) - add extra indent if not owned
 		if let Some(body_comment) = self.comments.first() {
-			let comment_indent = if body_comment.owned { content_indent } else { "\t\t" };
+			let comment_indent = if is_owned { content_indent } else { "\t\t" };
 			if !body_comment.body.is_empty() {
 				let body_rendered = body_comment.body.render();
 				for line in body_rendered.lines() {
@@ -1000,7 +962,8 @@ impl Issue /*{{{1*/ {
 
 		// Additional comments
 		for comment in self.comments.iter().skip(1) {
-			let comment_indent_str = if comment.owned { content_indent } else { "\t\t" };
+			let comment_is_owned = comment.identity.user().is_some_and(crate::current_user::is);
+			let comment_indent_str = if comment_is_owned { content_indent } else { "\t\t" };
 
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
@@ -1012,11 +975,7 @@ impl Issue /*{{{1*/ {
 				}
 				CommentIdentity::Created { user, id } => {
 					let url = self.meta.identity.url_str().unwrap_or("");
-					if comment.owned {
-						out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
-					} else {
-						out.push_str(&format!("{content_indent}<!--immutable @{user} {url}#issuecomment-{id} -->\n"));
-					}
+					out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 				}
 				CommentIdentity::Pending => {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
@@ -1321,6 +1280,9 @@ mod tests {
 	#[test]
 	fn test_parse_sub_issue_close_types() {
 		use std::path::Path;
+
+		// Set current user so content is serialized without extra indent
+		crate::current_user::set("owner".to_string());
 
 		let content = r#"- [ ] Parent issue <!-- @owner https://github.com/owner/repo/issues/1 -->
 	Body

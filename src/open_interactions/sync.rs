@@ -174,8 +174,11 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 
 	// Update existing comments and create new ones
 	for comment in local.comments.iter().skip(1) {
-		if !comment.owned {
-			continue; // Skip immutable comments
+		// Skip existing comments not owned by current user (Pending comments are always ours)
+		if let CommentIdentity::Created { user, .. } = &comment.identity {
+			if !todo::current_user::is(user) {
+				continue;
+			}
 		}
 		let comment_body_str = comment.body.render();
 		match &comment.identity {
