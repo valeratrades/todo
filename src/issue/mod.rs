@@ -12,6 +12,9 @@ pub use blocker::{BlockerItem, BlockerSequence, DisplayFormat, HeaderLevel, Line
 mod contents;
 pub use contents::Content;
 
+mod events;
+pub use events::{Events, OwnedCodeBlockKind, OwnedEvent, OwnedTag, OwnedTagEnd};
+
 mod error;
 pub use error::ParseError;
 mod marker;

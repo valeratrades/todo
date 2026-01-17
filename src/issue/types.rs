@@ -314,7 +314,8 @@ pub struct IssueMeta {
 pub struct Comment {
 	/// Comment identity - body, linked to Github, or pending creation
 	pub identity: CommentIdentity,
-	pub body: String,
+	/// The markdown body stored as parsed events for lossless roundtripping
+	pub body: super::Events,
 	pub owned: bool,
 }
 
@@ -338,8 +339,8 @@ impl Issue /*{{{1*/ {
 	/// Get the full issue body including blockers section.
 	/// This is what should be synced to Github as the issue body.
 	pub fn body(&self) -> String {
-		let base_body = self.comments.first().map(|c| c.body.as_str()).unwrap_or("");
-		join_with_blockers(base_body, &self.blockers)
+		let base_body = self.comments.first().map(|c| c.body.render()).unwrap_or_default();
+		join_with_blockers(&base_body, &self.blockers)
 	}
 
 	/// Parse markdown content into an Issue.
@@ -410,16 +411,16 @@ impl Issue /*{{{1*/ {
 				if in_body {
 					in_body = false;
 					if !body_lines.is_empty() {
-						let body = body_lines.join("\n").trim().to_string();
+						let body_text = body_lines.join("\n").trim().to_string();
 						comments.push(Comment {
 							identity: CommentIdentity::Body,
-							body,
+							body: super::Events::parse(&body_text),
 							owned: meta.owned,
 						});
 					}
 				} else if let Some((identity, owned)) = current_comment_meta.take() {
-					let body = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { identity, body, owned });
+					let body_text = current_comment_lines.join("\n").trim().to_string();
+					comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
 					current_comment_lines.clear();
 				}
 				in_blockers = true;
@@ -483,15 +484,15 @@ impl Issue /*{{{1*/ {
 				// Flush previous (only for actual comment markers, not fold markers)
 				if in_body {
 					in_body = false;
-					let body = body_lines.join("\n").trim().to_string();
+					let body_text = body_lines.join("\n").trim().to_string();
 					comments.push(Comment {
 						identity: CommentIdentity::Body,
-						body,
+						body: super::Events::parse(&body_text),
 						owned: meta.owned,
 					});
 				} else if let Some((identity, owned)) = current_comment_meta.take() {
-					let body = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { identity, body, owned });
+					let body_text = current_comment_lines.join("\n").trim().to_string();
+					comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
 					current_comment_lines.clear();
 				}
 
@@ -548,15 +549,15 @@ impl Issue /*{{{1*/ {
 				// Flush current
 				if in_body {
 					in_body = false;
-					let body = body_lines.join("\n").trim().to_string();
+					let body_text = body_lines.join("\n").trim().to_string();
 					comments.push(Comment {
 						identity: CommentIdentity::Body,
-						body,
+						body: super::Events::parse(&body_text),
 						owned: meta.owned,
 					});
 				} else if let Some((identity, owned)) = current_comment_meta.take() {
-					let body = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { identity, body, owned });
+					let body_text = current_comment_lines.join("\n").trim().to_string();
+					comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
 					current_comment_lines.clear();
 				}
 
@@ -604,15 +605,15 @@ impl Issue /*{{{1*/ {
 
 		// Flush final
 		if in_body {
-			let body = body_lines.join("\n").trim().to_string();
+			let body_text = body_lines.join("\n").trim().to_string();
 			comments.push(Comment {
 				identity: CommentIdentity::Body,
-				body,
+				body: super::Events::parse(&body_text),
 				owned: meta.owned,
 			});
 		} else if let Some((identity, owned)) = current_comment_meta.take() {
-			let body = current_comment_lines.join("\n").trim().to_string();
-			comments.push(Comment { identity, body, owned });
+			let body_text = current_comment_lines.join("\n").trim().to_string();
+			comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
 		}
 
 		Ok(Issue {
@@ -786,7 +787,8 @@ impl Issue /*{{{1*/ {
 		if let Some(body_comment) = self.comments.first() {
 			let comment_indent = if body_comment.owned { &content_indent } else { &format!("{content_indent}\t") };
 			if !body_comment.body.is_empty() {
-				for line in body_comment.body.lines() {
+				let body_rendered = body_comment.body.render();
+				for line in body_rendered.lines() {
 					out.push_str(&format!("{comment_indent}{line}\n"));
 				}
 			}
@@ -817,7 +819,8 @@ impl Issue /*{{{1*/ {
 				}
 			}
 			if !comment.body.is_empty() {
-				for line in comment.body.lines() {
+				let comment_rendered = comment.body.render();
+				for line in comment_rendered.lines() {
 					out.push_str(&format!("{comment_indent}{line}\n"));
 				}
 			}
@@ -911,7 +914,8 @@ impl Issue /*{{{1*/ {
 		if let Some(body_comment) = self.comments.first() {
 			let comment_indent = if body_comment.owned { content_indent } else { "\t\t" };
 			if !body_comment.body.is_empty() {
-				for line in body_comment.body.lines() {
+				let body_rendered = body_comment.body.render();
+				for line in body_rendered.lines() {
 					out.push_str(&format!("{comment_indent}{line}\n"));
 				}
 			}
@@ -942,7 +946,8 @@ impl Issue /*{{{1*/ {
 				}
 			}
 			if !comment.body.is_empty() {
-				for line in comment.body.lines() {
+				let comment_rendered = comment.body.render();
+				for line in comment_rendered.lines() {
 					out.push_str(&format!("{comment_indent_str}{line}\n"));
 				}
 			}
@@ -1063,9 +1068,9 @@ impl PartialEq for Issue {
 			return false;
 		}
 
-		// Compare body (first comment)
-		let self_body = self.comments.first().map(|c| c.body.as_str()).unwrap_or("");
-		let other_body = other.comments.first().map(|c| c.body.as_str()).unwrap_or("");
+		// Compare body (first comment) - compare the rendered output
+		let self_body = self.comments.first().map(|c| c.body.render()).unwrap_or_default();
+		let other_body = other.comments.first().map(|c| c.body.render()).unwrap_or_default();
 		if self_body != other_body {
 			return false;
 		}

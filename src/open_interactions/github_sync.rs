@@ -86,7 +86,7 @@ impl IssueGithubExt for Issue {
 		let (body, blockers) = split_blockers(raw_body);
 		issue_comments.push(Comment {
 			identity: CommentIdentity::Body,
-			body,
+			body: todo::Events::parse(&body),
 			owned: issue_owned,
 		});
 
@@ -95,7 +95,7 @@ impl IssueGithubExt for Issue {
 			let comment_owned = c.user.login == current_user;
 			issue_comments.push(Comment {
 				identity: CommentIdentity::Linked(c.id),
-				body: c.body.as_deref().unwrap_or("").to_string(),
+				body: todo::Events::parse(c.body.as_deref().unwrap_or("")),
 				owned: comment_owned,
 			});
 		}
@@ -121,7 +121,7 @@ impl IssueGithubExt for Issue {
 					contents: Default::default(),
 					comments: vec![Comment {
 						identity: CommentIdentity::Body,
-						body: si.body.as_deref().unwrap_or("").to_string(),
+						body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
 						owned: si.user.login == current_user,
 					}],
 					children: Vec::new(),
@@ -256,10 +256,10 @@ mod tests {
 
 		// Body + 1 comment
 		assert_eq!(result.comments.len(), 2);
-		assert_eq!(result.comments[0].body, "Issue body");
+		assert_eq!(result.comments[0].body.plain_text(), "Issue body");
 		assert!(result.comments[0].owned);
 		assert_eq!(result.comments[1].identity.id(), Some(456));
-		assert_eq!(result.comments[1].body, "A comment");
+		assert_eq!(result.comments[1].body.plain_text(), "A comment");
 		assert!(!result.comments[1].owned); // different user
 
 		// Sub-issue
