@@ -38,10 +38,10 @@ fn test_reset_then_mark_subissue_closed_no_conflict() {
 
 	// Set up remote with parent issue and one open sub-issue
 	let parent = parse(
-		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Parent Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tparent body\n\
 		 \n\
-		 \t- [ ] Sub Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] Sub Issue <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\tsub body\n",
 	);
 
@@ -59,10 +59,10 @@ fn test_reset_then_mark_subissue_closed_no_conflict() {
 	let issue_path = ctx.dir_issue_path("o", "r", 1, "Parent Issue");
 
 	let modified_parent = parse(
-		"- [ ] Parent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Parent Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tparent body\n\
 		 \n\
-		 \t- [x] Sub Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [x] Sub Issue <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\tsub body\n",
 	);
 
@@ -89,7 +89,7 @@ fn test_reset_then_edit_body_no_conflict() {
 	let ctx = TestContext::new("");
 	ctx.init_git();
 
-	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\toriginal body\n");
+	let issue = parse("- [ ] Test Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\toriginal body\n");
 	ctx.remote(&issue);
 
 	// First: open via URL with --reset
@@ -131,13 +131,13 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 	// grandparent (#1) -> parent (#2) -> child (#3)
 	// This ensures parent (#2) gets its own file because it has children
 	let grandparent = parse(
-		"- [ ] Grandparent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Grandparent Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tgrandparent body\n\
 		 \n\
-		 \t- [ ] Parent Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] Parent Issue <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\toriginal parent body\n\
 		 \n\
-		 \t\t- [ ] Child Issue <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t\t- [ ] Child Issue <!--sub @mock_user https://github.com/o/r/issues/3 -->\n\
 		 \t\t\tchild body\n",
 	);
 
@@ -170,7 +170,7 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 		panic!("Parent sub-issue file not found at expected path");
 	}
 
-	let modified_parent_content = "- [ ] Parent Issue <!-- https://github.com/o/r/issues/2 -->\n\toriginal parent body\n\tADDED LOCAL CONTENT - this is only local\n\t\n\t# Blockers\n\t- local blocker task\n\t\n\t- [ ] Child Issue <!--sub https://github.com/o/r/issues/3 -->\n\t\tchild body\n";
+	let modified_parent_content = "- [ ] Parent Issue <!-- @mock_user https://github.com/o/r/issues/2 -->\n\toriginal parent body\n\tADDED LOCAL CONTENT - this is only local\n\t\n\t# Blockers\n\t- local blocker task\n\t\n\t- [ ] Child Issue <!--sub @mock_user https://github.com/o/r/issues/3 -->\n\t\tchild body\n";
 	std::fs::write(&parent_subissue_path, modified_parent_content).unwrap();
 
 	// Commit the local modifications
@@ -192,13 +192,13 @@ fn test_reset_with_preexisting_modified_subissue_files() {
 	let grandparent_path = ctx.data_dir().join("issues/o/r/1_-_Grandparent_Issue/__main__.md");
 
 	let modified_grandparent = parse(
-		"- [ ] Grandparent Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Grandparent Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tgrandparent body\n\
 		 \n\
-		 \t- [ ] Parent Issue <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] Parent Issue <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\toriginal parent body\n\
 		 \n\
-		 \t\t- [x] Child Issue <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t\t- [x] Child Issue <!--sub @mock_user https://github.com/o/r/issues/3 -->\n\
 		 \t\t\tchild body\n",
 	);
 

@@ -97,7 +97,8 @@ fn fetch_children_recursive<'a>(
 				.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
 				.map(|si| {
 					let url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
-					let identity = IssueLink::parse(&url).map(IssueIdentity::Linked).expect("just constructed valid URL");
+					let link = IssueLink::parse(&url).expect("just constructed valid URL");
+					let identity = IssueIdentity::Created { user: si.user.login.clone(), link };
 					let close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 					let timestamp = si.updated_at.parse::<Timestamp>().ok();
 					Issue {
@@ -380,7 +381,10 @@ mod tests {
 		Issue {
 			meta: IssueMeta {
 				title: "Test".to_string(),
-				identity: IssueLink::parse("https://github.com/o/r/issues/1").map(IssueIdentity::Linked).unwrap(),
+				identity: IssueIdentity::Created {
+					user: "testuser".to_string(),
+					link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
+				},
 				close_state: CloseState::Open,
 				owned: true,
 				labels: vec![],
@@ -464,7 +468,10 @@ mod tests {
 		Issue {
 			meta: IssueMeta {
 				title: "Test".to_string(),
-				identity: IssueLink::parse(url).map(IssueIdentity::Linked).unwrap(),
+				identity: IssueIdentity::Created {
+					user: "testuser".to_string(),
+					link: IssueLink::parse(url).unwrap(),
+				},
 				close_state: CloseState::Open,
 				owned: true,
 				labels: vec![],

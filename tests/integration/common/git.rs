@@ -244,7 +244,7 @@ impl TestContext {
 						"title": i.title,
 						"body": i.body,
 						"state": i.state,
-						"owner_login": "mock_user"
+						"owner_login": i.owner_login
 					});
 					if let Some(reason) = &i.state_reason {
 						json["state_reason"] = serde_json::Value::String(reason.clone());
@@ -323,6 +323,7 @@ fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u6
 	state.remote_issue_ids.insert(key);
 
 	// Add the issue itself
+	let issue_owner_login = issue.meta.identity.user().expect("issue identity must have user - use @user format in test fixtures").to_string();
 	state.remote_issues.push(MockIssue {
 		owner: owner.to_string(),
 		repo: repo.to_string(),
@@ -331,6 +332,7 @@ fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u6
 		body: issue.body(),
 		state: issue.meta.close_state.to_github_state().to_string(),
 		state_reason: issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
+		owner_login: issue_owner_login,
 	});
 
 	// Add sub-issue relation if this is a child
@@ -372,6 +374,7 @@ struct MockIssue {
 	body: String,
 	state: String,
 	state_reason: Option<String>,
+	owner_login: String,
 }
 
 struct MockComment {
@@ -406,13 +409,13 @@ mod tests {
 
 		// Create a 3-level hierarchy: grandparent -> parent -> child
 		let issue = parse(
-			"- [ ] Grandparent <!-- https://github.com/o/r/issues/1 -->\n\
+			"- [ ] Grandparent <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 			 \tgrandparent body\n\
 			 \n\
-			 \t- [ ] Parent <!--sub https://github.com/o/r/issues/2 -->\n\
+			 \t- [ ] Parent <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 			 \t\tparent body\n\
 			 \n\
-			 \t\t- [ ] Child <!--sub https://github.com/o/r/issues/3 -->\n\
+			 \t\t- [ ] Child <!--sub @mock_user https://github.com/o/r/issues/3 -->\n\
 			 \t\t\tchild body\n",
 		);
 

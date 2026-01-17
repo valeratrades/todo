@@ -10,7 +10,7 @@ mod blocker;
 pub use blocker::{BlockerItem, BlockerSequence, DisplayFormat, HeaderLevel, Line, classify_line, join_with_blockers, split_blockers};
 
 mod contents;
-pub use contents::Content;
+pub use contents::IssueContents;
 
 mod events;
 pub use events::{Events, OwnedCodeBlockKind, OwnedEvent, OwnedTag, OwnedTagEnd};

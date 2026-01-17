@@ -20,7 +20,7 @@ fn test_blocker_add_in_integrated_mode() {
 
 	// Create issue with existing blockers section
 	let issue = parse(
-		"- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Test Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tBody text.\n\
 		 \n\
 		 \t# Blockers\n\
@@ -55,7 +55,7 @@ fn test_blocker_pop_in_integrated_mode() {
 
 	// Create issue with multiple blockers
 	let issue = parse(
-		"- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Test Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tBody text.\n\
 		 \n\
 		 \t# Blockers\n\
@@ -95,7 +95,7 @@ fn test_blocker_add_creates_blockers_section_if_missing() {
 	ctx.init_git();
 
 	// Create issue WITHOUT blockers section
-	let issue = parse("- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\tBody text without blockers section.\n");
+	let issue = parse("- [ ] Test Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\tBody text without blockers section.\n");
 
 	// Set up: local issue file exists
 	let issue_path = ctx.local(&issue);
@@ -125,7 +125,7 @@ fn test_blocker_add_with_header_context() {
 
 	// Create issue with blockers section containing headers
 	let issue = parse(
-		"- [ ] Test Issue <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] Test Issue <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tBody text.\n\
 		 \n\
 		 \t# Blockers\n\

@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::issue::contents::Content;
+use crate::issue::contents::IssueContents;
 
 /// A Github issue identifier. Wraps a URL and derives all properties on demand.
 /// Format: `https://github.com/{owner}/{repo}/issues/{number}`
@@ -66,8 +66,8 @@ impl IssueLink /*{{{1*/ {
 /// Identity of an issue - either linked to Github or pending creation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IssueIdentity {
-	/// Issue exists on Github with this link
-	Linked(IssueLink),
+	/// Issue exists on Github with this link and was created by the given user
+	Created { user: String, link: IssueLink },
 	/// Issue is pending creation on Github (will be created in post-sync)
 	Pending,
 }
@@ -76,14 +76,22 @@ impl IssueIdentity /*{{{1*/ {
 	/// Get the link if this issue is linked to Github.
 	pub fn link(&self) -> Option<&IssueLink> {
 		match self {
-			Self::Linked(link) => Some(link),
+			Self::Created { link, .. } => Some(link),
+			Self::Pending => None,
+		}
+	}
+
+	/// Get the user who created this issue if linked to Github.
+	pub fn user(&self) -> Option<&str> {
+		match self {
+			Self::Created { user, .. } => Some(user),
 			Self::Pending => None,
 		}
 	}
 
 	/// Check if this issue is linked to Github.
 	pub fn is_linked(&self) -> bool {
-		matches!(self, Self::Linked(_))
+		matches!(self, Self::Created { .. })
 	}
 
 	/// Check if this issue is pending creation.
@@ -99,6 +107,14 @@ impl IssueIdentity /*{{{1*/ {
 	/// Get the URL string if linked.
 	pub fn url_str(&self) -> Option<&str> {
 		self.link().map(|l| l.as_str())
+	}
+
+	/// Encode identity for serialization: `@user url` or empty for Pending.
+	pub fn encode(&self) -> String {
+		match self {
+			Self::Created { user, link } => format!("@{} {}", user, link.as_str()),
+			Self::Pending => String::new(),
+		}
 	}
 }
 //,}}}1
@@ -138,6 +154,7 @@ impl CommentIdentity /*{{{1*/ {
 
 /// An issue with its title - used when we need both identity and display name.
 /// This is what we have after fetching an issue from Github.
+//DEPRECATE: completely pointless
 #[derive(Clone, Debug)]
 pub struct FetchedIssue {
 	pub link: IssueLink,
@@ -323,7 +340,7 @@ pub struct Comment {
 #[derive(Clone, Debug)]
 pub struct Issue {
 	pub meta: IssueMeta,
-	pub contents: Content,
+	pub contents: IssueContents,
 	/// Comments in order. First is always the issue body (serialized without marker).
 	pub comments: Vec<Comment>,
 	/// Sub-issues in order
@@ -420,7 +437,11 @@ impl Issue /*{{{1*/ {
 					}
 				} else if let Some((identity, owned)) = current_comment_meta.take() {
 					let body_text = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
+					comments.push(Comment {
+						identity,
+						body: super::Events::parse(&body_text),
+						owned,
+					});
 					current_comment_lines.clear();
 				}
 				in_blockers = true;
@@ -492,7 +513,11 @@ impl Issue /*{{{1*/ {
 					});
 				} else if let Some((identity, owned)) = current_comment_meta.take() {
 					let body_text = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
+					comments.push(Comment {
+						identity,
+						body: super::Events::parse(&body_text),
+						owned,
+					});
 					current_comment_lines.clear();
 				}
 
@@ -557,7 +582,11 @@ impl Issue /*{{{1*/ {
 					});
 				} else if let Some((identity, owned)) = current_comment_meta.take() {
 					let body_text = current_comment_lines.join("\n").trim().to_string();
-					comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
+					comments.push(Comment {
+						identity,
+						body: super::Events::parse(&body_text),
+						owned,
+					});
 					current_comment_lines.clear();
 				}
 
@@ -613,12 +642,16 @@ impl Issue /*{{{1*/ {
 			});
 		} else if let Some((identity, owned)) = current_comment_meta.take() {
 			let body_text = current_comment_lines.join("\n").trim().to_string();
-			comments.push(Comment { identity, body: super::Events::parse(&body_text), owned });
+			comments.push(Comment {
+				identity,
+				body: super::Events::parse(&body_text),
+				owned,
+			});
 		}
 
 		Ok(Issue {
 			meta,
-			contents: Content::default(),
+			contents: IssueContents::default(),
 			comments,
 			children,
 			blockers: BlockerSequence::from_lines(blocker_lines),
@@ -679,18 +712,18 @@ impl Issue /*{{{1*/ {
 		let title = rest[..marker_start].trim().to_string();
 		let inner = rest[marker_start + 4..marker_end].trim();
 
-		// Handle both root format `<!-- url -->` and sub format `<!--sub url -->`
+		// Handle both root format `<!-- @user url -->` and sub format `<!--sub @user url -->`
 		let inner = inner.strip_prefix("sub ").unwrap_or(inner);
 
-		let (owned, identity) = if let Some(url) = inner.strip_prefix("immutable ") {
-			let url = url.trim();
-			let identity = IssueLink::parse(url).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
+		let (owned, identity) = if let Some(rest) = inner.strip_prefix("immutable ") {
+			let rest = rest.trim();
+			let identity = Self::parse_user_and_link(rest);
 			(false, identity)
 		} else if inner.is_empty() {
 			// Empty marker `<!--  -->` or `<!--sub -->` means pending
 			(true, IssueIdentity::Pending)
 		} else {
-			let identity = IssueLink::parse(inner).map(IssueIdentity::Linked).unwrap_or(IssueIdentity::Pending);
+			let identity = Self::parse_user_and_link(inner);
 			(true, identity)
 		};
 
@@ -701,6 +734,28 @@ impl Issue /*{{{1*/ {
 			owned,
 			labels,
 		})
+	}
+
+	/// Parse `@user url` format into IssueIdentity.
+	/// Returns Pending if empty or invalid format.
+	fn parse_user_and_link(s: &str) -> IssueIdentity {
+		let s = s.trim();
+		if s.is_empty() {
+			return IssueIdentity::Pending;
+		}
+
+		// Format: `@username https://github.com/...`
+		if let Some(rest) = s.strip_prefix('@')
+			&& let Some(space_idx) = rest.find(' ')
+		{
+			let user = rest[..space_idx].to_string();
+			let url = rest[space_idx + 1..].trim();
+			if let Some(link) = IssueLink::parse(url) {
+				return IssueIdentity::Created { user, link };
+			}
+		}
+
+		IssueIdentity::Pending
 	}
 
 	/// Parse checkbox prefix: `- [CONTENT] ` and return result.
@@ -768,9 +823,9 @@ impl Issue /*{{{1*/ {
 		let content_indent = "\t".repeat(depth + 1);
 		let mut out = String::new();
 
-		// Title line - root uses `<!-- url -->`, children use `<!--sub url -->`
+		// Title line - root uses `<!-- @user url -->`, children use `<!--sub @user url -->`
 		let checked = self.meta.close_state.to_checkbox();
-		let url_part = self.meta.identity.url_str().unwrap_or("");
+		let identity_part = self.meta.identity.encode();
 		let labels_part = if self.meta.labels.is_empty() {
 			String::new()
 		} else {
@@ -778,9 +833,9 @@ impl Issue /*{{{1*/ {
 		};
 		let marker = if depth == 0 { " " } else { "sub " };
 		if self.meta.owned {
-			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{url_part} -->\n", self.meta.title));
+			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.meta.title));
 		} else {
-			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--immutable{marker}{url_part} -->\n", self.meta.title));
+			out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--immutable {marker}{identity_part} -->\n", self.meta.title));
 		}
 
 		// Body (first comment)
@@ -850,7 +905,7 @@ impl Issue /*{{{1*/ {
 			if child.meta.close_state.is_closed() {
 				// Output child title line
 				let child_checked = child.meta.close_state.to_checkbox();
-				let child_url_part = child.meta.identity.url_str().unwrap_or("");
+				let child_identity_part = child.meta.identity.encode();
 				let child_labels_part = if child.meta.labels.is_empty() {
 					String::new()
 				} else {
@@ -858,12 +913,12 @@ impl Issue /*{{{1*/ {
 				};
 				if child.meta.owned {
 					out.push_str(&format!(
-						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_url_part} -->\n",
+						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_identity_part} -->\n",
 						child.meta.title
 					));
 				} else {
 					out.push_str(&format!(
-						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--immutable sub {child_url_part} -->\n",
+						"{content_indent}- [{child_checked}] {child_labels_part}{} <!--immutable sub {child_identity_part} -->\n",
 						child.meta.title
 					));
 				}
@@ -898,16 +953,16 @@ impl Issue /*{{{1*/ {
 
 		// Title line (always at root level for filesystem representation)
 		let checked = self.meta.close_state.to_checkbox();
-		let url_part = self.meta.identity.url_str().unwrap_or("");
+		let identity_part = self.meta.identity.encode();
 		let labels_part = if self.meta.labels.is_empty() {
 			String::new()
 		} else {
 			format!("[{}] ", self.meta.labels.join(", "))
 		};
 		if self.meta.owned {
-			out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {url_part} -->\n", self.meta.title));
+			out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.meta.title));
 		} else {
-			out.push_str(&format!("- [{checked}] {labels_part}{} <!--immutable {url_part} -->\n", self.meta.title));
+			out.push_str(&format!("- [{checked}] {labels_part}{} <!--immutable {identity_part} -->\n", self.meta.title));
 		}
 
 		// Body (first comment)
@@ -1245,40 +1300,40 @@ mod tests {
 	fn test_parse_sub_issue_close_types() {
 		use std::path::Path;
 
-		let content = r#"- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
+		let content = r#"- [ ] Parent issue <!-- @owner https://github.com/owner/repo/issues/1 -->
 	Body
 
-	- [x] Closed sub <!--sub https://github.com/owner/repo/issues/2 -->
+	- [x] Closed sub <!--sub @owner https://github.com/owner/repo/issues/2 -->
 		<!--omitted {{{always-->
 		closed body
 		<!--,}}}-->
 
-	- [-] Not planned sub <!--sub https://github.com/owner/repo/issues/3 -->
+	- [-] Not planned sub <!--sub @owner https://github.com/owner/repo/issues/3 -->
 		<!--omitted {{{always-->
 		not planned body
 		<!--,}}}-->
 
-	- [42] Duplicate sub <!--sub https://github.com/owner/repo/issues/4 -->
+	- [42] Duplicate sub <!--sub @owner https://github.com/owner/repo/issues/4 -->
 		<!--omitted {{{always-->
 		duplicate body
 		<!--,}}}-->
 "#;
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 		insta::assert_snapshot!(issue.serialize_virtual(), @"
-		- [ ] Parent issue <!-- https://github.com/owner/repo/issues/1 -->
+		- [ ] Parent issue <!-- @owner https://github.com/owner/repo/issues/1 -->
 			Body
 			
-			- [x] Closed sub <!--sub https://github.com/owner/repo/issues/2 -->
+			- [x] Closed sub <!--sub @owner https://github.com/owner/repo/issues/2 -->
 				<!--omitted {{{always-->
 				closed body
 				<!--,}}}-->
 			
-			- [-] Not planned sub <!--sub https://github.com/owner/repo/issues/3 -->
+			- [-] Not planned sub <!--sub @owner https://github.com/owner/repo/issues/3 -->
 				<!--omitted {{{always-->
 				not planned body
 				<!--,}}}-->
 			
-			- [42] Duplicate sub <!--sub https://github.com/owner/repo/issues/4 -->
+			- [42] Duplicate sub <!--sub @owner https://github.com/owner/repo/issues/4 -->
 				<!--omitted {{{always-->
 				duplicate body
 				<!--,}}}-->

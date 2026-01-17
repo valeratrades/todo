@@ -257,7 +257,9 @@ pub async fn execute_issue_actions(gh: &BoxedGithubClient, owner: &str, repo: &s
 
 					// Update the Issue struct with the new identity
 					let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
-					let identity = todo::IssueLink::parse(&url).map(todo::IssueIdentity::Linked).expect("just constructed valid URL");
+					let link = todo::IssueLink::parse(&url).expect("just constructed valid URL");
+					let user = gh.fetch_authenticated_user().await?;
+					let identity = todo::IssueIdentity::Created { user, link };
 					if is_root {
 						issue.meta.identity = identity;
 						created_root_number = Some(created.number);

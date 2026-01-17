@@ -19,7 +19,7 @@ fn test_comments_with_ids_sync_correctly() {
 
 	// Issue with a comment that has an ID
 	let issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tbody text\n\
 		 \n\
 		 \t<!-- https://github.com/o/r/issues/1#issuecomment-12345 -->\n\
@@ -42,13 +42,13 @@ fn test_nested_issues_preserved_through_sync() {
 	let ctx = TestContext::new("");
 
 	let issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
-		 \t- [ ] b <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] b <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\tnested body b\n\
 		 \n\
-		 \t- [ ] c <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t- [ ] c <!--sub @mock_user https://github.com/o/r/issues/3 -->\n\
 		 \t\tnested body c\n",
 	);
 
@@ -77,13 +77,13 @@ fn test_mixed_open_closed_nested_issues_preserved() {
 	let ctx = TestContext::new("");
 
 	let issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
-		 \t- [ ] b <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] b <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\topen nested body\n\
 		 \n\
-		 \t- [x] c <!--sub https://github.com/o/r/issues/3 -->\n\
+		 \t- [x] c <!--sub @mock_user https://github.com/o/r/issues/3 -->\n\
 		 \t\t<!--omitted {{{always-->\n\
 		 \t\tclosed nested body\n\
 		 \t\t<!--,}}}-->\n",
@@ -114,7 +114,7 @@ fn test_blockers_preserved_through_sync() {
 	let ctx = TestContext::new("");
 
 	let issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
 		 \t# Blockers\n\
@@ -141,14 +141,14 @@ fn test_blockers_added_during_edit_preserved() {
 	let ctx = TestContext::new("");
 
 	// Initial state: no blockers
-	let initial_issue = parse("- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\tlorem ipsum\n");
+	let initial_issue = parse("- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\tlorem ipsum\n");
 
 	let path = ctx.consensus(&initial_issue);
 	ctx.remote(&initial_issue);
 
 	// User adds blockers during edit
 	let edited_issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
 		 \t# Blockers\n\
@@ -170,7 +170,7 @@ fn test_blockers_with_headers_preserved() {
 	let ctx = TestContext::new("");
 
 	let issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
 		 \t# Blockers\n\
@@ -202,14 +202,14 @@ fn test_nested_issues_and_blockers_together() {
 	let ctx = TestContext::new("");
 
 	let issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
 		 \t# Blockers\n\
 		 \t- blocker one\n\
 		 \t- blocker two\n\
 		 \n\
-		 \t- [ ] b <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] b <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\tnested body\n",
 	);
 
@@ -239,10 +239,10 @@ fn test_closing_nested_issue_creates_bak_file() {
 
 	// Start with open nested issue
 	let initial_issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
-		 \t- [ ] b <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [ ] b <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\tnested body content\n",
 	);
 
@@ -252,10 +252,10 @@ fn test_closing_nested_issue_creates_bak_file() {
 
 	// User closes nested issue during edit
 	let edited_issue = parse(
-		"- [ ] a <!-- https://github.com/o/r/issues/1 -->\n\
+		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tlorem ipsum\n\
 		 \n\
-		 \t- [x] b <!--sub https://github.com/o/r/issues/2 -->\n\
+		 \t- [x] b <!--sub @mock_user https://github.com/o/r/issues/2 -->\n\
 		 \t\tnested body content\n",
 	);
 

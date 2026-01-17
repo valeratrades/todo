@@ -66,7 +66,11 @@ impl IssueGithubExt for Issue {
 		let issue_owned = issue.user.login == current_user;
 		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
 
-		let identity = IssueLink::parse(&issue_url).map(IssueIdentity::Linked).expect("just constructed valid URL");
+		let link = IssueLink::parse(&issue_url).expect("just constructed valid URL");
+		let identity = IssueIdentity::Created {
+			user: issue.user.login.clone(),
+			link,
+		};
 		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
 		let meta = IssueMeta {
 			title: issue.title.clone(),
@@ -107,7 +111,11 @@ impl IssueGithubExt for Issue {
 			.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
 			.map(|si| {
 				let child_url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
-				let child_identity = IssueLink::parse(&child_url).map(IssueIdentity::Linked).expect("just constructed valid URL");
+				let child_link = IssueLink::parse(&child_url).expect("just constructed valid URL");
+				let child_identity = IssueIdentity::Created {
+					user: si.user.login.clone(),
+					link: child_link,
+				};
 				let child_close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 				let child_timestamp = si.updated_at.parse::<Timestamp>().ok();
 				Issue {
