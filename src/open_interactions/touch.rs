@@ -5,11 +5,9 @@ use std::path::PathBuf;
 use v_utils::prelude::*;
 
 use super::{
-	fetch::fetch_and_store_issue,
 	files::{get_issue_file_path, issues_dir, sanitize_title_for_filename, search_issue_files},
 	meta::{allocate_virtual_issue_number, ensure_virtual_project},
 };
-use crate::github::BoxedGithubClient;
 
 /// Parsed touch path components
 /// Format: workspace/project/issue[.md] or workspace/project/parent/child[.md] (for sub-issues)
@@ -62,92 +60,47 @@ pub fn parse_touch_path(path: &str) -> Result<TouchPath> {
 	Ok(TouchPath { owner, repo, issue_chain })
 }
 
-/// Create an issue on Github immediately, then fetch and store it locally.
-/// For sub-issues: requires the immediate parent to already exist on Github.
-pub async fn create_and_fetch_issue(gh: &BoxedGithubClient, touch_path: &TouchPath) -> Result<PathBuf> {
+/// Create a pending issue locally that will be pushed to Github on first sync.
+/// The issue file is created with an empty identity marker `<!-- -->` indicating it's pending.
+/// When the user saves and syncs, the Sink trait will create the issue on Github.
+pub fn create_pending_issue(touch_path: &TouchPath) -> Result<PathBuf> {
 	let owner = &touch_path.owner;
 	let repo = &touch_path.repo;
 
-	// Get the issue title (last in chain)
+	// For now, only support single-level issues (no sub-issues for pending creation)
+	if touch_path.issue_chain.len() > 1 {
+		bail!(
+			"Cannot create nested sub-issue via --touch.\n\
+			 Only immediate issues are supported for deferred creation.\n\
+			 Path: {owner}/{repo}/{}\n\
+			 \n\
+			 For sub-issues, create the parent first, then edit it to add children.",
+			touch_path.issue_chain.join("/")
+		);
+	}
+
+	// Get the issue title
 	let issue_title = touch_path.issue_chain.last().unwrap();
 
-	// Determine if this is a sub-issue (has parent issues in chain)
-	let parent_chain = &touch_path.issue_chain[..touch_path.issue_chain.len() - 1];
+	// Determine file path - use "pending" as placeholder for the number
+	let issue_file_path = get_issue_file_path(owner, repo, None, issue_title, false, &[]);
 
-	if parent_chain.is_empty() {
-		// Top-level issue - create directly
-		println!("Creating issue on Github: {issue_title}");
-		let created = gh.create_issue(owner, repo, issue_title, "").await?;
-		println!("Created issue #{} on Github", created.number);
-
-		// Fetch and store the newly created issue
-		fetch_and_store_issue(gh, owner, repo, created.number, None).await
-	} else {
-		// Sub-issue - parent must exist
-		// Only support single parent (immediate parent must exist)
-		if parent_chain.len() > 1 {
-			bail!(
-				"Cannot create nested sub-issue via --touch.\n\
-				 Only immediate sub-issues are supported.\n\
-				 Path: {owner}/{repo}/{}\n\
-				 \n\
-				 Create parent issues first, then create the sub-issue.",
-				touch_path.issue_chain.join("/")
-			);
-		}
-
-		let parent_title = &parent_chain[0];
-		let parent_num = gh.find_issue_by_title(owner, repo, parent_title).await?.ok_or_else(|| {
-			eyre!(
-				"Parent issue '{parent_title}' not found on Github.\n\
-				 Create the parent issue first:\n\
-				   todo open --touch {owner}/{repo}/{parent_title}"
-			)
-		})?;
-
-		// Create the sub-issue
-		println!("Creating sub-issue on Github: {issue_title}");
-		let created = gh.create_issue(owner, repo, issue_title, "").await?;
-		gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
-		println!("Created sub-issue #{} under parent #{parent_num}", created.number);
-
-		// Fetch and store the parent tree (includes the new sub-issue)
-		let root_path = fetch_and_store_issue(gh, owner, repo, parent_num, None).await?;
-
-		// Find and return the path to the newly created sub-issue
-		find_subissue_path(&root_path, issue_title).ok_or_else(|| eyre!("Failed to find newly created sub-issue file. This is a bug."))
-	}
-}
-
-/// Find a sub-issue file path within a parent issue's directory structure.
-fn find_subissue_path(parent_path: &std::path::Path, title: &str) -> Option<PathBuf> {
-	// The parent_path is the __main__.md file, get its directory
-	let parent_dir = parent_path.parent()?;
-
-	// Search for a file matching the title in the directory
-	let sanitized_title = sanitize_title_for_filename(title);
-
-	// Check both flat format and directory format
-	for entry in std::fs::read_dir(parent_dir).ok()? {
-		let entry = entry.ok()?;
-		let path = entry.path();
-
-		if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-			// Check flat file: {number}_-_{title}.md
-			if file_name.ends_with(".md") && file_name.contains(&sanitized_title) {
-				return Some(path);
-			}
-			// Check directory: {number}_-_{title}/__main__.md
-			if path.is_dir() && file_name.contains(&sanitized_title) {
-				let main_file = path.join("__main__.md");
-				if main_file.exists() {
-					return Some(main_file);
-				}
-			}
-		}
+	// Create parent directories
+	if let Some(parent) = issue_file_path.parent() {
+		std::fs::create_dir_all(parent)?;
 	}
 
-	None
+	// Create the issue file with pending marker (empty identity)
+	// Format: `- [ ] Title <!-- -->` means pending issue
+	let content = format!("- [ ] {issue_title} <!-- -->\n\t\n");
+
+	std::fs::write(&issue_file_path, &content)?;
+
+	println!("Created pending issue: {issue_title}");
+	println!("Stored at: {issue_file_path:?}");
+	println!("Issue will be created on Github when you save and sync.");
+
+	Ok(issue_file_path)
 }
 
 /// Create a new virtual issue locally (no Github).

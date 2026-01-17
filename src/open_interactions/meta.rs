@@ -103,15 +103,19 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 		(name, issue_file_path.parent())
 	};
 
-	// Extract issue number and title from name format: {number}_-_{title} or just {number}
+	// Extract issue number and title from name format: {number}_-_{title}, just {number}, or just {title} (pending)
 	let (issue_number, title) = if let Some(sep_pos) = name_to_parse.find("_-_") {
 		let number: u64 = name_to_parse[..sep_pos].parse()?;
 		let title = name_to_parse[sep_pos + 3..].replace('_', " ");
 		(number, title)
-	} else {
+	} else if let Ok(number) = name_to_parse.parse::<u64>() {
 		// Just a number, no title separator
-		let number: u64 = name_to_parse.parse().map_err(|_| eyre!("Could not parse issue number from: {name_to_parse}"))?;
 		(number, String::new())
+	} else {
+		// No number - this is a pending issue (title only)
+		// Use 0 as a sentinel value for pending issues
+		let title = name_to_parse.replace('_', " ");
+		(0, title)
 	};
 
 	// Determine parent issue by looking at the directory structure

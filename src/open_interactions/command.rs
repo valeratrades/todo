@@ -10,7 +10,7 @@ use super::{
 	files::{ExactMatchLevel, choose_issue_with_fzf, search_issue_files},
 	meta::is_virtual_project,
 	sync::{MergeMode, Side, SyncOptions, open_local_issue},
-	touch::{create_and_fetch_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
+	touch::{create_pending_issue, create_virtual_issue, find_local_issue_for_touch, parse_touch_path},
 };
 use crate::{
 	config::LiveSettings,
@@ -76,30 +76,6 @@ pub struct OpenArgs {
 	/// When opening via Github URL: overwrites local with remote.
 	#[arg(short, long)]
 	pub reset: bool,
-}
-
-/// Extract issue number from a file path.
-/// Looks for the `{number}_-_{title}` pattern in the filename or parent directory.
-fn extract_issue_number_from_path(path: &Path) -> Option<u64> {
-	// Try the filename first
-	if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-		&& let Some(num_str) = stem.split("_-_").next()
-		&& let Ok(num) = num_str.parse::<u64>()
-	{
-		return Some(num);
-	}
-
-	// For __main__.md files, check the parent directory name
-	if path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("__main__")).unwrap_or(false)
-		&& let Some(parent) = path.parent()
-		&& let Some(dir_name) = parent.file_name().and_then(|s| s.to_str())
-		&& let Some(num_str) = dir_name.split("_-_").next()
-		&& let Ok(num) = num_str.parse::<u64>()
-	{
-		return Some(num);
-	}
-
-	None
 }
 
 #[tracing::instrument(level = "debug", skip(settings, gh))]
@@ -171,19 +147,13 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGithubClient, args: 
 			println!("Project {}/{} is virtual (no Github remote)", touch_path.owner, touch_path.repo);
 			(create_virtual_issue(&touch_path)?, true)
 		} else {
-			// Real project: create issue on Github immediately, then fetch and store
-			if offline {
-				bail!("Cannot create issue on Github in offline mode. Use a virtual project or go online.");
-			}
-			let path = create_and_fetch_issue(&gh, &touch_path).await?;
+			// Real project: create a pending issue locally
+			// The issue will be created on Github when user saves and syncs
+			let path = create_pending_issue(&touch_path)?;
 
-			// Commit the newly created issue as consensus
-			// Extract owner/repo/number from the path or use touch_path info
+			// Commit the pending issue as initial consensus
 			use super::git::commit_issue_changes;
-			let issue_number = extract_issue_number_from_path(&path);
-			if let Some(num) = issue_number {
-				commit_issue_changes(&path, &touch_path.owner, &touch_path.repo, num, Some("initial touch creation"))?;
-			}
+			commit_issue_changes(&path, &touch_path.owner, &touch_path.repo, 0, Some("initial touch creation (pending)"))?;
 
 			(path, false)
 		};

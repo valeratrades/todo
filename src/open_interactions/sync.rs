@@ -531,6 +531,9 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 		// Save updated issue tree (with new URLs for created issues)
 		save_issue_tree(issue, owner, repo, &[])?;
 
+		// Get the actual issue number - may have been set by sink() if issue was pending
+		let actual_issue_number = issue.number().unwrap_or(issue_number);
+
 		// Re-fetch and update local file to reflect the synced state
 		println!("Refreshing local issue file from Github...");
 
@@ -546,7 +549,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 		let old_path = issue_file_path.to_path_buf();
 
 		// Re-fetch creates file with potentially new title/state
-		let new_path = fetch_and_store_issue(gh, owner, repo, issue_number, ancestors).await?;
+		let new_path = fetch_and_store_issue(gh, owner, repo, actual_issue_number, ancestors).await?;
 
 		// If the path changed, delete the old file
 		if old_path != new_path && old_path.exists() {
@@ -567,7 +570,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 		}
 
 		// Commit the synced changes to local git
-		commit_issue_changes(issue_file_path, owner, repo, issue_number, None)?;
+		commit_issue_changes(issue_file_path, owner, repo, actual_issue_number, None)?;
 	} else {
 		println!("No changes made.");
 	}
