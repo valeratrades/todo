@@ -830,41 +830,70 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 	// Load the issue tree from filesystem (assembles from separate files)
 	let mut issue = load_issue_tree(issue_file_path)?;
 
-	// Handle --pull: fetch and sync from remote BEFORE opening editor
-	// This uses the merge mode (which is consumed, so post-editor sync uses Normal)
-	if sync_opts.pull && !offline && meta.issue_number != 0 {
-		println!("Pulling latest from Github...");
+	// === CONSENSUS-FIRST SYNC ===
+	// We always show the user the consensus state, never raw local or raw remote.
+	// If local differs from consensus, or if --pull was requested, we must sync first.
+	//
+	// Exception: `--reset` or `--force` with local preference (opening by local path without --pull)
+	// means the user wants local to win - no pre-editor sync needed, post-editor sync handles it.
+	//
+	// This ensures the user always sees a consistent, synced view of the issue.
+	if !offline && meta.issue_number != 0 {
+		// Check if this prefers local (--reset/--force without --pull/URL)
+		// In that case, skip pre-editor sync - post-editor sync will handle pushing local to remote
+		let prefers_local = matches!(sync_opts.peek_merge_mode(), MergeMode::Reset { prefer: Side::Local } | MergeMode::Force { prefer: Side::Local });
 
-		// Fetch remote state
-		let remote_issue = fetch_full_issue_tree(gh, &owner, &repo, meta.issue_number).await?;
+		if !prefers_local {
+			// Load consensus from git (last committed state)
+			let consensus = load_consensus_issue(issue_file_path);
 
-		// Load consensus from git - required for pull
-		let consensus = load_consensus_issue(issue_file_path).ok_or_else(|| {
-			eyre!(
-				"BUG: Consensus missing during pull.\n\
-				 File: {}\n\
-				 This indicates a bug - the file should have been committed before pull.",
-				issue_file_path.display()
-			)
-		})?;
+			// Determine if we need to sync before showing the user
+			let local_differs_from_consensus = consensus.as_ref().map(|c| *c != issue).unwrap_or(false);
+			let needs_pre_editor_sync = sync_opts.pull || local_differs_from_consensus;
 
-		// Take merge mode (consumes it, so post-editor sync will use Normal)
-		let merge_mode = sync_opts.take_merge_mode();
+			if needs_pre_editor_sync {
+				let reason = if sync_opts.pull {
+					"Pulling latest from Github..."
+				} else {
+					"Local differs from consensus, syncing..."
+				};
+				println!("{reason}");
 
-		// Apply merge mode through unified sync logic
-		let (merged, local_needs_update, _remote_needs_update) =
-			apply_merge_mode(&issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number).await?;
+				// Fetch remote state
+				let remote_issue = fetch_full_issue_tree(gh, &owner, &repo, meta.issue_number).await?;
 
-		if local_needs_update {
-			// Write merged result to filesystem
-			issue = merged;
-			save_issue_tree(&issue, &owner, &repo, &[])?;
-			commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
-		} else if issue != merged {
-			// Issue changed but doesn't need file update (keeping local)
-			issue = merged;
-		} else {
-			println!("Already up to date.");
+				// Consensus is required - if missing and local differs, that's a bug
+				let consensus = consensus.ok_or_else(|| {
+					eyre!(
+						"BUG: Consensus missing but local file exists.\n\
+						 File: {}\n\
+						 This indicates a bug - the file should have been committed.",
+						issue_file_path.display()
+					)
+				})?;
+
+				// Take merge mode (consumes it, so post-editor sync will use Normal)
+				let merge_mode = sync_opts.take_merge_mode();
+
+				// Apply merge mode through unified sync logic
+				let (merged, local_needs_update, _remote_needs_update) =
+					apply_merge_mode(&issue, Some(&consensus), &remote_issue, merge_mode, issue_file_path, &owner, &repo, meta.issue_number).await?;
+
+				if local_needs_update {
+					// Write merged result to filesystem
+					issue = merged;
+					save_issue_tree(&issue, &owner, &repo, &[])?;
+					commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
+				} else if issue != merged {
+					// Issue changed but doesn't need file update (keeping local)
+					issue = merged;
+					// Still need to write the merged state for user to see
+					save_issue_tree(&issue, &owner, &repo, &[])?;
+					commit_issue_changes(issue_file_path, &owner, &repo, meta.issue_number, None)?;
+				} else {
+					println!("Already up to date.");
+				}
+			}
 		}
 	}
 
