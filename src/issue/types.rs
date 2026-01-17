@@ -322,11 +322,11 @@ impl CloseState /*{{{1*/ {
 /// Metadata for an issue (identity and sync info)
 #[derive(Clone, Debug, PartialEq)]
 pub struct IssueMeta {
-	/// Issue identity - linked to Github or pending creation
-	pub identity: IssueIdentity,
+	/// Url on Github
+	pub id: IssueLink,
 	/// Timestamp of last content change (body/comments, not children).
-	/// Used for sync conflict resolution. None for local-only issues that haven't been synced.
-	pub last_contents_change: Option<Timestamp>,
+	/// Used for sync conflict resolution.
+	pub ts: Timestamp,
 }
 
 /// A comment in the issue conversation (first one is always the issue body)
@@ -359,8 +359,8 @@ struct ParsedTitleLine {
 /// Complete representation of an issue file
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
+	pub metadata: Option<IssueMeta>,
 	pub contents: IssueContents,
-	pub meta: IssueMeta,
 	/// Sub-issues in order
 	pub children: Vec<Issue>,
 }
@@ -646,7 +646,7 @@ impl Issue /*{{{1*/ {
 
 		Ok(Issue {
 			meta: IssueMeta {
-				identity: parsed.identity,
+				id: parsed.identity,
 				last_contents_change: None, // Set from Github when syncing
 			},
 			contents: IssueContents {
@@ -839,14 +839,14 @@ impl Issue /*{{{1*/ {
 
 		// Title line - root uses `<!-- @user url -->`, children use `<!--sub @user url -->`
 		let checked = self.contents.state.to_checkbox();
-		let identity_part = self.meta.identity.encode();
+		let identity_part = self.meta.id.encode();
 		let labels_part = if self.contents.labels.is_empty() {
 			String::new()
 		} else {
 			format!("[{}] ", self.contents.labels.join(", "))
 		};
 		let marker = if depth == 0 { " " } else { "sub " };
-		let is_owned = self.meta.identity.user().is_some_and(crate::current_user::is);
+		let is_owned = self.meta.id.user().is_some_and(crate::current_user::is);
 		out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.contents.title));
 
 		// Body (first comment) - add extra indent if not owned
@@ -874,7 +874,7 @@ impl Issue /*{{{1*/ {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
 				CommentIdentity::Created { user, id } => {
-					let url = self.meta.identity.url_str().unwrap_or("");
+					let url = self.meta.id.url_str().unwrap_or("");
 					out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 				}
 				CommentIdentity::Pending => {
@@ -913,7 +913,7 @@ impl Issue /*{{{1*/ {
 			if child.contents.state.is_closed() {
 				// Output child title line
 				let child_checked = child.contents.state.to_checkbox();
-				let child_identity_part = child.meta.identity.encode();
+				let child_identity_part = child.meta.id.encode();
 				let child_labels_part = if child.contents.labels.is_empty() {
 					String::new()
 				} else {
@@ -954,13 +954,13 @@ impl Issue /*{{{1*/ {
 
 		// Title line (always at root level for filesystem representation)
 		let checked = self.contents.state.to_checkbox();
-		let identity_part = self.meta.identity.encode();
+		let identity_part = self.meta.id.encode();
 		let labels_part = if self.contents.labels.is_empty() {
 			String::new()
 		} else {
 			format!("[{}] ", self.contents.labels.join(", "))
 		};
-		let is_owned = self.meta.identity.user().is_some_and(crate::current_user::is);
+		let is_owned = self.meta.id.user().is_some_and(crate::current_user::is);
 		out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.contents.title));
 
 		// Body (first comment) - add extra indent if not owned
@@ -988,7 +988,7 @@ impl Issue /*{{{1*/ {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
 				CommentIdentity::Created { user, id } => {
-					let url = self.meta.identity.url_str().unwrap_or("");
+					let url = self.meta.id.url_str().unwrap_or("");
 					out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 				}
 				CommentIdentity::Pending => {

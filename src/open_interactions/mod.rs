@@ -10,6 +10,7 @@ pub(crate) mod files;
 mod git;
 mod github_sync;
 mod meta;
+mod sink;
 mod sync;
 mod touch;
 mod tree;

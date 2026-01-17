@@ -1,7 +1,5 @@
 //! Sync local issue changes back to Github.
 //!
-#![allow(unused_assignments)] // Fields in PushError are read by miette's derive macro via attributes
-//!
 //! ## Unified Sync Workflow
 //!
 //! All sync operations go through `sync_issue`, which:
@@ -85,8 +83,6 @@ impl SyncOptions {
 
 use std::path::Path;
 
-use miette::Diagnostic;
-use thiserror::Error;
 use todo::{CloseState, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
@@ -95,196 +91,15 @@ use super::{
 	fetch::fetch_and_store_issue,
 	files::{load_issue_tree, save_issue_tree},
 	git::{commit_issue_changes, is_git_initialized, load_consensus_issue},
-	github_sync::IssueGithubExt,
 	meta::load_issue_meta_from_path,
+	sink::{GithubSink, Sink},
 	tree::{fetch_full_issue_tree, resolve_tree},
 };
 use crate::github::BoxedGithubClient;
 
 //=============================================================================
-// Error types
-//=============================================================================
-
-/// Errors that can occur when pushing changes to Github.
-#[derive(Debug, Diagnostic, Error)]
-pub enum PushError {
-	/// Local file references a comment ID that doesn't exist on Github.
-	/// This typically happens when comment IDs were manually edited in the local file.
-	#[error("comment {comment_id} not found in consensus")]
-	#[diagnostic(
-		code(todo::sync::id_mismatch),
-		help(
-			"The local file references a comment ID that doesn't exist on Github.\nThis can happen if comment IDs were manually edited.\nTry re-fetching the issue with `--pull --reset=remote`."
-		)
-	)]
-	IdMismatch { comment_id: u64 },
-}
-
-//=============================================================================
 // Sync implementation
 //=============================================================================
-
-/// Sync changes from a local issue to Github.
-/// Compares local state against remote state using git consensus.
-/// Returns whether the issue state changed (for file renaming).
-pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64, consensus: &Issue, local: &Issue) -> Result<bool> {
-	let mut updates = 0;
-	let mut creates = 0;
-	let mut deletes = 0;
-	let mut state_changed = false;
-
-	// Step 0: Check if issue state (open/closed) changed
-	let current_closed = local.contents.state.is_closed();
-	let consensus_closed = consensus.contents.state.is_closed();
-	if current_closed != consensus_closed {
-		let new_state = local.contents.state.to_github_state();
-		println!("Updating issue state to {new_state}...");
-		gh.update_issue_state(owner, repo, issue_number, new_state).await?;
-		state_changed = true;
-		updates += 1;
-	}
-
-	// Step 1: Check issue body (includes blockers section)
-	let issue_body = local.body();
-	let consensus_body = consensus.body();
-	tracing::debug!("[sync] local.contents.blockers.len() = {}", local.contents.blockers.items.len());
-	tracing::debug!("[sync] issue_body:\n{issue_body}");
-	tracing::debug!("[sync] consensus_body:\n{consensus_body}");
-	if issue_body != consensus_body {
-		println!("Updating issue body...");
-		gh.update_issue_body(owner, repo, issue_number, &issue_body).await?;
-		updates += 1;
-	}
-
-	// Step 2: Sync comments (skip first which is body)
-	use todo::CommentIdentity;
-	let target_ids: std::collections::HashSet<u64> = local.contents.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
-	let consensus_ids: std::collections::HashSet<u64> = consensus.contents.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
-
-	// Delete comments that were removed
-	for comment in consensus.contents.comments.iter().skip(1) {
-		if let Some(id) = comment.identity.id()
-			&& !target_ids.contains(&id)
-		{
-			println!("Deleting comment {id}...");
-			gh.delete_comment(owner, repo, id).await?;
-			deletes += 1;
-		}
-	}
-
-	// Update existing comments and create new ones
-	for comment in local.contents.comments.iter().skip(1) {
-		// Skip existing comments not owned by current user (Pending comments are always ours)
-		if let CommentIdentity::Created { user, .. } = &comment.identity
-			&& !todo::current_user::is(user)
-		{
-			continue;
-		}
-		let comment_body_str = comment.body.render();
-		match &comment.identity {
-			CommentIdentity::Created { id, .. } if consensus_ids.contains(id) => {
-				let consensus_body = consensus
-					.contents
-					.comments
-					.iter()
-					.skip(1)
-					.find(|c| c.identity.id() == Some(*id))
-					.map(|c| c.body.render())
-					.unwrap_or_default();
-				if comment_body_str != consensus_body {
-					println!("Updating comment {id}...");
-					gh.update_comment(owner, repo, *id, &comment_body_str).await?;
-					updates += 1;
-				}
-			}
-			CommentIdentity::Created { id, .. } => {
-				return Err(PushError::IdMismatch { comment_id: *id }.into());
-			}
-			CommentIdentity::Pending | CommentIdentity::Body =>
-				if !comment.body.is_empty() {
-					println!("Creating new comment...");
-					gh.create_comment(owner, repo, issue_number, &comment_body_str).await?;
-					creates += 1;
-				},
-		}
-	}
-
-	let total = updates + creates + deletes;
-	if total > 0 {
-		let mut parts = Vec::new();
-		if updates > 0 {
-			parts.push(format!("{updates} updated"));
-		}
-		if creates > 0 {
-			parts.push(format!("{creates} created"));
-		}
-		if deletes > 0 {
-			parts.push(format!("{deletes} deleted"));
-		}
-		println!("Synced to Github: {}", parts.join(", "));
-	}
-
-	Ok(state_changed)
-}
-
-/// Execute issue actions and update the Issue struct with new URLs.
-/// Returns (executed_count, Option<created_issue_number>) - the issue number is set if a root issue was created.
-pub async fn execute_issue_actions(gh: &BoxedGithubClient, owner: &str, repo: &str, issue: &mut Issue, actions: Vec<Vec<crate::github::IssueAction>>) -> Result<(usize, Option<u64>)> {
-	use crate::github::IssueAction;
-
-	let mut executed = 0;
-	let mut created_root_number = None;
-
-	for level_actions in actions {
-		for action in level_actions {
-			match action {
-				IssueAction::CreateIssue { path, title, body, closed, parent } => {
-					let is_root = path.is_empty();
-					if is_root {
-						println!("Creating issue: {title}");
-					} else {
-						println!("Creating sub-issue: {title}");
-					}
-
-					let created = gh.create_issue(owner, repo, &title, &body).await?;
-					println!("Created issue #{}: {}", created.number, created.html_url);
-
-					// Link to parent if this is a sub-issue
-					if let Some(parent_num) = parent {
-						gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
-					}
-
-					// Close if needed
-					if closed {
-						gh.update_issue_state(owner, repo, created.number, "closed").await?;
-					}
-
-					// Update the Issue struct with the new identity
-					let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
-					let link = todo::IssueLink::parse(&url).expect("just constructed valid URL");
-					let user = gh.fetch_authenticated_user().await?;
-					let identity = todo::IssueIdentity::Created { user, link };
-					if is_root {
-						issue.meta.identity = identity;
-						created_root_number = Some(created.number);
-					} else if let Some(child) = issue.get_child_mut(&path) {
-						child.meta.identity = identity;
-					}
-
-					executed += 1;
-				}
-				IssueAction::UpdateIssueState { issue_number, closed } => {
-					let new_state = if closed { "closed" } else { "open" };
-					println!("Updating issue #{issue_number} state to {new_state}...");
-					gh.update_issue_state(owner, repo, issue_number, new_state).await?;
-					executed += 1;
-				}
-			}
-		}
-	}
-
-	Ok((executed, created_root_number))
-}
 
 /// Apply the merge mode to produce a merged issue.
 ///
@@ -647,6 +462,7 @@ impl Modifier {
 /// Inner sync logic shared by open_local_issue and sync_issue_file.
 ///
 /// This is the unified sync entry point. All sync operations go through here.
+/// Uses the Sink trait to push changes to GitHub.
 async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Path, owner: &str, repo: &str, issue_number: u64, issue: &mut Issue, merge_mode: MergeMode) -> Result<()> {
 	// Load consensus from git (last committed state).
 	// Consensus is REQUIRED for sync - if we're here, the file should be tracked.
@@ -663,11 +479,11 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 	})?;
 
 	//=========================================================================
-	// SYNC: Merge local and remote state
+	// SYNC: Merge local and remote state, then push differences
 	//=========================================================================
 	// Pending items (new local sub-issues) are preserved during merge and
 	// created on Github in post-sync. No pre-sync phase needed.
-	let local_needs_update = if issue.meta.identity.is_linked() {
+	let (local_needs_update, changed) = if issue.meta.identity.is_linked() {
 		// Normal flow: fetch remote and merge
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
@@ -688,67 +504,28 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 			tracing::debug!("[sync] Will push local changes to remote");
 		}
 
-		local_needs_update
+		// Push differences to GitHub using Sink trait
+		// Compare merged state against REMOTE (not consensus) to know what to push
+		let github_sink = GithubSink { gh, owner, repo };
+		let changed = issue.sink(&remote_issue, github_sink).await?;
+
+		(local_needs_update, changed)
 	} else {
-		// Issue was just created, no merge needed
-		false
-	};
-
-	//=========================================================================
-	// POST-SYNC: Push differences to remote
-	//=========================================================================
-	// Compare merged state against consensus and push all differences.
-	// This handles:
-	// 1. Create Pending sub-issues on Github
-	// 2. Push body/comments/state changes for root issue
-	// 3. Push state changes for sub-issues
-
-	// Step 1: Create any Pending sub-issues
-	let create_actions = issue.collect_create_actions();
-	let has_creates = create_actions.iter().any(|level| !level.is_empty());
-
-	if has_creates {
-		let (executed, _) = execute_issue_actions(gh, owner, repo, issue, create_actions).await?;
-		if executed > 0 {
-			// Save to filesystem with the new URLs
-			save_issue_tree(issue, owner, repo, &[])?;
-			tracing::debug!("[sync] Post-sync: created {executed} new sub-issue(s)");
-		}
-	}
-
-	// Step 2: Push root issue changes (body, comments, state)
-	let state_changed = if issue_number != 0 {
-		sync_local_issue_to_github(gh, owner, repo, issue_number, &consensus, issue).await?
-	} else {
-		false
-	};
-
-	// Step 3: Push sub-issue state updates
-	let consensus_sub_issues: Vec<_> = consensus
-		.children
-		.iter()
-		.filter_map(|child| {
-			let number = child.meta.identity.number()?;
-			Some(crate::github::OriginalSubIssue {
-				number,
-				state: child.contents.state.to_github_state().to_string(),
-			})
-		})
-		.collect();
-
-	let update_actions = issue.collect_update_actions(&consensus_sub_issues);
-	let has_updates = update_actions.iter().any(|level| !level.is_empty());
-	let updates_executed = if has_updates {
-		let (executed, _) = execute_issue_actions(gh, owner, repo, issue, update_actions).await?;
-		executed
-	} else {
-		0
+		// Issue was just created - sink against an empty issue
+		// (everything is "new" relative to GitHub)
+		let empty_issue = Issue::default();
+		let github_sink = GithubSink { gh, owner, repo };
+		let changed = issue.sink(&empty_issue, github_sink).await?;
+		(false, changed)
 	};
 
 	// Determine if we need to refresh from Github
-	let needs_refresh = has_creates || state_changed || local_needs_update || updates_executed > 0;
+	let needs_refresh = changed || local_needs_update;
 
 	if needs_refresh {
+		// Save updated issue tree (with new URLs for created issues)
+		save_issue_tree(issue, owner, repo, &[])?;
+
 		// Re-fetch and update local file to reflect the synced state
 		println!("Refreshing local issue file from Github...");
 
@@ -768,11 +545,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 
 		// If the path changed, delete the old file
 		if old_path != new_path && old_path.exists() {
-			if state_changed {
-				println!("Issue state changed, renaming file...");
-			} else {
-				println!("Issue renamed/moved, removing old file: {old_path:?}");
-			}
+			println!("Issue renamed/moved, removing old file: {old_path:?}");
 			std::fs::remove_file(&old_path)?;
 
 			// Handle old sub-issues directory cleanup
@@ -786,11 +559,6 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 			{
 				eprintln!("Warning: could not remove old sub-issues directory: {e}");
 			}
-		}
-
-		let total_actions = updates_executed + if has_creates { 1 } else { 0 };
-		if total_actions > 0 {
-			println!("Synced {total_actions} actions to Github.");
 		}
 
 		// Commit the synced changes to local git

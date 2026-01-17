@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use v_utils::prelude::*;
 
 use crate::config::LiveSettings;
@@ -39,50 +39,12 @@ pub struct GithubComment {
 	pub user: GithubUser,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct OriginalSubIssue {
-	pub number: u64,
-	pub state: String,
-}
-
-impl From<&GithubIssue> for OriginalSubIssue {
-	fn from(s: &GithubIssue) -> Self {
-		Self {
-			number: s.number,
-			state: s.state.clone(),
-		}
-	}
-}
-
 /// Response from Github when creating an issue
 #[derive(Debug, Deserialize)]
 pub struct CreatedIssue {
 	pub id: u64,
 	pub number: u64,
 	pub html_url: String,
-}
-
-/// Index path to locate an issue in the tree (e.g., [0, 2] = first child's third child)
-pub type IssuePath = Vec<usize>;
-
-/// An action that needs to be performed on Github
-#[derive(Debug)]
-pub enum IssueAction {
-	/// Create a new issue, optionally as a sub-issue of a parent
-	CreateIssue {
-		/// Path to this issue in the tree (empty for root)
-		path: IssuePath,
-		/// Title for the new issue
-		title: String,
-		/// Body for the new issue
-		body: String,
-		/// Whether it should be closed after creation
-		closed: bool,
-		/// Parent issue number if this is a sub-issue
-		parent: Option<u64>,
-	},
-	/// Update an existing issue's state (open/closed)
-	UpdateIssueState { issue_number: u64, closed: bool },
 }
 
 //==============================================================================
