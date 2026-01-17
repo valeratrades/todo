@@ -179,7 +179,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 		}
 		let comment_body_str = comment.body.render();
 		match &comment.identity {
-			CommentIdentity::Linked(id) if consensus_ids.contains(id) => {
+			CommentIdentity::Created { id, .. } if consensus_ids.contains(id) => {
 				let consensus_body = consensus
 					.comments
 					.iter()
@@ -193,7 +193,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 					updates += 1;
 				}
 			}
-			CommentIdentity::Linked(id) => {
+			CommentIdentity::Created { id, .. } => {
 				return Err(PushError::IdMismatch { comment_id: *id }.into());
 			}
 			CommentIdentity::Pending | CommentIdentity::Body =>

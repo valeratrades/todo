@@ -22,7 +22,7 @@ fn test_comments_with_ids_sync_correctly() {
 		"- [ ] a <!-- @mock_user https://github.com/o/r/issues/1 -->\n\
 		 \tbody text\n\
 		 \n\
-		 \t<!-- https://github.com/o/r/issues/1#issuecomment-12345 -->\n\
+		 \t<!-- @mock_user https://github.com/o/r/issues/1#issuecomment-12345 -->\n\
 		 \tThis is my comment\n",
 	);
 

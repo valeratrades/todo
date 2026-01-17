@@ -125,8 +125,8 @@ impl IssueIdentity /*{{{1*/ {
 pub enum CommentIdentity {
 	/// This is the issue body (first comment), not a separate Github comment
 	Body,
-	/// Comment exists on Github with this ID
-	Linked(u64),
+	/// Comment exists on Github with this ID, created by given user
+	Created { user: String, id: u64 },
 	/// Comment is pending creation on Github (will be created in post-sync)
 	Pending,
 }
@@ -135,7 +135,15 @@ impl CommentIdentity /*{{{1*/ {
 	/// Get the comment ID if linked.
 	pub fn id(&self) -> Option<u64> {
 		match self {
-			Self::Linked(id) => Some(*id),
+			Self::Created { id, .. } => Some(*id),
+			Self::Body | Self::Pending => None,
+		}
+	}
+
+	/// Get the user who created this comment if linked.
+	pub fn user(&self) -> Option<&str> {
+		match self {
+			Self::Created { user, .. } => Some(user),
 			Self::Body | Self::Pending => None,
 		}
 	}
@@ -530,17 +538,12 @@ impl Issue /*{{{1*/ {
 				if inner == "new comment" {
 					current_comment_meta = Some((CommentIdentity::Pending, true));
 				} else if inner.contains("#issuecomment-") {
-					let (is_immutable, url) = if let Some(rest) = inner.strip_prefix("immutable ") {
+					let (is_immutable, rest) = if let Some(rest) = inner.strip_prefix("immutable ") {
 						(true, rest.trim())
 					} else {
 						(false, inner)
 					};
-					let identity = url
-						.split("#issuecomment-")
-						.nth(1)
-						.and_then(|s| s.parse().ok())
-						.map(CommentIdentity::Linked)
-						.unwrap_or(CommentIdentity::Pending);
+					let identity = Self::parse_comment_identity(rest);
 					current_comment_meta = Some((identity, !is_immutable));
 				}
 				continue;
@@ -758,6 +761,25 @@ impl Issue /*{{{1*/ {
 		IssueIdentity::Pending
 	}
 
+	/// Parse `@user url#issuecomment-id` format into CommentIdentity.
+	/// Returns Pending if parsing fails.
+	fn parse_comment_identity(s: &str) -> CommentIdentity {
+		let s = s.trim();
+
+		// Format: `@username url#issuecomment-123`
+		if let Some(rest) = s.strip_prefix('@')
+			&& let Some(space_idx) = rest.find(' ')
+		{
+			let user = rest[..space_idx].to_string();
+			let url = rest[space_idx + 1..].trim();
+			if let Some(id) = url.split("#issuecomment-").nth(1).and_then(|s| s.parse().ok()) {
+				return CommentIdentity::Created { user, id };
+			}
+		}
+
+		CommentIdentity::Pending
+	}
+
 	/// Parse checkbox prefix: `- [CONTENT] ` and return result.
 	fn parse_checkbox_prefix_detailed(line: &str) -> CheckboxParseResult<'_> {
 		// Match `- [` prefix
@@ -861,12 +883,12 @@ impl Issue /*{{{1*/ {
 				CommentIdentity::Body => {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
-				CommentIdentity::Linked(id) => {
+				CommentIdentity::Created { user, id } => {
 					let url = self.meta.identity.url_str().unwrap_or("");
 					if comment.owned {
-						out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
+						out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 					} else {
-						out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
+						out.push_str(&format!("{content_indent}<!--immutable @{user} {url}#issuecomment-{id} -->\n"));
 					}
 				}
 				CommentIdentity::Pending => {
@@ -988,12 +1010,12 @@ impl Issue /*{{{1*/ {
 				CommentIdentity::Body => {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
-				CommentIdentity::Linked(id) => {
+				CommentIdentity::Created { user, id } => {
 					let url = self.meta.identity.url_str().unwrap_or("");
 					if comment.owned {
-						out.push_str(&format!("{content_indent}<!-- {url}#issuecomment-{id} -->\n"));
+						out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 					} else {
-						out.push_str(&format!("{content_indent}<!--immutable {url}#issuecomment-{id} -->\n"));
+						out.push_str(&format!("{content_indent}<!--immutable @{user} {url}#issuecomment-{id} -->\n"));
 					}
 				}
 				CommentIdentity::Pending => {

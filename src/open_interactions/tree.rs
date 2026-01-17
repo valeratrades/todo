@@ -85,7 +85,10 @@ fn fetch_children_recursive<'a>(
 			for c in comments {
 				let comment_owned = c.user.login == current_user;
 				child.comments.push(Comment {
-					identity: CommentIdentity::Linked(c.id),
+					identity: CommentIdentity::Created {
+						user: c.user.login.clone(),
+						id: c.id,
+					},
 					body: todo::Events::parse(c.body.as_deref().unwrap_or("")),
 					owned: comment_owned,
 				});
