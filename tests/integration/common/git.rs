@@ -346,7 +346,7 @@ fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u6
 	}
 
 	// Extract comments (skip first which is the body)
-	for comment in issue.comments.iter().skip(1) {
+	for comment in issue.contents.comments.iter().skip(1) {
 		if let Some(id) = comment.identity.id() {
 			let comment_owner_login = comment.identity.user().expect("comment identity must have user - use @user format in test fixtures").to_string();
 			state.remote_comments.push(MockComment {

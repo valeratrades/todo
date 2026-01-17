@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use todo::{CloseState, Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, IssueMeta};
+use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, IssueMeta};
 use v_utils::prelude::*;
 
 use super::github_sync::IssueGithubExt;
@@ -83,7 +83,7 @@ fn fetch_children_recursive<'a>(
 
 			// Update comments (keep first comment which is body, add actual comments)
 			for c in comments {
-				child.comments.push(Comment {
+				child.contents.comments.push(Comment {
 					identity: CommentIdentity::Created {
 						user: c.user.login.clone(),
 						id: c.id,
@@ -102,21 +102,26 @@ fn fetch_children_recursive<'a>(
 					let identity = IssueIdentity::Created { user: si.user.login.clone(), link };
 					let close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 					let timestamp = si.updated_at.parse::<Timestamp>().ok();
+					let labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 					Issue {
 						meta: IssueMeta {
 							title: si.title.clone(),
 							identity,
-							close_state,
-							labels: si.labels.iter().map(|l| l.name.clone()).collect(),
+							close_state: close_state.clone(),
+							labels: labels.clone(),
+							last_contents_change: timestamp,
 						},
-						contents: Default::default(),
-						comments: vec![Comment {
-							identity: CommentIdentity::Body,
-							body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
-						}],
+						contents: IssueContents {
+							title: si.title.clone(),
+							labels,
+							state: close_state,
+							comments: vec![Comment {
+								identity: CommentIdentity::Body,
+								body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
+							}],
+							blockers: Default::default(),
+						},
 						children: Vec::new(),
-						blockers: Default::default(),
-						last_contents_change: timestamp,
 					}
 				})
 				.collect();
@@ -159,7 +164,7 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 			return NodeResolution::NoChange;
 		}
 		// Different content with no consensus - try timestamps, else conflict
-		return match (local.last_contents_change, remote.last_contents_change) {
+		return match (local.meta.last_contents_change, remote.meta.last_contents_change) {
 			(Some(local_ts), Some(remote_ts)) if local_ts != remote_ts => NodeResolution::AutoResolved { take_local: local_ts > remote_ts },
 			_ => NodeResolution::Conflict,
 		};
@@ -178,7 +183,7 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 		(false, true) => NodeResolution::RemoteOnly,
 		(true, true) => {
 			// Both changed - try to auto-resolve using timestamps
-			match (local.last_contents_change, remote.last_contents_change) {
+			match (local.meta.last_contents_change, remote.meta.last_contents_change) {
 				(Some(local_ts), Some(remote_ts)) if local_ts != remote_ts => NodeResolution::AutoResolved { take_local: local_ts > remote_ts },
 				_ => {
 					// Same timestamp or missing timestamps - cannot auto-resolve
@@ -197,15 +202,15 @@ fn node_content_eq(a: &Issue, b: &Issue) -> bool {
 	}
 
 	// Compare body (first comment) - compare rendered output
-	let a_body = a.comments.first().map(|c| c.body.render()).unwrap_or_default();
-	let b_body = b.comments.first().map(|c| c.body.render()).unwrap_or_default();
+	let a_body = a.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
+	let b_body = b.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
 	if a_body != b_body {
 		return false;
 	}
 
 	// Compare other comments (by identity and rendered body)
-	let a_comments: Vec<_> = a.comments.iter().skip(1).map(|c| (&c.identity, c.body.render())).collect();
-	let b_comments: Vec<_> = b.comments.iter().skip(1).map(|c| (&c.identity, c.body.render())).collect();
+	let a_comments: Vec<_> = a.contents.comments.iter().skip(1).map(|c| (&c.identity, c.body.render())).collect();
+	let b_comments: Vec<_> = b.contents.comments.iter().skip(1).map(|c| (&c.identity, c.body.render())).collect();
 	if a_comments != b_comments {
 		return false;
 	}
@@ -355,18 +360,18 @@ fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 	resolved.meta.labels = remote.meta.labels.clone();
 
 	// Update comments: keep structure but update content
-	if let Some(remote_body) = remote.comments.first()
-		&& let Some(resolved_body) = resolved.comments.first_mut()
+	if let Some(remote_body) = remote.contents.comments.first()
+		&& let Some(resolved_body) = resolved.contents.comments.first_mut()
 	{
 		resolved_body.body = remote_body.body.clone();
 	}
 
 	// Replace other comments with remote's
-	resolved.comments.truncate(1);
-	resolved.comments.extend(remote.comments.iter().skip(1).cloned());
+	resolved.contents.comments.truncate(1);
+	resolved.contents.comments.extend(remote.contents.comments.iter().skip(1).cloned());
 
 	// Update timestamp
-	resolved.last_contents_change = remote.last_contents_change;
+	resolved.meta.last_contents_change = remote.meta.last_contents_change;
 }
 
 #[cfg(test)]
@@ -386,15 +391,19 @@ mod tests {
 				},
 				close_state: CloseState::Open,
 				labels: vec![],
+				last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
 			},
-			contents: Default::default(),
-			comments: vec![Comment {
-				identity: CommentIdentity::Body,
-				body: todo::Events::parse(body),
-			}],
+			contents: IssueContents {
+				title: "Test".to_string(),
+				labels: vec![],
+				state: CloseState::Open,
+				comments: vec![Comment {
+					identity: CommentIdentity::Body,
+					body: todo::Events::parse(body),
+				}],
+				blockers: BlockerSequence::default(),
+			},
 			children: vec![],
-			blockers: BlockerSequence::default(),
-			last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
 		}
 	}
 
@@ -471,15 +480,19 @@ mod tests {
 				},
 				close_state: CloseState::Open,
 				labels: vec![],
+				last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
 			},
-			contents: Default::default(),
-			comments: vec![Comment {
-				identity: CommentIdentity::Body,
-				body: todo::Events::parse(body),
-			}],
+			contents: IssueContents {
+				title: "Test".to_string(),
+				labels: vec![],
+				state: CloseState::Open,
+				comments: vec![Comment {
+					identity: CommentIdentity::Body,
+					body: todo::Events::parse(body),
+				}],
+				blockers: BlockerSequence::default(),
+			},
 			children: vec![],
-			blockers: BlockerSequence::default(),
-			last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
 		}
 	}
 

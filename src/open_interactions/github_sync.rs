@@ -9,7 +9,7 @@
 //! - **Post-sync**: Updating existing issue states to match local changes
 
 use jiff::Timestamp;
-use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, IssueMeta, split_blockers};
+use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, IssueMeta, split_blockers};
 
 use crate::github::{GithubComment, GithubIssue, IssueAction, OriginalSubIssue};
 
@@ -71,15 +71,17 @@ impl IssueGithubExt for Issue {
 			link,
 		};
 		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
-		let meta = IssueMeta {
-			title: issue.title.clone(),
-			identity,
-			close_state,
-			labels,
-		};
 
 		// Parse timestamp from Github's ISO 8601 format
 		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
+
+		let meta = IssueMeta {
+			title: issue.title.clone(),
+			identity,
+			close_state: close_state.clone(),
+			labels: labels.clone(),
+			last_contents_change,
+		};
 
 		// Build comments: body is first comment
 		// Split out blockers from body (they're appended during sync)
@@ -116,32 +118,40 @@ impl IssueGithubExt for Issue {
 				};
 				let child_close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
 				let child_timestamp = si.updated_at.parse::<Timestamp>().ok();
+				let child_labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 				Issue {
 					meta: IssueMeta {
 						title: si.title.clone(),
 						identity: child_identity,
-						close_state: child_close_state,
-						labels: si.labels.iter().map(|l| l.name.clone()).collect(),
+						close_state: child_close_state.clone(),
+						labels: child_labels.clone(),
+						last_contents_change: child_timestamp,
 					},
-					contents: Default::default(),
-					comments: vec![Comment {
-						identity: CommentIdentity::Body,
-						body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
-					}],
+					contents: IssueContents {
+						title: si.title.clone(),
+						labels: child_labels,
+						state: child_close_state,
+						comments: vec![Comment {
+							identity: CommentIdentity::Body,
+							body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
+						}],
+						blockers: BlockerSequence::default(),
+					},
 					children: Vec::new(),
-					blockers: BlockerSequence::default(),
-					last_contents_change: child_timestamp,
 				}
 			})
 			.collect();
 
 		Issue {
 			meta,
-			contents: Default::default(),
-			comments: issue_comments,
+			contents: IssueContents {
+				title: issue.title.clone(),
+				labels,
+				state: close_state,
+				comments: issue_comments,
+				blockers,
+			},
 			children,
-			blockers,
-			last_contents_change,
 		}
 	}
 }
@@ -259,12 +269,12 @@ mod tests {
 		assert_eq!(result.meta.labels, vec!["bug".to_string()]);
 
 		// Body + 1 comment
-		assert_eq!(result.comments.len(), 2);
-		assert_eq!(result.comments[0].body.plain_text(), "Issue body");
-		assert_eq!(result.comments[0].identity, CommentIdentity::Body);
-		assert_eq!(result.comments[1].identity.id(), Some(456));
-		assert_eq!(result.comments[1].body.plain_text(), "A comment");
-		assert_eq!(result.comments[1].identity.user(), Some("other")); // different user
+		assert_eq!(result.contents.comments.len(), 2);
+		assert_eq!(result.contents.comments[0].body.plain_text(), "Issue body");
+		assert_eq!(result.contents.comments[0].identity, CommentIdentity::Body);
+		assert_eq!(result.contents.comments[1].identity.id(), Some(456));
+		assert_eq!(result.contents.comments[1].body.plain_text(), "A comment");
+		assert_eq!(result.contents.comments[1].identity.user(), Some("other")); // different user
 
 		// Sub-issue
 		assert_eq!(result.children.len(), 1);

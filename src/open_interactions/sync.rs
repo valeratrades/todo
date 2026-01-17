@@ -147,7 +147,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 	// Step 1: Check issue body (includes blockers section)
 	let issue_body = local.body();
 	let consensus_body = consensus.body();
-	tracing::debug!("[sync] local.blockers.len() = {}", local.blockers.len());
+	tracing::debug!("[sync] local.contents.blockers.len() = {}", local.contents.blockers.items.len());
 	tracing::debug!("[sync] issue_body:\n{issue_body}");
 	tracing::debug!("[sync] consensus_body:\n{consensus_body}");
 	if issue_body != consensus_body {
@@ -158,11 +158,11 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 
 	// Step 2: Sync comments (skip first which is body)
 	use todo::CommentIdentity;
-	let target_ids: std::collections::HashSet<u64> = local.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
-	let consensus_ids: std::collections::HashSet<u64> = consensus.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
+	let target_ids: std::collections::HashSet<u64> = local.contents.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
+	let consensus_ids: std::collections::HashSet<u64> = consensus.contents.comments.iter().skip(1).filter_map(|c| c.identity.id()).collect();
 
 	// Delete comments that were removed
-	for comment in consensus.comments.iter().skip(1) {
+	for comment in consensus.contents.comments.iter().skip(1) {
 		if let Some(id) = comment.identity.id()
 			&& !target_ids.contains(&id)
 		{
@@ -173,7 +173,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 	}
 
 	// Update existing comments and create new ones
-	for comment in local.comments.iter().skip(1) {
+	for comment in local.contents.comments.iter().skip(1) {
 		// Skip existing comments not owned by current user (Pending comments are always ours)
 		if let CommentIdentity::Created { user, .. } = &comment.identity {
 			if !todo::current_user::is(user) {
@@ -184,6 +184,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 		match &comment.identity {
 			CommentIdentity::Created { id, .. } if consensus_ids.contains(id) => {
 				let consensus_body = consensus
+					.contents
 					.comments
 					.iter()
 					.skip(1)
@@ -418,13 +419,13 @@ fn get_node_at_path_mut<'a>(issue: &'a mut Issue, path: &[usize]) -> Option<&'a 
 fn apply_node_content(target: &mut Issue, source: &Issue) {
 	target.meta.close_state = source.meta.close_state.clone();
 	target.meta.labels = source.meta.labels.clone();
-	target.blockers = source.blockers.clone();
+	target.contents.blockers = source.contents.blockers.clone();
 
 	// Copy comments (body is first comment)
-	target.comments = source.comments.clone();
+	target.contents.comments = source.contents.comments.clone();
 
 	// Update timestamp
-	target.last_contents_change = source.last_contents_change;
+	target.meta.last_contents_change = source.meta.last_contents_change;
 }
 
 /// Handle divergence: both local and remote changed since last sync.
@@ -626,7 +627,7 @@ impl Modifier {
 			Modifier::BlockerPop => {
 				use crate::blocker_interactions::BlockerSequenceExt;
 
-				let popped = issue.blockers.pop();
+				let popped = issue.contents.blockers.pop();
 				let output = popped.map(|text| format!("Popped: {text}"));
 
 				Ok(ModifyResult { output, file_modified: true })
@@ -634,7 +635,7 @@ impl Modifier {
 			Modifier::BlockerAdd { text } => {
 				use crate::blocker_interactions::BlockerSequenceExt;
 
-				issue.blockers.add(text);
+				issue.contents.blockers.add(text);
 				let output = None; // will repeat it when printing the current
 
 				Ok(ModifyResult { output, file_modified: true })

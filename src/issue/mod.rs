@@ -9,9 +9,6 @@
 mod blocker;
 pub use blocker::{BlockerItem, BlockerSequence, DisplayFormat, HeaderLevel, Line, classify_line, join_with_blockers, split_blockers};
 
-mod contents;
-pub use contents::IssueContents;
-
 mod events;
 pub use events::{Events, OwnedCodeBlockKind, OwnedEvent, OwnedTag, OwnedTagEnd};
 
@@ -21,7 +18,7 @@ mod marker;
 pub use marker::Marker;
 
 mod types;
-pub use types::{CloseState, Comment, CommentIdentity, FetchedIssue, Issue, IssueIdentity, IssueLink, IssueMeta};
+pub use types::{CloseState, Comment, CommentIdentity, FetchedIssue, Issue, IssueContents, IssueIdentity, IssueLink, IssueMeta};
 
 mod util;
 pub use util::{is_blockers_marker, normalize_issue_indentation};

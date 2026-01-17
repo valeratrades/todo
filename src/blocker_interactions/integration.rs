@@ -64,7 +64,7 @@ impl super::source::BlockerSource for IssueSource {
 		let issue = Issue::parse(&content, &self.issue_path).map_err(|e| eyre!("Failed to parse issue: {e}"))?;
 
 		// Clone the blockers before caching the issue
-		let blockers = issue.blockers.clone();
+		let blockers = issue.contents.blockers.clone();
 
 		// Cache the parsed issue for save()
 		*self.cached_issue.borrow_mut() = Some(issue);
@@ -76,7 +76,7 @@ impl super::source::BlockerSource for IssueSource {
 		let mut issue = self.cached_issue.borrow_mut().take().ok_or_else(|| eyre!("Must call load() before save()"))?;
 
 		// Update blockers directly
-		issue.blockers = blockers.clone();
+		issue.contents.blockers = blockers.clone();
 
 		// Serialize and write
 		std::fs::write(&self.issue_path, issue.serialize_virtual())?;
@@ -307,8 +307,8 @@ mod tests {
 "#;
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		assert!(!issue.blockers.is_empty());
-		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
+		assert!(!issue.contents.blockers.is_empty());
+		insta::assert_snapshot!(issue.contents.blockers.serialize(todo::DisplayFormat::Headers), @"
 		# Phase 1
 		- First task
 			comment on first task
@@ -331,10 +331,10 @@ mod tests {
 "#;
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		assert_eq!(issue.blockers.current_with_context(&[]), Some("Phase 2: Third task".to_string()));
+		assert_eq!(issue.contents.blockers.current_with_context(&[]), Some("Phase 2: Third task".to_string()));
 
 		let hierarchy = vec!["my_project".to_string()];
-		assert_eq!(issue.blockers.current_with_context(&hierarchy), Some("my_project: Phase 2: Third task".to_string()));
+		assert_eq!(issue.contents.blockers.current_with_context(&hierarchy), Some("my_project: Phase 2: Third task".to_string()));
 	}
 
 	#[test]
@@ -349,9 +349,9 @@ mod tests {
 "#;
 		let mut issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		issue.blockers.pop();
+		issue.contents.blockers.pop();
 
-		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
+		insta::assert_snapshot!(issue.contents.blockers.serialize(todo::DisplayFormat::Headers), @"
 		- First task
 		- Second task
 		");
@@ -382,7 +382,7 @@ mod tests {
 "#;
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		assert!(issue.blockers.is_empty());
+		assert!(issue.contents.blockers.is_empty());
 	}
 
 	#[test]
@@ -400,7 +400,7 @@ mod tests {
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
 		// Blockers should only contain the blocker items, not the sub-issue
-		insta::assert_snapshot!(issue.blockers.serialize(todo::DisplayFormat::Headers), @"
+		insta::assert_snapshot!(issue.contents.blockers.serialize(todo::DisplayFormat::Headers), @"
 		- Blocker one
 		- Blocker two
 		");

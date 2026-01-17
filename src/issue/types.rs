@@ -6,8 +6,6 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::issue::contents::IssueContents;
-
 /// A Github issue identifier. Wraps a URL and derives all properties on demand.
 /// Format: `https://github.com/{owner}/{repo}/issues/{number}`
 #[derive(Clone, Debug, derive_more::Deref, derive_more::DerefMut, Eq, Hash, PartialEq)]
@@ -330,6 +328,9 @@ pub struct IssueMeta {
 	pub close_state: CloseState,
 	/// Git labels
 	pub labels: Vec<String>,
+	/// Timestamp of last content change (body/comments, not children).
+	/// Used for sync conflict resolution. None for local-only issues that haven't been synced.
+	pub last_contents_change: Option<Timestamp>,
 }
 
 /// A comment in the issue conversation (first one is always the issue body)
@@ -341,28 +342,31 @@ pub struct Comment {
 	pub body: super::Events,
 }
 
+/// The full editable content of an issue.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IssueContents {
+	pub title: String,
+	pub labels: Vec<String>,
+	pub state: CloseState,
+	pub comments: Vec<Comment>,
+	pub blockers: BlockerSequence,
+}
+
 /// Complete representation of an issue file
 #[derive(Clone, Debug)]
 pub struct Issue {
 	pub meta: IssueMeta,
 	pub contents: IssueContents,
-	/// Comments in order. First is always the issue body (serialized without marker).
-	pub comments: Vec<Comment>,
 	/// Sub-issues in order
 	pub children: Vec<Issue>,
-	/// Blockers section.
-	pub blockers: BlockerSequence,
-	/// Timestamp of last content change (body/comments, not children).
-	/// Used for sync conflict resolution. None for local-only issues that haven't been synced.
-	pub last_contents_change: Option<Timestamp>,
 }
 
 impl Issue /*{{{1*/ {
 	/// Get the full issue body including blockers section.
 	/// This is what should be synced to Github as the issue body.
 	pub fn body(&self) -> String {
-		let base_body = self.comments.first().map(|c| c.body.render()).unwrap_or_default();
-		join_with_blockers(&base_body, &self.blockers)
+		let base_body = self.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
+		join_with_blockers(&base_body, &self.contents.blockers)
 	}
 
 	/// Parse markdown content into an Issue.
@@ -636,13 +640,20 @@ impl Issue /*{{{1*/ {
 			});
 		}
 
+		// Note: last_contents_change is set from Github when syncing, meta gets None by default
+		let mut meta = meta;
+		meta.last_contents_change = None;
+
 		Ok(Issue {
+			contents: IssueContents {
+				title: meta.title.clone(),
+				labels: meta.labels.clone(),
+				state: meta.close_state.clone(),
+				comments,
+				blockers: BlockerSequence::from_lines(blocker_lines),
+			},
 			meta,
-			contents: IssueContents::default(),
-			comments,
 			children,
-			blockers: BlockerSequence::from_lines(blocker_lines),
-			last_contents_change: None, // Set from Github when syncing
 		})
 	}
 
@@ -714,6 +725,7 @@ impl Issue /*{{{1*/ {
 			identity,
 			close_state,
 			labels,
+			last_contents_change: None,
 		})
 	}
 
@@ -836,7 +848,7 @@ impl Issue /*{{{1*/ {
 		out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.meta.title));
 
 		// Body (first comment) - add extra indent if not owned
-		if let Some(body_comment) = self.comments.first() {
+		if let Some(body_comment) = self.contents.comments.first() {
 			let comment_indent = if is_owned { &content_indent } else { &format!("{content_indent}\t") };
 			if !body_comment.body.is_empty() {
 				let body_rendered = body_comment.body.render();
@@ -847,7 +859,7 @@ impl Issue /*{{{1*/ {
 		}
 
 		// Additional comments
-		for comment in self.comments.iter().skip(1) {
+		for comment in self.contents.comments.iter().skip(1) {
 			let comment_is_owned = comment.identity.user().is_some_and(crate::current_user::is);
 			let comment_indent = if comment_is_owned { &content_indent } else { &format!("{content_indent}\t") };
 
@@ -876,13 +888,13 @@ impl Issue /*{{{1*/ {
 		}
 
 		// Blockers section
-		if !self.blockers.is_empty() {
+		if !self.contents.blockers.is_empty() {
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
 			}
 			let header = crate::Header::new(1, "Blockers");
 			out.push_str(&format!("{content_indent}{}\n", header.encode()));
-			for line in self.blockers.lines() {
+			for line in self.contents.blockers.lines() {
 				out.push_str(&format!("{content_indent}{}\n", line.to_raw()));
 			}
 		}
@@ -950,7 +962,7 @@ impl Issue /*{{{1*/ {
 		out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.meta.title));
 
 		// Body (first comment) - add extra indent if not owned
-		if let Some(body_comment) = self.comments.first() {
+		if let Some(body_comment) = self.contents.comments.first() {
 			let comment_indent = if is_owned { content_indent } else { "\t\t" };
 			if !body_comment.body.is_empty() {
 				let body_rendered = body_comment.body.render();
@@ -961,7 +973,7 @@ impl Issue /*{{{1*/ {
 		}
 
 		// Additional comments
-		for comment in self.comments.iter().skip(1) {
+		for comment in self.contents.comments.iter().skip(1) {
 			let comment_is_owned = comment.identity.user().is_some_and(crate::current_user::is);
 			let comment_indent_str = if comment_is_owned { content_indent } else { "\t\t" };
 
@@ -990,13 +1002,13 @@ impl Issue /*{{{1*/ {
 		}
 
 		// Blockers section
-		if !self.blockers.is_empty() {
+		if !self.contents.blockers.is_empty() {
 			if out.lines().last().is_some_and(|l| !l.trim().is_empty()) {
 				out.push_str(&format!("{content_indent}\n"));
 			}
 			let header = crate::Header::new(1, "Blockers");
 			out.push_str(&format!("{content_indent}{}\n", header.encode()));
-			for line in self.blockers.lines() {
+			for line in self.contents.blockers.lines() {
 				out.push_str(&format!("{content_indent}{}\n", line.to_raw()));
 			}
 		}
@@ -1052,7 +1064,7 @@ impl Issue /*{{{1*/ {
 	/// Line numbers are 1-indexed to match editor conventions.
 	/// Column points to the first character of the item text (after `- `).
 	pub fn find_last_blocker_position(&self) -> Option<(u32, u32)> {
-		if self.blockers.is_empty() {
+		if self.contents.blockers.is_empty() {
 			return None;
 		}
 
@@ -1105,15 +1117,15 @@ impl PartialEq for Issue {
 		}
 
 		// Compare body (first comment) - compare the rendered output
-		let self_body = self.comments.first().map(|c| c.body.render()).unwrap_or_default();
-		let other_body = other.comments.first().map(|c| c.body.render()).unwrap_or_default();
+		let self_body = self.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
+		let other_body = other.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
 		if self_body != other_body {
 			return false;
 		}
 
 		// Compare comments (skip first which is body)
-		let self_comments: Vec<_> = self.comments.iter().skip(1).collect();
-		let other_comments: Vec<_> = other.comments.iter().skip(1).collect();
+		let self_comments: Vec<_> = self.contents.comments.iter().skip(1).collect();
+		let other_comments: Vec<_> = other.contents.comments.iter().skip(1).collect();
 
 		if self_comments.len() != other_comments.len() {
 			return false;
