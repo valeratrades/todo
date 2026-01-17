@@ -167,7 +167,7 @@ impl GitExt for TestContext {
 
 	fn issue_path(&self, issue: &Issue) -> PathBuf {
 		let (owner, repo, number) = extract_issue_coords(issue);
-		self.flat_issue_path(&owner, &repo, number, &issue.meta.title)
+		self.flat_issue_path(&owner, &repo, number, &issue.contents.title)
 	}
 
 	fn flat_issue_path(&self, owner: &str, repo: &str, number: u64, title: &str) -> PathBuf {
@@ -197,7 +197,7 @@ impl TestContext {
 	}
 
 	fn write_issue_tree_recursive(&self, owner: &str, repo: &str, number: u64, issue: &Issue, ancestors: &[String]) -> PathBuf {
-		let sanitized_title = issue.meta.title.replace(' ', "_");
+		let sanitized_title = issue.contents.title.replace(' ', "_");
 		let has_children = !issue.children.is_empty();
 
 		// Build base path: issues/{owner}/{repo}/{ancestors...}
@@ -328,10 +328,10 @@ fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u6
 		owner: owner.to_string(),
 		repo: repo.to_string(),
 		number,
-		title: issue.meta.title.clone(),
+		title: issue.contents.title.clone(),
 		body: issue.body(),
-		state: issue.meta.close_state.to_github_state().to_string(),
-		state_reason: issue.meta.close_state.to_github_state_reason().map(|s| s.to_string()),
+		state: issue.contents.state.to_github_state().to_string(),
+		state_reason: issue.contents.state.to_github_state_reason().map(|s| s.to_string()),
 		owner_login: issue_owner_login,
 	});
 

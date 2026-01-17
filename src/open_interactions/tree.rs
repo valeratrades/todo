@@ -32,7 +32,7 @@ pub async fn fetch_full_issue_tree(gh: &BoxedGithubClient, owner: &str, repo: &s
 	let mut root = Issue::from_github(&root_issue, &root_comments, &root_sub_issues, owner, repo, &current_user);
 
 	// Now recursively fetch children level by level
-	fetch_children_recursive(gh, owner, repo, &current_user, &mut root).await?;
+	fetch_children_recursive(gh, owner, repo, &mut root).await?;
 
 	Ok(root)
 }
@@ -42,7 +42,6 @@ fn fetch_children_recursive<'a>(
 	gh: &'a BoxedGithubClient,
 	owner: &'a str,
 	repo: &'a str,
-	current_user: &'a str,
 	issue: &'a mut Issue,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
 	Box::pin(async move {
@@ -105,10 +104,7 @@ fn fetch_children_recursive<'a>(
 					let labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 					Issue {
 						meta: IssueMeta {
-							title: si.title.clone(),
 							identity,
-							close_state: close_state.clone(),
-							labels: labels.clone(),
 							last_contents_change: timestamp,
 						},
 						contents: IssueContents {
@@ -129,7 +125,7 @@ fn fetch_children_recursive<'a>(
 
 		// Recurse into children
 		for child in &mut issue.children {
-			fetch_children_recursive(gh, owner, repo, current_user, child).await?;
+			fetch_children_recursive(gh, owner, repo, child).await?;
 		}
 
 		Ok(())
@@ -197,7 +193,7 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 /// Check if two Issue nodes have the same content (excluding children).
 fn node_content_eq(a: &Issue, b: &Issue) -> bool {
 	// Compare close state
-	if a.meta.close_state != b.meta.close_state {
+	if a.contents.state != b.contents.state {
 		return false;
 	}
 
@@ -216,7 +212,7 @@ fn node_content_eq(a: &Issue, b: &Issue) -> bool {
 	}
 
 	// Compare labels
-	if a.meta.labels != b.meta.labels {
+	if a.contents.labels != b.contents.labels {
 		return false;
 	}
 
@@ -356,8 +352,8 @@ fn resolve_tree_recursive(
 
 /// Apply remote node content to resolved node (excluding children).
 fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
-	resolved.meta.close_state = remote.meta.close_state.clone();
-	resolved.meta.labels = remote.meta.labels.clone();
+	resolved.contents.state = remote.contents.state.clone();
+	resolved.contents.labels = remote.contents.labels.clone();
 
 	// Update comments: keep structure but update content
 	if let Some(remote_body) = remote.contents.comments.first()
@@ -384,13 +380,10 @@ mod tests {
 	fn make_issue(body: &str, timestamp: Option<i64>) -> Issue {
 		Issue {
 			meta: IssueMeta {
-				title: "Test".to_string(),
 				identity: IssueIdentity::Created {
 					user: "testuser".to_string(),
 					link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
 				},
-				close_state: CloseState::Open,
-				labels: vec![],
 				last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
 			},
 			contents: IssueContents {
@@ -473,13 +466,10 @@ mod tests {
 	fn make_issue_with_url(body: &str, timestamp: Option<i64>, url: &str) -> Issue {
 		Issue {
 			meta: IssueMeta {
-				title: "Test".to_string(),
 				identity: IssueIdentity::Created {
 					user: "testuser".to_string(),
 					link: IssueLink::parse(url).unwrap(),
 				},
-				close_state: CloseState::Open,
-				labels: vec![],
 				last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
 			},
 			contents: IssueContents {

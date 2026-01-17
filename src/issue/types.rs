@@ -319,15 +319,11 @@ impl CloseState /*{{{1*/ {
 }
 //,}}}1
 
-/// Metadata for an issue (title line info)
+/// Metadata for an issue (identity and sync info)
 #[derive(Clone, Debug, PartialEq)]
 pub struct IssueMeta {
-	pub title: String,
 	/// Issue identity - linked to Github or pending creation
 	pub identity: IssueIdentity,
-	pub close_state: CloseState,
-	/// Git labels
-	pub labels: Vec<String>,
 	/// Timestamp of last content change (body/comments, not children).
 	/// Used for sync conflict resolution. None for local-only issues that haven't been synced.
 	pub last_contents_change: Option<Timestamp>,
@@ -352,11 +348,19 @@ pub struct IssueContents {
 	pub blockers: BlockerSequence,
 }
 
+/// Parsed title line components (internal helper)
+struct ParsedTitleLine {
+	title: String,
+	identity: IssueIdentity,
+	close_state: CloseState,
+	labels: Vec<String>,
+}
+
 /// Complete representation of an issue file
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
-	pub meta: IssueMeta,
 	pub contents: IssueContents,
+	pub meta: IssueMeta,
 	/// Sub-issues in order
 	pub children: Vec<Issue>,
 }
@@ -393,7 +397,7 @@ impl Issue /*{{{1*/ {
 			span: ctx.line_span(line_num),
 			expected_tabs: depth,
 		})?;
-		let meta = Self::parse_title_line(title_content, line_num, ctx)?;
+		let parsed = Self::parse_title_line(title_content, line_num, ctx)?;
 
 		let mut comments = Vec::new();
 		let mut children = Vec::new();
@@ -640,26 +644,25 @@ impl Issue /*{{{1*/ {
 			});
 		}
 
-		// Note: last_contents_change is set from Github when syncing, meta gets None by default
-		let mut meta = meta;
-		meta.last_contents_change = None;
-
 		Ok(Issue {
+			meta: IssueMeta {
+				identity: parsed.identity,
+				last_contents_change: None, // Set from Github when syncing
+			},
 			contents: IssueContents {
-				title: meta.title.clone(),
-				labels: meta.labels.clone(),
-				state: meta.close_state.clone(),
+				title: parsed.title,
+				labels: parsed.labels,
+				state: parsed.close_state,
 				comments,
 				blockers: BlockerSequence::from_lines(blocker_lines),
 			},
-			meta,
 			children,
 		})
 	}
 
 	/// Parse title line: `- [ ] [label1, label2] Title <!--url-->` or `- [ ] Title <!--immutable url-->`
 	/// Also supports `- [-]` for not-planned and `- [123]` for duplicates.
-	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<IssueMeta, ParseError> {
+	fn parse_title_line(line: &str, line_num: usize, ctx: &ParseContext) -> Result<ParsedTitleLine, ParseError> {
 		// Parse checkbox: `- [CONTENT] `
 		let (close_state, rest) = match Self::parse_checkbox_prefix_detailed(line) {
 			CheckboxParseResult::Ok(state, rest) => (state, rest),
@@ -720,12 +723,11 @@ impl Issue /*{{{1*/ {
 			Self::parse_user_and_link(inner)
 		};
 
-		Ok(IssueMeta {
+		Ok(ParsedTitleLine {
 			title,
 			identity,
 			close_state,
 			labels,
-			last_contents_change: None,
 		})
 	}
 
@@ -836,16 +838,16 @@ impl Issue /*{{{1*/ {
 		let mut out = String::new();
 
 		// Title line - root uses `<!-- @user url -->`, children use `<!--sub @user url -->`
-		let checked = self.meta.close_state.to_checkbox();
+		let checked = self.contents.state.to_checkbox();
 		let identity_part = self.meta.identity.encode();
-		let labels_part = if self.meta.labels.is_empty() {
+		let labels_part = if self.contents.labels.is_empty() {
 			String::new()
 		} else {
-			format!("[{}] ", self.meta.labels.join(", "))
+			format!("[{}] ", self.contents.labels.join(", "))
 		};
 		let marker = if depth == 0 { " " } else { "sub " };
 		let is_owned = self.meta.identity.user().is_some_and(crate::current_user::is);
-		out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.meta.title));
+		out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.contents.title));
 
 		// Body (first comment) - add extra indent if not owned
 		if let Some(body_comment) = self.contents.comments.first() {
@@ -908,18 +910,18 @@ impl Issue /*{{{1*/ {
 
 			// For closed children, we need to wrap the body in vim folds
 			// But still recurse for the full structure
-			if child.meta.close_state.is_closed() {
+			if child.contents.state.is_closed() {
 				// Output child title line
-				let child_checked = child.meta.close_state.to_checkbox();
+				let child_checked = child.contents.state.to_checkbox();
 				let child_identity_part = child.meta.identity.encode();
-				let child_labels_part = if child.meta.labels.is_empty() {
+				let child_labels_part = if child.contents.labels.is_empty() {
 					String::new()
 				} else {
-					format!("[{}] ", child.meta.labels.join(", "))
+					format!("[{}] ", child.contents.labels.join(", "))
 				};
 				out.push_str(&format!(
 					"{content_indent}- [{child_checked}] {child_labels_part}{} <!--sub {child_identity_part} -->\n",
-					child.meta.title
+					child.contents.title
 				));
 
 				// Vim fold start
@@ -951,15 +953,15 @@ impl Issue /*{{{1*/ {
 		let mut out = String::new();
 
 		// Title line (always at root level for filesystem representation)
-		let checked = self.meta.close_state.to_checkbox();
+		let checked = self.contents.state.to_checkbox();
 		let identity_part = self.meta.identity.encode();
-		let labels_part = if self.meta.labels.is_empty() {
+		let labels_part = if self.contents.labels.is_empty() {
 			String::new()
 		} else {
-			format!("[{}] ", self.meta.labels.join(", "))
+			format!("[{}] ", self.contents.labels.join(", "))
 		};
 		let is_owned = self.meta.identity.user().is_some_and(crate::current_user::is);
-		out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.meta.title));
+		out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.contents.title));
 
 		// Body (first comment) - add extra indent if not owned
 		if let Some(body_comment) = self.contents.comments.first() {
@@ -1105,54 +1107,6 @@ impl Issue /*{{{1*/ {
 }
 //,}}}1
 
-/// Semantic equality for divergence detection.
-/// Compares the fields that matter for sync: close_state, body, comments, sub-issue states.
-/// Ignores local-only fields like blockers and ownership.
-//TODO!!!!!: update to properly compare based on exact node equality (note that blockers are a very real part of it actually)
-impl PartialEq for Issue {
-	fn eq(&self, other: &Self) -> bool {
-		// Compare close state
-		if self.meta.close_state != other.meta.close_state {
-			return false;
-		}
-
-		// Compare body (first comment) - compare the rendered output
-		let self_body = self.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
-		let other_body = other.contents.comments.first().map(|c| c.body.render()).unwrap_or_default();
-		if self_body != other_body {
-			return false;
-		}
-
-		// Compare comments (skip first which is body)
-		let self_comments: Vec<_> = self.contents.comments.iter().skip(1).collect();
-		let other_comments: Vec<_> = other.contents.comments.iter().skip(1).collect();
-
-		if self_comments.len() != other_comments.len() {
-			return false;
-		}
-
-		for (sc, oc) in self_comments.iter().zip(other_comments.iter()) {
-			if sc.identity != oc.identity || sc.body != oc.body {
-				return false;
-			}
-		}
-
-		// Compare sub-issue states
-		if self.children.len() != other.children.len() {
-			return false;
-		}
-
-		for (sc, oc) in self.children.iter().zip(other.children.iter()) {
-			// Compare by identity (issue number) and state
-			if sc.meta.identity != oc.meta.identity || sc.meta.close_state != oc.meta.close_state {
-				return false;
-			}
-		}
-
-		true
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1266,8 +1220,8 @@ mod tests {
 		let content = "- [-] Not planned issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		assert_eq!(issue.meta.close_state, CloseState::NotPlanned);
-		assert_eq!(issue.meta.title, "Not planned issue");
+		assert_eq!(issue.contents.state, CloseState::NotPlanned);
+		assert_eq!(issue.contents.title, "Not planned issue");
 
 		// Verify serialization preserves the state
 		let serialized = issue.serialize_virtual();
@@ -1281,8 +1235,8 @@ mod tests {
 		let content = "- [456] Duplicate issue <!-- https://github.com/owner/repo/issues/123 -->\n\tBody text\n";
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		assert_eq!(issue.meta.close_state, CloseState::Duplicate(456));
-		assert_eq!(issue.meta.title, "Duplicate issue");
+		assert_eq!(issue.contents.state, CloseState::Duplicate(456));
+		assert_eq!(issue.contents.title, "Duplicate issue");
 
 		// Verify serialization preserves the state
 		let serialized = issue.serialize_virtual();
@@ -1453,7 +1407,7 @@ mod tests {
 "#;
 		let issue = Issue::deserialize_filesystem(content).unwrap();
 		assert!(issue.children.is_empty());
-		assert_eq!(issue.meta.title, "Parent");
+		assert_eq!(issue.contents.title, "Parent");
 	}
 
 	#[test]
@@ -1472,7 +1426,7 @@ mod tests {
 		let serialized = issue.serialize_virtual();
 		let reparsed = Issue::deserialize_virtual(&serialized).unwrap();
 
-		assert_eq!(issue.meta.title, reparsed.meta.title);
+		assert_eq!(issue.contents.title, reparsed.contents.title);
 		assert_eq!(issue.children.len(), reparsed.children.len());
 	}
 

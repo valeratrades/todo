@@ -21,9 +21,6 @@ use todo::{BlockerItem, BlockerSequence};
 
 /// Extension trait for BlockerSequence with additional operations
 pub trait BlockerSequenceExt {
-	/// Get the number of items in the sequence (recursive)
-	fn len(&self) -> usize;
-
 	/// Get the current (last) blocker item
 	fn current(&self) -> Option<&BlockerItem>;
 
@@ -41,12 +38,6 @@ pub trait BlockerSequenceExt {
 }
 
 impl BlockerSequenceExt for BlockerSequence {
-	fn len(&self) -> usize {
-		let own_count = self.items.len();
-		let child_count: usize = self.children.iter().map(|c| c.len()).sum();
-		own_count + child_count
-	}
-
 	fn current(&self) -> Option<&BlockerItem> {
 		last_item(self)
 	}

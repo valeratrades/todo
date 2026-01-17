@@ -440,8 +440,8 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path) -> Result<()> {
 /// Returns the path to the root issue file.
 pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, ancestors: &[FetchedIssue]) -> Result<PathBuf> {
 	let issue_number = issue.meta.identity.number();
-	let title = &issue.meta.title;
-	let closed = issue.meta.close_state.is_closed();
+	let title = &issue.contents.title;
+	let closed = issue.contents.state.is_closed();
 	let has_children = !issue.children.is_empty();
 
 	let issue_file_path = if has_children {

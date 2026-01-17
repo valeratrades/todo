@@ -407,6 +407,6 @@ mod tests {
 
 		// Sub-issue should be in children
 		assert_eq!(issue.children.len(), 1);
-		assert_eq!(issue.children[0].meta.title, "Sub-issue");
+		assert_eq!(issue.children[0].contents.title, "Sub-issue");
 	}
 }

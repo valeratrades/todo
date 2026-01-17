@@ -99,7 +99,7 @@ use super::{
 	meta::load_issue_meta_from_path,
 	tree::{fetch_full_issue_tree, resolve_tree},
 };
-use crate::{blocker_interactions::BlockerSequenceExt, github::BoxedGithubClient};
+use crate::github::BoxedGithubClient;
 
 //=============================================================================
 // Error types
@@ -134,10 +134,10 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 	let mut state_changed = false;
 
 	// Step 0: Check if issue state (open/closed) changed
-	let current_closed = local.meta.close_state.is_closed();
-	let consensus_closed = consensus.meta.close_state.is_closed();
+	let current_closed = local.contents.state.is_closed();
+	let consensus_closed = consensus.contents.state.is_closed();
 	if current_closed != consensus_closed {
-		let new_state = local.meta.close_state.to_github_state();
+		let new_state = local.contents.state.to_github_state();
 		println!("Updating issue state to {new_state}...");
 		gh.update_issue_state(owner, repo, issue_number, new_state).await?;
 		state_changed = true;
@@ -175,10 +175,10 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 	// Update existing comments and create new ones
 	for comment in local.contents.comments.iter().skip(1) {
 		// Skip existing comments not owned by current user (Pending comments are always ours)
-		if let CommentIdentity::Created { user, .. } = &comment.identity {
-			if !todo::current_user::is(user) {
-				continue;
-			}
+		if let CommentIdentity::Created { user, .. } = &comment.identity
+			&& !todo::current_user::is(user)
+		{
+			continue;
 		}
 		let comment_body_str = comment.body.render();
 		match &comment.identity {
@@ -417,8 +417,8 @@ fn get_node_at_path_mut<'a>(issue: &'a mut Issue, path: &[usize]) -> Option<&'a 
 /// Apply the content of one issue node to another (body, comments, state, labels).
 /// Does NOT modify children - only the node's own content.
 fn apply_node_content(target: &mut Issue, source: &Issue) {
-	target.meta.close_state = source.meta.close_state.clone();
-	target.meta.labels = source.meta.labels.clone();
+	target.contents.state = source.contents.state.clone();
+	target.contents.labels = source.contents.labels.clone();
 	target.contents.blockers = source.contents.blockers.clone();
 
 	// Copy comments (body is first comment)
@@ -731,7 +731,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 			let number = child.meta.identity.number()?;
 			Some(crate::github::OriginalSubIssue {
 				number,
-				state: child.meta.close_state.to_github_state().to_string(),
+				state: child.contents.state.to_github_state().to_string(),
 			})
 		})
 		.collect();
@@ -879,7 +879,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 	}
 
 	// Handle duplicate close type: remove from local storage entirely
-	if let CloseState::Duplicate(dup_number) = issue.meta.close_state {
+	if let CloseState::Duplicate(dup_number) = issue.contents.state {
 		// Validate that the referenced duplicate issue exists
 		if !offline {
 			let exists = gh.fetch_issue(&owner, &repo, dup_number).await.is_ok();
@@ -896,7 +896,7 @@ pub async fn modify_and_sync_issue(gh: &BoxedGithubClient, issue_file_path: &Pat
 
 		// Close on Github (if not already closed and not offline)
 		// If consensus doesn't exist (shouldn't happen), assume we need to close
-		let consensus_closed = load_consensus_issue(issue_file_path).map(|c| c.meta.close_state.is_closed()).unwrap_or(false);
+		let consensus_closed = load_consensus_issue(issue_file_path).map(|c| c.contents.state.is_closed()).unwrap_or(false);
 		if !offline && !consensus_closed {
 			gh.update_issue_state(&owner, &repo, meta.issue_number, "closed").await?;
 		}

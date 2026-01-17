@@ -36,9 +36,9 @@ impl IssueGithubExt for Issue {
 		if self.meta.identity.is_pending() {
 			levels.push(vec![IssueAction::CreateIssue {
 				path: vec![],
-				title: self.meta.title.clone(),
+				title: self.contents.title.clone(),
 				body: self.body(),
-				closed: self.meta.close_state.is_closed(),
+				closed: self.contents.state.is_closed(),
 				parent: None,
 			}]);
 			// Don't collect sub-issue creates yet - they'll be handled after root is created
@@ -75,13 +75,7 @@ impl IssueGithubExt for Issue {
 		// Parse timestamp from Github's ISO 8601 format
 		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
 
-		let meta = IssueMeta {
-			title: issue.title.clone(),
-			identity,
-			close_state: close_state.clone(),
-			labels: labels.clone(),
-			last_contents_change,
-		};
+		let meta = IssueMeta { identity, last_contents_change };
 
 		// Build comments: body is first comment
 		// Split out blockers from body (they're appended during sync)
@@ -121,10 +115,7 @@ impl IssueGithubExt for Issue {
 				let child_labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 				Issue {
 					meta: IssueMeta {
-						title: si.title.clone(),
 						identity: child_identity,
-						close_state: child_close_state.clone(),
-						labels: child_labels.clone(),
 						last_contents_change: child_timestamp,
 					},
 					contents: IssueContents {
@@ -178,9 +169,9 @@ fn collect_create_actions_recursive(issue: &Issue, current_path: &[usize], level
 			if let Some(parent_num) = parent_number {
 				levels[depth].push(IssueAction::CreateIssue {
 					path: child_path.clone(),
-					title: child.meta.title.clone(),
+					title: child.contents.title.clone(),
 					body: String::new(),
-					closed: child.meta.close_state.is_closed(),
+					closed: child.contents.state.is_closed(),
 					parent: Some(parent_num),
 				});
 			}
@@ -212,10 +203,10 @@ fn collect_update_actions_recursive(issue: &Issue, current_path: &[usize], conse
 			&& let Some(consensus) = consensus_sub_issues.iter().find(|o| o.number == child_number)
 		{
 			let consensus_closed = consensus.state == "closed";
-			if child.meta.close_state.is_closed() != consensus_closed {
+			if child.contents.state.is_closed() != consensus_closed {
 				levels[depth].push(IssueAction::UpdateIssueState {
 					issue_number: child_number,
-					closed: child.meta.close_state.is_closed(),
+					closed: child.contents.state.is_closed(),
 				});
 			}
 		}
@@ -262,11 +253,11 @@ mod tests {
 
 		let result = Issue::from_github(&issue, &comments, &sub_issues, "owner", "repo", "me");
 
-		assert_eq!(result.meta.title, "Test Issue");
+		assert_eq!(result.contents.title, "Test Issue");
 		assert_eq!(result.meta.identity.url_str(), Some("https://github.com/owner/repo/issues/123"));
-		assert_eq!(result.meta.close_state, CloseState::Open);
+		assert_eq!(result.contents.state, CloseState::Open);
 		assert_eq!(result.meta.identity.user(), Some("me"));
-		assert_eq!(result.meta.labels, vec!["bug".to_string()]);
+		assert_eq!(result.contents.labels, vec!["bug".to_string()]);
 
 		// Body + 1 comment
 		assert_eq!(result.contents.comments.len(), 2);
@@ -278,8 +269,8 @@ mod tests {
 
 		// Sub-issue
 		assert_eq!(result.children.len(), 1);
-		assert_eq!(result.children[0].meta.title, "Sub Issue");
-		assert_eq!(result.children[0].meta.close_state, CloseState::Closed);
+		assert_eq!(result.children[0].contents.title, "Sub Issue");
+		assert_eq!(result.children[0].contents.state, CloseState::Closed);
 	}
 
 	#[test]
