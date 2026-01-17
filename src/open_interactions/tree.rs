@@ -86,7 +86,7 @@ fn fetch_children_recursive<'a>(
 				let comment_owned = c.user.login == current_user;
 				child.comments.push(Comment {
 					identity: CommentIdentity::Linked(c.id),
-					body: c.body.as_deref().unwrap_or("").to_string(),
+					body: todo::Events::parse(c.body.as_deref().unwrap_or("")),
 					owned: comment_owned,
 				});
 			}
@@ -111,7 +111,7 @@ fn fetch_children_recursive<'a>(
 						contents: Default::default(),
 						comments: vec![Comment {
 							identity: CommentIdentity::Body,
-							body: si.body.as_deref().unwrap_or("").to_string(),
+							body: todo::Events::parse(si.body.as_deref().unwrap_or("")),
 							owned: si.user.login == current_user,
 						}],
 						children: Vec::new(),
@@ -196,16 +196,16 @@ fn node_content_eq(a: &Issue, b: &Issue) -> bool {
 		return false;
 	}
 
-	// Compare body (first comment)
-	let a_body = a.comments.first().map(|c| c.body.as_str()).unwrap_or("");
-	let b_body = b.comments.first().map(|c| c.body.as_str()).unwrap_or("");
+	// Compare body (first comment) - compare rendered output
+	let a_body = a.comments.first().map(|c| c.body.render()).unwrap_or_default();
+	let b_body = b.comments.first().map(|c| c.body.render()).unwrap_or_default();
 	if a_body != b_body {
 		return false;
 	}
 
-	// Compare other comments (by identity and body)
-	let a_comments: Vec<_> = a.comments.iter().skip(1).map(|c| (&c.identity, &c.body)).collect();
-	let b_comments: Vec<_> = b.comments.iter().skip(1).map(|c| (&c.identity, &c.body)).collect();
+	// Compare other comments (by identity and rendered body)
+	let a_comments: Vec<_> = a.comments.iter().skip(1).map(|c| (&c.identity, c.body.render())).collect();
+	let b_comments: Vec<_> = b.comments.iter().skip(1).map(|c| (&c.identity, c.body.render())).collect();
 	if a_comments != b_comments {
 		return false;
 	}
@@ -387,7 +387,7 @@ mod tests {
 			contents: Default::default(),
 			comments: vec![Comment {
 				identity: CommentIdentity::Body,
-				body: body.to_string(),
+				body: todo::Events::parse(body),
 				owned: true,
 			}],
 			children: vec![],
@@ -471,7 +471,7 @@ mod tests {
 			contents: Default::default(),
 			comments: vec![Comment {
 				identity: CommentIdentity::Body,
-				body: body.to_string(),
+				body: todo::Events::parse(body),
 				owned: true,
 			}],
 			children: vec![],

@@ -353,7 +353,7 @@ fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u6
 				repo: repo.to_string(),
 				issue_number: number,
 				comment_id: id,
-				body: comment.body.clone(),
+				body: comment.body.render(),
 				owner_login: if comment.owned { "mock_user".to_string() } else { "other_user".to_string() },
 			});
 		}

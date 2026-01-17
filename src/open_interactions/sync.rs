@@ -177,12 +177,13 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 		if !comment.owned {
 			continue; // Skip immutable comments
 		}
+		let comment_body_str = comment.body.render();
 		match &comment.identity {
 			CommentIdentity::Linked(id) if consensus_ids.contains(id) => {
-				let consensus_body = consensus.comments.iter().skip(1).find(|c| c.identity.id() == Some(*id)).map(|c| c.body.as_str()).unwrap_or("");
-				if comment.body != consensus_body {
+				let consensus_body = consensus.comments.iter().skip(1).find(|c| c.identity.id() == Some(*id)).map(|c| c.body.render()).unwrap_or_default();
+				if comment_body_str != consensus_body {
 					println!("Updating comment {id}...");
-					gh.update_comment(owner, repo, *id, &comment.body).await?;
+					gh.update_comment(owner, repo, *id, &comment_body_str).await?;
 					updates += 1;
 				}
 			}
@@ -192,7 +193,7 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 			CommentIdentity::Pending | CommentIdentity::Body =>
 				if !comment.body.is_empty() {
 					println!("Creating new comment...");
-					gh.create_comment(owner, repo, issue_number, &comment.body).await?;
+					gh.create_comment(owner, repo, issue_number, &comment_body_str).await?;
 					creates += 1;
 				},
 		}
