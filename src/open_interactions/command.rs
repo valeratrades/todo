@@ -82,25 +82,21 @@ pub struct OpenArgs {
 /// Looks for the `{number}_-_{title}` pattern in the filename or parent directory.
 fn extract_issue_number_from_path(path: &Path) -> Option<u64> {
 	// Try the filename first
-	if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-		if let Some(num_str) = stem.split("_-_").next() {
-			if let Ok(num) = num_str.parse::<u64>() {
-				return Some(num);
-			}
-		}
+	if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+		&& let Some(num_str) = stem.split("_-_").next()
+		&& let Ok(num) = num_str.parse::<u64>()
+	{
+		return Some(num);
 	}
 
 	// For __main__.md files, check the parent directory name
-	if path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("__main__")).unwrap_or(false) {
-		if let Some(parent) = path.parent() {
-			if let Some(dir_name) = parent.file_name().and_then(|s| s.to_str()) {
-				if let Some(num_str) = dir_name.split("_-_").next() {
-					if let Ok(num) = num_str.parse::<u64>() {
-						return Some(num);
-					}
-				}
-			}
-		}
+	if path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("__main__")).unwrap_or(false)
+		&& let Some(parent) = path.parent()
+		&& let Some(dir_name) = parent.file_name().and_then(|s| s.to_str())
+		&& let Some(num_str) = dir_name.split("_-_").next()
+		&& let Ok(num) = num_str.parse::<u64>()
+	{
+		return Some(num);
 	}
 
 	None

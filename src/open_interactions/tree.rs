@@ -265,6 +265,7 @@ pub fn resolve_tree(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 	}
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_tree_recursive(
 	resolved: &mut Issue,
 	local: &Issue,

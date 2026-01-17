@@ -180,7 +180,13 @@ pub async fn sync_local_issue_to_github(gh: &BoxedGithubClient, owner: &str, rep
 		let comment_body_str = comment.body.render();
 		match &comment.identity {
 			CommentIdentity::Linked(id) if consensus_ids.contains(id) => {
-				let consensus_body = consensus.comments.iter().skip(1).find(|c| c.identity.id() == Some(*id)).map(|c| c.body.render()).unwrap_or_default();
+				let consensus_body = consensus
+					.comments
+					.iter()
+					.skip(1)
+					.find(|c| c.identity.id() == Some(*id))
+					.map(|c| c.body.render())
+					.unwrap_or_default();
 				if comment_body_str != consensus_body {
 					println!("Updating comment {id}...");
 					gh.update_comment(owner, repo, *id, &comment_body_str).await?;
@@ -279,6 +285,7 @@ pub async fn execute_issue_actions(gh: &BoxedGithubClient, owner: &str, repo: &s
 /// Returns (merged_issue, local_needs_update, remote_needs_update).
 /// - local_needs_update: true if local file should be rewritten with merged result
 /// - remote_needs_update: true if changes should be pushed to Github
+#[allow(clippy::too_many_arguments)]
 async fn apply_merge_mode(
 	local: &Issue,
 	consensus: Option<&Issue>,
@@ -323,18 +330,18 @@ async fn apply_merge_mode(
 					match prefer {
 						Side::Local => {
 							// Apply local content to this node
-							if let Some(local_node) = get_node_at_path(local, path) {
-								if let Some(merged_node) = get_node_at_path_mut(&mut merged, path) {
-									apply_node_content(merged_node, local_node);
-								}
+							if let Some(local_node) = get_node_at_path(local, path)
+								&& let Some(merged_node) = get_node_at_path_mut(&mut merged, path)
+							{
+								apply_node_content(merged_node, local_node);
 							}
 						}
 						Side::Remote => {
 							// Apply remote content to this node
-							if let Some(remote_node) = get_node_at_path(remote, path) {
-								if let Some(merged_node) = get_node_at_path_mut(&mut merged, path) {
-									apply_node_content(merged_node, remote_node);
-								}
+							if let Some(remote_node) = get_node_at_path(remote, path)
+								&& let Some(merged_node) = get_node_at_path_mut(&mut merged, path)
+							{
+								apply_node_content(merged_node, remote_node);
 							}
 						}
 					}

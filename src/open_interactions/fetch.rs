@@ -88,6 +88,7 @@ fn store_issue_tree<'a>(
 
 /// Store a single issue node and recurse into its children.
 /// Extracted to allow reuse when we already have the GithubIssue.
+#[allow(clippy::too_many_arguments)]
 async fn store_issue_node(
 	gh: &BoxedGithubClient,
 	owner: &str,

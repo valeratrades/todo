@@ -8,8 +8,6 @@ default = []
 
 [dependencies]
 ask_llm = { version = "^2.1.4" }
-pulldown-cmark = "0.13"
-pulldown-cmark-to-cmark = "22"
 async-trait = "^0.1.89"
 base64 = "0.22"
 clap = { version = "^4.5.54", features = ["derive"] }
@@ -25,6 +23,8 @@ libwayshot = "0.6.0"
 miette = { version = "7", features = ["fancy"] }
 pandoc = "^0.8.11"
 png = "0.18"
+pulldown-cmark = "0.13"
+pulldown-cmark-to-cmark = "22"
 regex = "1.12.2"
 reqwest = { version = "^0.13.1", features = ["blocking", "json"] }
 serde = { version = "^1.0.228", features = ["derive"] }

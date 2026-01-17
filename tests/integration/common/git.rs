@@ -206,7 +206,7 @@ impl TestContext {
 			base_path = format!("{base_path}/{ancestor}");
 		}
 
-		let path = if has_children {
+		if has_children {
 			// Directory format: {base}/{number}_-_{title}/__main__.md
 			let dir_name = format!("{number}_-_{sanitized_title}");
 			let dir_path = format!("{base_path}/{dir_name}");
@@ -228,9 +228,7 @@ impl TestContext {
 			let file_path = format!("{base_path}/{filename}");
 			self.xdg.write_data(&file_path, &issue.serialize_filesystem());
 			self.xdg.data_dir().join(&base_path).join(&filename)
-		};
-
-		path
+		}
 	}
 
 	fn rebuild_mock_state(&self) {

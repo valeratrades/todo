@@ -10,7 +10,6 @@
 
 use std::path::Path;
 
-use rstest::rstest;
 use todo::Issue;
 
 use crate::common::{TestContext, git::GitExt};
@@ -352,6 +351,7 @@ fn test_duplicate_sub_issues_filtered_from_remote() {
 /// This tests the case where you:
 /// 1. Open an issue from URL (fetches remote)
 /// 2. Open again without making changes
+///
 /// The second open should succeed, not fail with "Failed to commit remote state".
 #[test]
 fn test_open_unchanged_succeeds() {
