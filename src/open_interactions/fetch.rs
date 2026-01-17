@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use todo::{CloseState, Extension, FetchedIssue, Issue};
+use todo::{CloseState, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
 use super::{
@@ -33,7 +33,7 @@ async fn find_ancestry_chain(gh: &BoxedGithubClient, owner: &str, repo: &str, is
 /// If the issue is a sub-issue, first traverses up to find the root and stores
 /// the entire hierarchy from root down.
 /// Returns the path to the requested issue file.
-pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64, extension: &Extension, ancestors: Option<Vec<FetchedIssue>>) -> Result<PathBuf> {
+pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64, ancestors: Option<Vec<FetchedIssue>>) -> Result<PathBuf> {
 	// If we already have ancestor info, this is a recursive call - use it directly
 	let ancestors = match ancestors {
 		Some(a) => a,
@@ -47,12 +47,12 @@ pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &s
 
 				// Fetch the entire tree starting from root
 				let root_number = ancestry[0].number();
-				store_issue_tree(gh, owner, repo, root_number, extension, vec![]).await?;
+				store_issue_tree(gh, owner, repo, root_number, vec![]).await?;
 
 				// Now find and return the path to the originally requested issue
 				let issue = gh.fetch_issue(owner, repo, issue_number).await?;
 				let issue_file_path =
-					find_issue_file(owner, repo, Some(issue_number), &issue.title, extension, &ancestry).ok_or_else(|| eyre!("Failed to find issue file after fetching. This is a bug."))?;
+					find_issue_file(owner, repo, Some(issue_number), &issue.title, &ancestry).ok_or_else(|| eyre!("Failed to find issue file after fetching. This is a bug."))?;
 
 				return Ok(issue_file_path);
 			}
@@ -61,7 +61,7 @@ pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &s
 		}
 	};
 
-	store_issue_tree(gh, owner, repo, issue_number, extension, ancestors).await
+	store_issue_tree(gh, owner, repo, issue_number, ancestors).await
 }
 
 /// Store an issue and all its sub-issues recursively.
@@ -71,7 +71,6 @@ fn store_issue_tree<'a>(
 	owner: &'a str,
 	repo: &'a str,
 	issue_number: u64,
-	extension: &'a Extension,
 	ancestors: Vec<FetchedIssue>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf>> + Send + 'a>> {
 	Box::pin(async move {
@@ -83,7 +82,7 @@ fn store_issue_tree<'a>(
 			gh.fetch_sub_issues(owner, repo, issue_number),
 		)?;
 
-		store_issue_node(gh, owner, repo, &issue, &comments, &sub_issues, &current_user, extension, ancestors).await
+		store_issue_node(gh, owner, repo, &issue, &comments, &sub_issues, &current_user, ancestors).await
 	})
 }
 
@@ -97,7 +96,6 @@ async fn store_issue_node(
 	comments: &[crate::github::GithubComment],
 	sub_issues: &[GithubIssue],
 	current_user: &str,
-	extension: &Extension,
 	ancestors: Vec<FetchedIssue>,
 ) -> Result<PathBuf> {
 	// Filter out duplicate sub-issues - they shouldn't appear locally
@@ -108,28 +106,28 @@ async fn store_issue_node(
 
 	// Determine file path - use directory format if there are sub-issues
 	let issue_file_path = if has_sub_issues {
-		// Use directory format: {dir}/__main__.{ext}
+		// Use directory format: {dir}/__main__.md
 		let issue_dir = get_issue_dir_path(owner, repo, Some(issue.number), &issue.title, &ancestors);
 		std::fs::create_dir_all(&issue_dir)?;
 
 		// Clean up old flat file if it exists (format is changing)
-		let old_flat_path = get_issue_file_path(owner, repo, Some(issue.number), &issue.title, extension, false, &ancestors);
+		let old_flat_path = get_issue_file_path(owner, repo, Some(issue.number), &issue.title, false, &ancestors);
 		if old_flat_path.exists() {
 			std::fs::remove_file(&old_flat_path)?;
 		}
-		let old_flat_closed = get_issue_file_path(owner, repo, Some(issue.number), &issue.title, extension, true, &ancestors);
+		let old_flat_closed = get_issue_file_path(owner, repo, Some(issue.number), &issue.title, true, &ancestors);
 		if old_flat_closed.exists() {
 			std::fs::remove_file(&old_flat_closed)?;
 		}
 
-		get_main_file_path(&issue_dir, extension, issue_closed)
+		get_main_file_path(&issue_dir, issue_closed)
 	} else {
 		// Check if there's an existing file (might be in either format)
-		if let Some(existing) = find_issue_file(owner, repo, Some(issue.number), &issue.title, extension, &ancestors) {
+		if let Some(existing) = find_issue_file(owner, repo, Some(issue.number), &issue.title, &ancestors) {
 			existing
 		} else {
 			// No existing file, use flat format
-			get_issue_file_path(owner, repo, Some(issue.number), &issue.title, extension, issue_closed, &ancestors)
+			get_issue_file_path(owner, repo, Some(issue.number), &issue.title, issue_closed, &ancestors)
 		}
 	};
 
@@ -142,7 +140,7 @@ async fn store_issue_node(
 	// Note: from_github takes sub_issues for building children metadata, but serialize_filesystem
 	// doesn't embed them (they're stored as separate files via the recursive calls below)
 	let issue_struct = Issue::from_github(issue, comments, &filtered_sub_issues, owner, repo, current_user);
-	let content = issue_struct.serialize_filesystem(*extension);
+	let content = issue_struct.serialize_filesystem();
 	std::fs::write(&issue_file_path, &content)?;
 
 	// Build ancestors for children (current issue becomes part of ancestors)
@@ -152,7 +150,7 @@ async fn store_issue_node(
 
 	// Recursively fetch and store all sub-issues
 	for sub_issue in &filtered_sub_issues {
-		if let Err(e) = store_issue_tree(gh, owner, repo, sub_issue.number, extension, child_ancestors.clone()).await {
+		if let Err(e) = store_issue_tree(gh, owner, repo, sub_issue.number, child_ancestors.clone()).await {
 			eprintln!("Warning: Failed to fetch sub-issue #{}: {e}", sub_issue.number);
 		}
 	}

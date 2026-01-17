@@ -211,7 +211,7 @@ impl TestContext {
 			let dir_name = format!("{number}_-_{sanitized_title}");
 			let dir_path = format!("{base_path}/{dir_name}");
 			let file_path = format!("{dir_path}/__main__.md");
-			self.xdg.write_data(&file_path, &issue.serialize_filesystem(todo::Extension::Md));
+			self.xdg.write_data(&file_path, &issue.serialize_filesystem());
 
 			// Write each child recursively
 			let mut child_ancestors = ancestors.to_vec();
@@ -226,7 +226,7 @@ impl TestContext {
 			// Flat format: {base}/{number}_-_{title}.md
 			let filename = format!("{number}_-_{sanitized_title}.md");
 			let file_path = format!("{base_path}/{filename}");
-			self.xdg.write_data(&file_path, &issue.serialize_filesystem(todo::Extension::Md));
+			self.xdg.write_data(&file_path, &issue.serialize_filesystem());
 			self.xdg.data_dir().join(&base_path).join(&filename)
 		};
 

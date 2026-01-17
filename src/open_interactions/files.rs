@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use todo::{FetchedIssue, Issue};
 use v_utils::prelude::*;
 
-use super::util::Extension;
+// Extension type removed - all files are markdown (.md)
 
 /// The filename used for the main issue file when it has a directory for sub-issues.
 /// When an issue has sub-issues, instead of `123_-_title.md` being a file, it becomes
@@ -39,15 +39,15 @@ pub fn sanitize_title_for_filename(title: &str) -> String {
 }
 
 /// Format an issue filename from number and title.
-/// Format: {number}_-_{sanitized_title}.{ext} or just {sanitized_title}.{ext} if no number
+/// Format: {number}_-_{sanitized_title}.md or just {sanitized_title}.md if no number
 /// Adds .bak suffix for closed issues.
-pub fn format_issue_filename(issue_number: Option<u64>, title: &str, extension: &Extension, closed: bool) -> String {
+pub fn format_issue_filename(issue_number: Option<u64>, title: &str, closed: bool) -> String {
 	let sanitized = sanitize_title_for_filename(title);
 	let base = match issue_number {
-		Some(num) if sanitized.is_empty() => format!("{num}.{}", extension.as_str()),
-		Some(num) => format!("{num}_-_{sanitized}.{}", extension.as_str()),
-		None if sanitized.is_empty() => format!("untitled.{}", extension.as_str()),
-		None => format!("{sanitized}.{}", extension.as_str()),
+		Some(num) if sanitized.is_empty() => format!("{num}.md"),
+		Some(num) => format!("{num}_-_{sanitized}.md"),
+		None if sanitized.is_empty() => "untitled.md".to_string(),
+		None => format!("{sanitized}.md"),
 	};
 	if closed { format!("{base}.bak") } else { base }
 }
@@ -58,11 +58,11 @@ fn format_issue_dir_name(issue: &FetchedIssue) -> String {
 }
 
 /// Get the path for an issue file in XDG_DATA.
-/// Structure: issues/{owner}/{repo}/{number}_-_{title}.{ext}[.bak] (or just {title}.{ext} for pending/virtual)
-/// For nested sub-issues: issues/{owner}/{repo}/{ancestor1_dir}/{ancestor2_dir}/.../{number}_-_{title}.{ext}[.bak]
+/// Structure: issues/{owner}/{repo}/{number}_-_{title}.md[.bak] (or just {title}.md for pending/virtual)
+/// For nested sub-issues: issues/{owner}/{repo}/{ancestor1_dir}/{ancestor2_dir}/.../{number}_-_{title}.md[.bak]
 ///
 /// `ancestors` is the chain of parent issues from root to immediate parent (not including the issue itself).
-pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, extension: &Extension, closed: bool, ancestors: &[FetchedIssue]) -> PathBuf {
+pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, closed: bool, ancestors: &[FetchedIssue]) -> PathBuf {
 	let mut path = issues_dir().join(owner).join(repo);
 
 	// Build nested directory structure for all ancestors
@@ -70,7 +70,7 @@ pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, t
 		path = path.join(format_issue_dir_name(ancestor));
 	}
 
-	let filename = format_issue_filename(issue_number, title, extension, closed);
+	let filename = format_issue_filename(issue_number, title, closed);
 	path.join(filename)
 }
 
@@ -106,12 +106,12 @@ pub fn get_issue_dir_path(owner: &str, repo: &str, issue_number: Option<u64>, ti
 }
 
 /// Get the path for the main issue file when stored inside a directory.
-/// Format: {dir}/__main__.{ext}[.bak]
-pub fn get_main_file_path(issue_dir: &Path, extension: &Extension, closed: bool) -> PathBuf {
+/// Format: {dir}/__main__.md[.bak]
+pub fn get_main_file_path(issue_dir: &Path, closed: bool) -> PathBuf {
 	let filename = if closed {
-		format!("{MAIN_ISSUE_FILENAME}.{}.bak", extension.as_str())
+		format!("{MAIN_ISSUE_FILENAME}.md.bak")
 	} else {
-		format!("{MAIN_ISSUE_FILENAME}.{}", extension.as_str())
+		format!("{MAIN_ISSUE_FILENAME}.md")
 	};
 	issue_dir.join(filename)
 }
@@ -120,18 +120,18 @@ pub fn get_main_file_path(issue_dir: &Path, extension: &Extension, closed: bool)
 /// This handles the case where we need to find an existing issue file regardless of format.
 ///
 /// Checks in order:
-/// 1. Flat format: {parent}/{number}_-_{title}.{ext}[.bak]
-/// 2. Directory format: {parent}/{number}_-_{title}/__main__.{ext}[.bak]
+/// 1. Flat format: {parent}/{number}_-_{title}.md[.bak]
+/// 2. Directory format: {parent}/{number}_-_{title}/__main__.md[.bak]
 ///
 /// Returns None if no file is found in either format.
-pub fn find_issue_file(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, extension: &Extension, ancestors: &[FetchedIssue]) -> Option<PathBuf> {
+pub fn find_issue_file(owner: &str, repo: &str, issue_number: Option<u64>, title: &str, ancestors: &[FetchedIssue]) -> Option<PathBuf> {
 	// Try flat format first (both open and closed)
-	let flat_path = get_issue_file_path(owner, repo, issue_number, title, extension, false, ancestors);
+	let flat_path = get_issue_file_path(owner, repo, issue_number, title, false, ancestors);
 	if flat_path.exists() {
 		return Some(flat_path);
 	}
 
-	let flat_closed_path = get_issue_file_path(owner, repo, issue_number, title, extension, true, ancestors);
+	let flat_closed_path = get_issue_file_path(owner, repo, issue_number, title, true, ancestors);
 	if flat_closed_path.exists() {
 		return Some(flat_closed_path);
 	}
@@ -140,12 +140,12 @@ pub fn find_issue_file(owner: &str, repo: &str, issue_number: Option<u64>, title
 	let issue_dir = get_issue_dir_path(owner, repo, issue_number, title, ancestors);
 	if issue_dir.is_dir() {
 		// Check for __main__ file (both open and closed)
-		let main_path = get_main_file_path(&issue_dir, extension, false);
+		let main_path = get_main_file_path(&issue_dir, false);
 		if main_path.exists() {
 			return Some(main_path);
 		}
 
-		let main_closed_path = get_main_file_path(&issue_dir, extension, true);
+		let main_closed_path = get_main_file_path(&issue_dir, true);
 		if main_closed_path.exists() {
 			return Some(main_closed_path);
 		}
@@ -176,8 +176,8 @@ pub fn search_issue_files(pattern: &str) -> Result<Vec<PathBuf>> {
 			} else if path.is_file() {
 				// Check if file matches the pattern
 				if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-					// Only consider .md and .typ files (including .bak versions)
-					if name.ends_with(".md") || name.ends_with(".typ") || name.ends_with(".md.bak") || name.ends_with(".typ.bak") {
+					// Only consider .md files (including .bak versions)
+					if name.ends_with(".md") || name.ends_with(".md.bak") {
 						// Match against filename or full path
 						let name_lower = name.to_lowercase();
 						let path_str = path.to_string_lossy().to_lowercase();
@@ -364,9 +364,9 @@ pub fn extract_owner_repo_from_path(issue_file_path: &Path) -> Result<(String, S
 /// For flat files (e.g., `123_-_title.md`), there are no children.
 /// For directory format (e.g., `123_-_title/__main__.md`), children are loaded from
 /// sibling files in the same directory.
-pub fn load_issue_tree(issue_file_path: &Path, extension: Extension) -> Result<Issue> {
+pub fn load_issue_tree(issue_file_path: &Path) -> Result<Issue> {
 	let content = std::fs::read_to_string(issue_file_path)?;
-	let mut issue = Issue::deserialize_filesystem(&content, extension)?;
+	let mut issue = Issue::deserialize_filesystem(&content)?;
 
 	// Determine if this is a directory format (has __main__ in path)
 	let is_dir_format = issue_file_path.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with(MAIN_ISSUE_FILENAME)).unwrap_or(false);
@@ -374,7 +374,7 @@ pub fn load_issue_tree(issue_file_path: &Path, extension: Extension) -> Result<I
 	if is_dir_format {
 		// Load children from sibling files in the directory
 		if let Some(dir) = issue_file_path.parent() {
-			load_children_from_dir(&mut issue, dir, extension)?;
+			load_children_from_dir(&mut issue, dir)?;
 		}
 	}
 
@@ -382,7 +382,7 @@ pub fn load_issue_tree(issue_file_path: &Path, extension: Extension) -> Result<I
 }
 
 /// Recursively load children from a directory into the issue.
-fn load_children_from_dir(issue: &mut Issue, dir: &Path, extension: Extension) -> Result<()> {
+fn load_children_from_dir(issue: &mut Issue, dir: &Path) -> Result<()> {
 	let Ok(entries) = std::fs::read_dir(dir) else {
 		return Ok(());
 	};
@@ -399,14 +399,14 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path, extension: Extension) -
 		}
 
 		// Check if this is an issue file or directory
-		if path.is_file() && (name.ends_with(".md") || name.ends_with(".typ") || name.ends_with(".md.bak") || name.ends_with(".typ.bak")) {
+		if path.is_file() && (name.ends_with(".md") || name.ends_with(".md.bak")) {
 			// Flat child file
-			let child = load_issue_tree(&path, extension)?;
+			let child = load_issue_tree(&path)?;
 			issue.children.push(child);
 		} else if path.is_dir() {
 			// Directory child - look for __main__ file
-			let main_path = get_main_file_path(&path, &extension, false);
-			let main_closed_path = get_main_file_path(&path, &extension, true);
+			let main_path = get_main_file_path(&path, false);
+			let main_closed_path = get_main_file_path(&path, true);
 
 			let child_path = if main_path.exists() {
 				main_path
@@ -416,7 +416,7 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path, extension: Extension) -
 				continue;
 			};
 
-			let child = load_issue_tree(&child_path, extension)?;
+			let child = load_issue_tree(&child_path)?;
 			issue.children.push(child);
 		}
 	}
@@ -438,7 +438,7 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path, extension: Extension) -
 /// Children are written as siblings in the directory.
 ///
 /// Returns the path to the root issue file.
-pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, extension: Extension, ancestors: &[FetchedIssue]) -> Result<PathBuf> {
+pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, ancestors: &[FetchedIssue]) -> Result<PathBuf> {
 	let issue_number = issue.meta.identity.number();
 	let title = &issue.meta.title;
 	let closed = issue.meta.close_state.is_closed();
@@ -450,30 +450,30 @@ pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, extension: Extens
 		std::fs::create_dir_all(&issue_dir)?;
 
 		// Clean up old flat file if it exists (both open and closed versions)
-		let old_flat_path = get_issue_file_path(owner, repo, issue_number, title, &extension, false, ancestors);
+		let old_flat_path = get_issue_file_path(owner, repo, issue_number, title, false, ancestors);
 		if old_flat_path.exists() {
 			std::fs::remove_file(&old_flat_path)?;
 		}
-		let old_flat_closed = get_issue_file_path(owner, repo, issue_number, title, &extension, true, ancestors);
+		let old_flat_closed = get_issue_file_path(owner, repo, issue_number, title, true, ancestors);
 		if old_flat_closed.exists() {
 			std::fs::remove_file(&old_flat_closed)?;
 		}
 
 		// Clean up the old main file with opposite close state
-		let old_main_path = get_main_file_path(&issue_dir, &extension, !closed);
+		let old_main_path = get_main_file_path(&issue_dir, !closed);
 		if old_main_path.exists() {
 			std::fs::remove_file(&old_main_path)?;
 		}
 
-		get_main_file_path(&issue_dir, &extension, closed)
+		get_main_file_path(&issue_dir, closed)
 	} else {
 		// Flat format - clean up the file with opposite close state
-		let old_path = get_issue_file_path(owner, repo, issue_number, title, &extension, !closed, ancestors);
+		let old_path = get_issue_file_path(owner, repo, issue_number, title, !closed, ancestors);
 		if old_path.exists() {
 			std::fs::remove_file(&old_path)?;
 		}
 
-		get_issue_file_path(owner, repo, issue_number, title, &extension, closed, ancestors)
+		get_issue_file_path(owner, repo, issue_number, title, closed, ancestors)
 	};
 
 	// Create parent directories
@@ -482,7 +482,7 @@ pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, extension: Extens
 	}
 
 	// Write this node (without children)
-	let content = issue.serialize_filesystem(extension);
+	let content = issue.serialize_filesystem();
 	std::fs::write(&issue_file_path, &content)?;
 
 	// Build ancestors for children
@@ -493,7 +493,7 @@ pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, extension: Extens
 
 	// Recursively save children
 	for child in &issue.children {
-		save_issue_tree(child, owner, repo, extension, &child_ancestors)?;
+		save_issue_tree(child, owner, repo, &child_ancestors)?;
 	}
 
 	Ok(issue_file_path)
@@ -528,13 +528,10 @@ mod tests {
 		let dir = PathBuf::from("/tmp/issues/123_-_title");
 
 		// Open issue
-		assert_eq!(get_main_file_path(&dir, &Extension::Md, false), PathBuf::from("/tmp/issues/123_-_title/__main__.md"));
+		assert_eq!(get_main_file_path(&dir, false), PathBuf::from("/tmp/issues/123_-_title/__main__.md"));
 
 		// Closed issue
-		assert_eq!(get_main_file_path(&dir, &Extension::Md, true), PathBuf::from("/tmp/issues/123_-_title/__main__.md.bak"));
-
-		// Typst extension
-		assert_eq!(get_main_file_path(&dir, &Extension::Typ, false), PathBuf::from("/tmp/issues/123_-_title/__main__.typ"));
+		assert_eq!(get_main_file_path(&dir, true), PathBuf::from("/tmp/issues/123_-_title/__main__.md.bak"));
 	}
 
 	#[test]

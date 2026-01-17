@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use clap::Args;
-use todo::Extension;
 use v_utils::prelude::*;
 
 use super::{
@@ -21,20 +20,16 @@ use crate::{
 /// Open a Github issue in $EDITOR.
 ///
 /// Issue files support a blockers section for tracking sub-tasks. Add a `# Blockers` marker
-/// (or `// blockers` for Typst) in the issue body. Content after this marker until the next sub-issue
+/// in the issue body. Content after this marker until the next sub-issue
 /// or comment is treated as blockers, using the same format as standalone blocker files.
 ///
-/// Shorthand: Use `!b` on its own line to auto-expand to `# Blockers` (or `// blockers` for Typst).
+/// Shorthand: Use `!b` on its own line to auto-expand to `# Blockers`.
 #[derive(Args, Debug)]
 pub struct OpenArgs {
 	/// Github issue URL (e.g., https://github.com/owner/repo/issues/123) OR a search pattern for local issue files
 	/// With --touch: path format is workspace/project/{issue.md, issue/sub-issue.md}
 	/// If omitted, opens fzf on all local issue files.
 	pub url_or_pattern: Option<String>,
-
-	/// File extension for the output file (overrides config default_extension)
-	#[arg(alias = "--ext", long)]
-	pub extension: Option<Extension>,
 
 	/// Use exact matching in fzf. Can be specified multiple times:
 	/// -e: exact terms (space-separated; exact matches, but no regex)
@@ -43,7 +38,7 @@ pub struct OpenArgs {
 	#[arg(short = 'e', long, action = clap::ArgAction::Count)]
 	pub exact: u8,
 
-	/// Create or open an issue from a path. Path format: workspace/project/issue[.md|.typ]
+	/// Create or open an issue from a path. Path format: workspace/project/issue[.md]
 	/// For sub-issues: workspace/project/parent/child (parent must exist on Github)
 	/// If issue already exists locally, opens it. Otherwise creates on Github first.
 	#[arg(short, long)]
@@ -111,29 +106,10 @@ fn extract_issue_number_from_path(path: &Path) -> Option<u64> {
 	None
 }
 
-/// Get the effective extension from args, config, or default
-fn get_effective_extension(args_extension: Option<Extension>, settings: &LiveSettings) -> Extension {
-	// Priority: CLI arg > config > default (md)
-	if let Some(ext) = args_extension {
-		return ext;
-	}
-
-	if let Ok(config) = settings.config()
-		&& let Some(open_config) = &config.open
-	{
-		return match open_config.default_extension.as_str() {
-			"typ" => Extension::Typ,
-			_ => Extension::Md,
-		};
-	}
-
-	Extension::Md
-}
-
 #[tracing::instrument(level = "debug", skip(settings, gh))]
 pub async fn open_command(settings: &LiveSettings, gh: BoxedGithubClient, args: OpenArgs, offline: bool) -> Result<()> {
 	tracing::debug!("open_command entered, blocker={}", args.blocker);
-	let extension = get_effective_extension(args.extension, settings);
+	let _ = settings; // settings still available if needed in future
 
 	// Validate and convert exact match level
 	let exact = ExactMatchLevel::try_from(args.exact).map_err(|e| eyre!(e))?;
@@ -187,26 +163,23 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGithubClient, args: 
 		// Handle --touch mode
 		let touch_path = parse_touch_path(input)?;
 
-		// Determine the extension to use
-		let effective_ext = touch_path.extension.unwrap_or(extension);
-
 		// Check if the project is virtual
 		let project_is_virtual = is_virtual_project(&touch_path.owner, &touch_path.repo);
 
 		// First, try to find an existing local issue file
-		let (issue_file_path, effective_offline) = if let Some(existing_path) = find_local_issue_for_touch(&touch_path, &effective_ext) {
+		let (issue_file_path, effective_offline) = if let Some(existing_path) = find_local_issue_for_touch(&touch_path) {
 			println!("Found existing issue: {existing_path:?}");
 			(existing_path, offline || project_is_virtual)
 		} else if project_is_virtual {
 			// Virtual project: stays local forever
 			println!("Project {}/{} is virtual (no Github remote)", touch_path.owner, touch_path.repo);
-			(create_virtual_issue(&touch_path, &effective_ext)?, true)
+			(create_virtual_issue(&touch_path)?, true)
 		} else {
 			// Real project: create issue on Github immediately, then fetch and store
 			if offline {
 				bail!("Cannot create issue on Github in offline mode. Use a virtual project or go online.");
 			}
-			let path = create_and_fetch_issue(&gh, &touch_path, &effective_ext).await?;
+			let path = create_and_fetch_issue(&gh, &touch_path).await?;
 
 			// Commit the newly created issue as consensus
 			// Extract owner/repo/number from the path or use touch_path info
@@ -231,7 +204,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGithubClient, args: 
 
 		// Check if we already have this issue locally
 		use super::files::find_issue_file;
-		let existing_path = find_issue_file(&owner, &repo, Some(issue_number), "", &extension, &[]);
+		let existing_path = find_issue_file(&owner, &repo, Some(issue_number), "", &[]);
 
 		let issue_file_path = if let Some(path) = existing_path {
 			// File exists locally - proceed with unified sync (like --pull)
@@ -241,7 +214,7 @@ pub async fn open_command(settings: &LiveSettings, gh: BoxedGithubClient, args: 
 			// File doesn't exist - fetch and create it
 			println!("Fetching issue #{issue_number} from {owner}/{repo}...");
 
-			let path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, &extension, None).await?;
+			let path = fetch_and_store_issue(&gh, &owner, &repo, issue_number, None).await?;
 			println!("Stored issue at: {path:?}");
 
 			// Commit the fetched state as the consensus baseline

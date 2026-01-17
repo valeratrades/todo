@@ -7,7 +7,7 @@
 //!
 //! # Architecture
 //!
-//! - `standard`: Extended parsing primitives (typst conversion, formatting)
+//! - `standard`: Extended parsing primitives (formatting)
 //! - `operations`: Extended operations on BlockerSequence (pop, move, etc.)
 //! - `source`: BlockerSource trait for data access abstraction
 //! - `io`: File-based source implementation + CLI handling

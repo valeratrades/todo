@@ -17,7 +17,6 @@ use super::files::get_project_dir;
 pub struct IssueMetaEntry {
 	pub issue_number: u64,
 	pub title: String,
-	pub extension: String,
 	/// Parent issue number if this is a sub-issue
 	pub parent_issue: Option<u64>,
 }
@@ -88,15 +87,6 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 	// Handle .bak suffix for closed issues
 	let filename_no_bak = filename.strip_suffix(".bak").unwrap_or(filename);
 
-	// Determine extension
-	let extension = if filename_no_bak.ends_with(".md") {
-		"md"
-	} else if filename_no_bak.ends_with(".typ") {
-		"typ"
-	} else {
-		"md" // default
-	};
-
 	// Check if this is a __main__ file (directory format)
 	let (name_to_parse, parent_dir) = if filename_no_bak.starts_with(MAIN_ISSUE_FILENAME) {
 		// Get issue number from parent directory name instead
@@ -109,7 +99,7 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 		(name, parent_dir)
 	} else {
 		// Strip extension for flat format
-		let name = filename_no_bak.strip_suffix(".md").or_else(|| filename_no_bak.strip_suffix(".typ")).unwrap_or(filename_no_bak);
+		let name = filename_no_bak.strip_suffix(".md").unwrap_or(filename_no_bak);
 		(name, issue_file_path.parent())
 	};
 
@@ -168,12 +158,7 @@ pub fn load_issue_meta_from_path(issue_file_path: &std::path::Path) -> Result<Is
 		None
 	};
 
-	Ok(IssueMetaEntry {
-		issue_number,
-		title,
-		extension: extension.to_string(),
-		parent_issue,
-	})
+	Ok(IssueMetaEntry { issue_number, title, parent_issue })
 }
 
 /// Check if a project is virtual (has no Github remote)

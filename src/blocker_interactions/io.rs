@@ -16,7 +16,7 @@ use super::{
 	clockify::{self, HaltArgs, ResumeArgs},
 	operations::BlockerSequenceExt,
 	source::BlockerSource,
-	standard::{format_blocker_content, is_semantically_empty, normalize_content_by_extension},
+	standard::{format_blocker_content, is_semantically_empty},
 };
 use crate::milestones::SPRINT_HEADER_REL_PATH;
 
@@ -268,26 +268,11 @@ async fn handle_background_blocker_check(relative_path: &str) -> Result<()> {
 	let blocker_path = blockers_dir().join(relative_path);
 	if blocker_path.exists() {
 		let content = std::fs::read_to_string(&blocker_path)?;
-		// Normalize content based on file extension (e.g., convert .typ to markdown)
-		let normalized = normalize_content_by_extension(&content, &blocker_path)?;
-		let formatted = format_blocker_content(&normalized)?;
-
-		// Check if this is a Typst file that needs to be converted to markdown
-		let extension = blocker_path.extension().and_then(|e| e.to_str());
-		let write_path = if extension == Some("typ") {
-			// Convert .typ to .md
-			blocker_path.with_extension("md")
-		} else {
-			blocker_path.clone()
-		};
+		let formatted = format_blocker_content(&content)?;
 
 		// Only write back if content changed
 		if content != formatted {
-			std::fs::write(&write_path, formatted)?;
-			// If we converted from .typ to .md, remove the old .typ file
-			if extension == Some("typ") {
-				std::fs::remove_file(&blocker_path)?;
-			}
+			std::fs::write(&blocker_path, formatted)?;
 		}
 	}
 
@@ -576,8 +561,8 @@ pub async fn main(settings: &crate::config::LiveSettings, args: BlockerArgs, off
 /// Search for projects using a grep-like pattern
 fn search_projects_by_pattern(pattern: &str) -> Result<Vec<String>> {
 	let blockers_dir = blockers_dir();
-	// Search for both .md and .typ files
-	let all_files = crate::utils::fd(&["-t", "f", "-e", "md", "-e", "typ"], &blockers_dir)?;
+	// Search for .md files
+	let all_files = crate::utils::fd(&["-t", "f", "-e", "md"], &blockers_dir)?;
 	let mut matches = Vec::new();
 
 	for line in all_files.lines() {
@@ -636,14 +621,14 @@ fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 		return Ok(pattern.to_string());
 	}
 
-	// Strip .md/.typ suffix for pattern matching, so "uni.md" matches like "uni"
-	let search_pattern = pattern.strip_suffix(".md").or_else(|| pattern.strip_suffix(".typ")).unwrap_or(pattern);
+	// Strip .md suffix for pattern matching, so "uni.md" matches like "uni"
+	let search_pattern = pattern.strip_suffix(".md").unwrap_or(pattern);
 
 	let matches = search_projects_by_pattern(search_pattern)?;
 
 	// If pattern has an extension, check for exact match first
 	// e.g., "uni.md" should match "uni.md" exactly, not open fzf even if "uni_headless.md" also exists
-	if (pattern.ends_with(".md") || pattern.ends_with(".typ"))
+	if pattern.ends_with(".md")
 		&& let Some(exact_match) = matches.iter().find(|m| {
 			// Extract just the filename from the match path
 			Path::new(m).file_name().and_then(|f| f.to_str()) == Some(pattern)
@@ -656,11 +641,7 @@ fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 		0 => {
 			if touch {
 				// No matches but touch is enabled - create a new path from the pattern
-				let new_path = if pattern.ends_with(".md") || pattern.ends_with(".typ") {
-					pattern.to_string()
-				} else {
-					format!("{pattern}.md")
-				};
+				let new_path = if pattern.ends_with(".md") { pattern.to_string() } else { format!("{pattern}.md") };
 				eprintln!("Creating new project file: {new_path}");
 				Ok(new_path)
 			} else {
@@ -681,14 +662,14 @@ fn resolve_project_path(pattern: &str, touch: bool) -> Result<String> {
 	}
 }
 
-/// Check if an urgent file (urgent.md or urgent.typ) exists in any workspace
+/// Check if an urgent file (urgent.md) exists in any workspace
 /// Returns the relative path to the urgent file if found
 /// Only checks workspace-specific urgent files (e.g., workspace/urgent.md)
 fn check_for_urgent_file() -> Option<String> {
 	let blockers_dir = blockers_dir();
 
 	// Check for workspace-specific urgent files
-	// Look for */urgent.md and */urgent.typ in blockers_dir
+	// Look for */urgent.md in blockers_dir
 	if let Ok(entries) = std::fs::read_dir(&blockers_dir) {
 		for entry in entries.flatten() {
 			if let Ok(metadata) = entry.metadata()
@@ -701,12 +682,6 @@ fn check_for_urgent_file() -> Option<String> {
 				if ws_urgent_md.exists() {
 					return Some(format!("{}/urgent.md", workspace_name.to_string_lossy()));
 				}
-
-				// Check workspace/urgent.typ
-				let ws_urgent_typ = entry.path().join("urgent.typ");
-				if ws_urgent_typ.exists() {
-					return Some(format!("{}/urgent.typ", workspace_name.to_string_lossy()));
-				}
 			}
 		}
 	}
@@ -714,10 +689,10 @@ fn check_for_urgent_file() -> Option<String> {
 	None
 }
 
-/// Check if a relative path refers to an urgent file (urgent.md or urgent.typ)
+/// Check if a relative path refers to an urgent file (urgent.md)
 /// Only workspace-specific urgent files are valid (e.g., workspace/urgent.md)
 fn is_urgent_file(relative_path: &str) -> bool {
-	relative_path.ends_with("/urgent.md") || relative_path.ends_with("/urgent.typ")
+	relative_path.ends_with("/urgent.md")
 }
 
 /// Check if creating a new urgent file is allowed
@@ -743,9 +718,8 @@ async fn cleanup_urgent_file_if_empty(relative_path: &str) -> Result<()> {
 	}
 
 	let content = std::fs::read_to_string(&blocker_path)?;
-	let normalized = normalize_content_by_extension(&content, &blocker_path)?;
 
-	if is_semantically_empty(&normalized) {
+	if is_semantically_empty(&content) {
 		// Delete the urgent file
 		std::fs::remove_file(&blocker_path)?;
 		eprintln!("Removed empty urgent file: {relative_path}");
@@ -786,12 +760,10 @@ mod tests {
 	fn test_is_urgent_file() {
 		// Workspace-specific urgent files (only valid form)
 		assert!(is_urgent_file("workspace/urgent.md"));
-		assert!(is_urgent_file("workspace/urgent.typ"));
 		assert!(is_urgent_file("workspace1/urgent.md"));
 
 		// Root-level urgent files are NOT valid (must be in workspace)
 		assert!(!is_urgent_file("urgent.md"));
-		assert!(!is_urgent_file("urgent.typ"));
 
 		// Non-urgent files
 		assert!(!is_urgent_file("blockers.md"));

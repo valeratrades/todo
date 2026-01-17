@@ -23,5 +23,5 @@ pub use types::{CloseState, Comment, CommentIdentity, FetchedIssue, Issue, Issue
 mod util;
 pub use util::{is_blockers_marker, normalize_issue_indentation};
 
-// Re-export Extension and Header from parent
-pub use crate::{Extension, Header};
+// Re-export Header from parent
+pub use crate::Header;

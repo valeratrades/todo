@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Result, bail, eyre};
-use todo::{DisplayFormat, Extension, Issue, Marker};
+use todo::{DisplayFormat, Issue, Marker};
 
 use super::{BlockerSequence, operations::BlockerSequenceExt};
 use crate::open_interactions::files::{ExactMatchLevel, choose_issue_with_fzf, issues_dir, search_issue_files};
@@ -78,14 +78,8 @@ impl super::source::BlockerSource for IssueSource {
 		// Update blockers directly
 		issue.blockers = blockers.clone();
 
-		// Determine extension from file path
-		let extension = match self.issue_path.extension().and_then(|e| e.to_str()) {
-			Some("typ") => Extension::Typ,
-			_ => Extension::Md,
-		};
-
 		// Serialize and write
-		std::fs::write(&self.issue_path, issue.serialize_virtual(extension))?;
+		std::fs::write(&self.issue_path, issue.serialize_virtual())?;
 		Ok(())
 	}
 
@@ -374,7 +368,7 @@ mod tests {
 "#;
 		let issue = Issue::parse(content, Path::new("test.md")).unwrap();
 
-		let serialized = issue.serialize_virtual(Extension::Md);
+		let serialized = issue.serialize_virtual();
 		assert!(serialized.contains("# Blockers"));
 		assert!(serialized.contains("- First task"));
 		assert!(serialized.contains("- Second task"));

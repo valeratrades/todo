@@ -241,7 +241,7 @@ impl<'a> OpenBuilder<'a> {
 						// Edit the file while "editor is open" if requested
 						// Use serialize_virtual since that's what the user sees/edits (full tree with children)
 						if let Some(issue) = &edit_to {
-							std::fs::write(&issue_path, issue.serialize_virtual(todo::Extension::Md)).unwrap();
+							std::fs::write(&issue_path, issue.serialize_virtual()).unwrap();
 						}
 
 						// Try to signal the pipe (use nix O_NONBLOCK to avoid blocking)
@@ -322,7 +322,7 @@ impl<'a> OpenUrlBuilder<'a> {
 						// Edit the file while "editor is open" if requested
 						// Use serialize_virtual since that's what the user sees/edits (full tree with children)
 						if let Some((path, issue)) = &edit_at_path {
-							std::fs::write(path, issue.serialize_virtual(todo::Extension::Md)).unwrap();
+							std::fs::write(path, issue.serialize_virtual()).unwrap();
 						}
 
 						// Try to signal the pipe (use O_NONBLOCK to avoid blocking)

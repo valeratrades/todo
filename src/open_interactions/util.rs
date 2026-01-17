@@ -1,3 +1,3 @@
 //! Small utility functions for issue processing.
 
-pub use todo::Extension;
+// Extension type removed - all files are markdown
