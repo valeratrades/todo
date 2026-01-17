@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, IssueMeta};
+use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueLink, IssueMeta};
 use v_utils::prelude::*;
 
 use super::github_sync::IssueGithubExt;
@@ -50,7 +50,7 @@ fn fetch_children_recursive<'a>(
 		}
 
 		// Collect all child issue numbers that need fetching
-		let child_numbers: Vec<u64> = issue.children.iter().filter_map(|child| child.meta.identity.number()).collect();
+		let child_numbers: Vec<u64> = issue.children.iter().filter_map(|child| child.number()).collect();
 
 		if child_numbers.is_empty() {
 			return Ok(());
@@ -73,7 +73,7 @@ fn fetch_children_recursive<'a>(
 
 		// Update each child with full data
 		for child in &mut issue.children {
-			let Some(child_num) = child.meta.identity.number() else {
+			let Some(child_num) = child.number() else {
 				continue;
 			};
 			let Some((comments, sub_issues)) = data_map.get(&child_num) else {
@@ -98,15 +98,15 @@ fn fetch_children_recursive<'a>(
 				.map(|si| {
 					let url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
 					let link = IssueLink::parse(&url).expect("just constructed valid URL");
-					let identity = IssueIdentity::Created { user: si.user.login.clone(), link };
 					let close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
-					let timestamp = si.updated_at.parse::<Timestamp>().ok();
+					let ts = si.updated_at.parse::<Timestamp>().ok();
 					let labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 					Issue {
-						meta: IssueMeta {
-							identity,
-							last_contents_change: timestamp,
-						},
+						metadata: Some(IssueMeta {
+							link,
+							user: si.user.login.clone(),
+							ts,
+						}),
 						contents: IssueContents {
 							title: si.title.clone(),
 							labels,
@@ -160,8 +160,10 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 			return NodeResolution::NoChange;
 		}
 		// Different content with no consensus - try timestamps, else conflict
-		return match (local.meta.last_contents_change, remote.meta.last_contents_change) {
-			(Some(local_ts), Some(remote_ts)) if local_ts != remote_ts => NodeResolution::AutoResolved { take_local: local_ts > remote_ts },
+		let local_ts = local.metadata.as_ref().and_then(|m| m.ts);
+		let remote_ts = remote.metadata.as_ref().and_then(|m| m.ts);
+		return match (local_ts, remote_ts) {
+			(Some(l), Some(r)) if l != r => NodeResolution::AutoResolved { take_local: l > r },
 			_ => NodeResolution::Conflict,
 		};
 	};
@@ -179,8 +181,10 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 		(false, true) => NodeResolution::RemoteOnly,
 		(true, true) => {
 			// Both changed - try to auto-resolve using timestamps
-			match (local.meta.last_contents_change, remote.meta.last_contents_change) {
-				(Some(local_ts), Some(remote_ts)) if local_ts != remote_ts => NodeResolution::AutoResolved { take_local: local_ts > remote_ts },
+			let local_ts = local.metadata.as_ref().and_then(|m| m.ts);
+			let remote_ts = remote.metadata.as_ref().and_then(|m| m.ts);
+			match (local_ts, remote_ts) {
+				(Some(l), Some(r)) if l != r => NodeResolution::AutoResolved { take_local: l > r },
 				_ => {
 					// Same timestamp or missing timestamps - cannot auto-resolve
 					NodeResolution::Conflict
@@ -312,17 +316,17 @@ fn resolve_tree_recursive(
 
 	// Now compare children
 	// Build maps by URL for matching
-	let local_children_by_url: HashMap<&str, &Issue> = local.children.iter().filter_map(|c| c.meta.identity.url_str().map(|url| (url, c))).collect();
+	let local_children_by_url: HashMap<&str, &Issue> = local.children.iter().filter_map(|c| c.url_str().map(|url| (url, c))).collect();
 
 	let consensus_children_by_url: HashMap<&str, &Issue> = consensus
-		.map(|c| c.children.iter().filter_map(|child| child.meta.identity.url_str().map(|url| (url, child))).collect())
+		.map(|c| c.children.iter().filter_map(|child| child.url_str().map(|url| (url, child))).collect())
 		.unwrap_or_default();
 
-	let remote_children_by_url: HashMap<&str, &Issue> = remote.children.iter().filter_map(|c| c.meta.identity.url_str().map(|url| (url, c))).collect();
+	let remote_children_by_url: HashMap<&str, &Issue> = remote.children.iter().filter_map(|c| c.url_str().map(|url| (url, c))).collect();
 
 	// Process each child in resolved (which starts as local's children)
 	for (i, resolved_child) in resolved.children.iter_mut().enumerate() {
-		let Some(url) = resolved_child.meta.identity.url_str() else {
+		let Some(url) = resolved_child.url_str() else {
 			continue;
 		};
 
@@ -366,8 +370,12 @@ fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 	resolved.contents.comments.truncate(1);
 	resolved.contents.comments.extend(remote.contents.comments.iter().skip(1).cloned());
 
-	// Update timestamp
-	resolved.meta.last_contents_change = remote.meta.last_contents_change;
+	// Update timestamp from remote metadata
+	if let Some(remote_meta) = &remote.metadata {
+		if let Some(resolved_meta) = &mut resolved.metadata {
+			resolved_meta.ts = remote_meta.ts;
+		}
+	}
 }
 
 #[cfg(test)]
@@ -379,13 +387,11 @@ mod tests {
 
 	fn make_issue(body: &str, timestamp: Option<i64>) -> Issue {
 		Issue {
-			meta: IssueMeta {
-				identity: IssueIdentity::Created {
-					user: "testuser".to_string(),
-					link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
-				},
-				last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
-			},
+			metadata: Some(IssueMeta {
+				link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
+				user: "testuser".to_string(),
+				ts: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
+			}),
 			contents: IssueContents {
 				title: "Test".to_string(),
 				labels: vec![],
@@ -465,13 +471,11 @@ mod tests {
 
 	fn make_issue_with_url(body: &str, timestamp: Option<i64>, url: &str) -> Issue {
 		Issue {
-			meta: IssueMeta {
-				identity: IssueIdentity::Created {
-					user: "testuser".to_string(),
-					link: IssueLink::parse(url).unwrap(),
-				},
-				last_contents_change: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
-			},
+			metadata: Some(IssueMeta {
+				link: IssueLink::parse(url).unwrap(),
+				user: "testuser".to_string(),
+				ts: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
+			}),
 			contents: IssueContents {
 				title: "Test".to_string(),
 				labels: vec![],

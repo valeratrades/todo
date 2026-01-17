@@ -217,7 +217,7 @@ impl TestContext {
 			let mut child_ancestors = ancestors.to_vec();
 			child_ancestors.push(dir_name);
 			for child in &issue.children {
-				let child_number = child.meta.identity.number().unwrap_or(0);
+				let child_number = child.number().unwrap_or(0);
 				self.write_issue_tree_recursive(owner, repo, child_number, child, &child_ancestors);
 			}
 
@@ -301,8 +301,8 @@ impl TestContext {
 
 /// Extract owner, repo, number from an Issue's identity, with defaults.
 fn extract_issue_coords(issue: &Issue) -> (String, String, u64) {
-	if let Some(link) = issue.meta.identity.link() {
-		(link.owner().to_string(), link.repo().to_string(), link.number())
+	if let Some(meta) = &issue.metadata {
+		(meta.link.owner().to_string(), meta.link.repo().to_string(), meta.number())
 	} else {
 		(DEFAULT_OWNER.to_string(), DEFAULT_REPO.to_string(), DEFAULT_NUMBER)
 	}
@@ -310,7 +310,7 @@ fn extract_issue_coords(issue: &Issue) -> (String, String, u64) {
 
 /// Extract child issue number from its identity, or use default.
 fn extract_child_number(child: &Issue, default: u64) -> u64 {
-	child.meta.identity.number().unwrap_or(default)
+	child.number().unwrap_or(default)
 }
 
 /// Recursively add an issue and all its children to the mock state.
@@ -323,7 +323,7 @@ fn add_issue_recursive(state: &mut GitState, owner: &str, repo: &str, number: u6
 	state.remote_issue_ids.insert(key);
 
 	// Add the issue itself
-	let issue_owner_login = issue.meta.identity.user().expect("issue identity must have user - use @user format in test fixtures").to_string();
+	let issue_owner_login = issue.user().expect("issue identity must have user - use @user format in test fixtures").to_string();
 	state.remote_issues.push(MockIssue {
 		owner: owner.to_string(),
 		repo: repo.to_string(),

@@ -61,62 +61,6 @@ impl IssueLink /*{{{1*/ {
 }
 //,}}}1
 
-/// Identity of an issue - either linked to Github or pending creation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum IssueIdentity {
-	/// Issue exists on Github with this link and was created by the given user
-	Created { user: String, link: IssueLink },
-	/// Issue is pending creation on Github (will be created in post-sync)
-	Pending,
-}
-
-impl IssueIdentity /*{{{1*/ {
-	/// Get the link if this issue is linked to Github.
-	pub fn link(&self) -> Option<&IssueLink> {
-		match self {
-			Self::Created { link, .. } => Some(link),
-			Self::Pending => None,
-		}
-	}
-
-	/// Get the user who created this issue if linked to Github.
-	pub fn user(&self) -> Option<&str> {
-		match self {
-			Self::Created { user, .. } => Some(user),
-			Self::Pending => None,
-		}
-	}
-
-	/// Check if this issue is linked to Github.
-	pub fn is_linked(&self) -> bool {
-		matches!(self, Self::Created { .. })
-	}
-
-	/// Check if this issue is pending creation.
-	pub fn is_pending(&self) -> bool {
-		matches!(self, Self::Pending)
-	}
-
-	/// Get the issue number if linked.
-	pub fn number(&self) -> Option<u64> {
-		self.link().map(|l| l.number())
-	}
-
-	/// Get the URL string if linked.
-	pub fn url_str(&self) -> Option<&str> {
-		self.link().map(|l| l.as_str())
-	}
-
-	/// Encode identity for serialization: `@user url` or empty for Pending.
-	pub fn encode(&self) -> String {
-		match self {
-			Self::Created { user, link } => format!("@{user} {}", link.as_str()),
-			Self::Pending => String::new(),
-		}
-	}
-}
-//,}}}1
-
 /// Identity of a comment - either linked to Github or pending creation.
 /// Note: The first comment (issue body) is always `Body`, not `Linked` or `Pending`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -319,14 +263,34 @@ impl CloseState /*{{{1*/ {
 }
 //,}}}1
 
-/// Metadata for an issue (identity and sync info)
+/// Metadata for an issue that exists on Github.
+/// If Issue.metadata is None, the issue is pending creation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IssueMeta {
-	/// Url on Github
-	pub id: IssueLink,
+	/// Link to the issue on Github
+	pub link: IssueLink,
+	/// User who created the issue
+	pub user: String,
 	/// Timestamp of last content change (body/comments, not children).
-	/// Used for sync conflict resolution.
-	pub ts: Timestamp,
+	/// Used for sync conflict resolution. None if unknown.
+	pub ts: Option<Timestamp>,
+}
+
+impl IssueMeta {
+	/// Get the issue number from the link.
+	pub fn number(&self) -> u64 {
+		self.link.number()
+	}
+
+	/// Get the URL string.
+	pub fn url_str(&self) -> &str {
+		self.link.as_str()
+	}
+
+	/// Encode for serialization: `@user url`
+	pub fn encode(&self) -> String {
+		format!("@{} {}", self.user, self.link.as_str())
+	}
 }
 
 /// A comment in the issue conversation (first one is always the issue body)
@@ -351,13 +315,14 @@ pub struct IssueContents {
 /// Parsed title line components (internal helper)
 struct ParsedTitleLine {
 	title: String,
-	identity: IssueIdentity,
+	/// None means pending (not yet created on Github)
+	metadata: Option<IssueMeta>,
 	close_state: CloseState,
 	labels: Vec<String>,
 }
 
 /// Complete representation of an issue file
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Issue {
 	pub metadata: Option<IssueMeta>,
 	pub contents: IssueContents,
@@ -366,6 +331,31 @@ pub struct Issue {
 }
 
 impl Issue /*{{{1*/ {
+	/// Check if this issue is pending creation (not yet on Github).
+	pub fn is_pending(&self) -> bool {
+		self.metadata.is_none()
+	}
+
+	/// Check if this issue is linked to Github.
+	pub fn is_linked(&self) -> bool {
+		self.metadata.is_some()
+	}
+
+	/// Get the issue number if linked to Github.
+	pub fn number(&self) -> Option<u64> {
+		self.metadata.as_ref().map(|m| m.number())
+	}
+
+	/// Get the URL string if linked to Github.
+	pub fn url_str(&self) -> Option<&str> {
+		self.metadata.as_ref().map(|m| m.url_str())
+	}
+
+	/// Get the user who created this issue if linked to Github.
+	pub fn user(&self) -> Option<&str> {
+		self.metadata.as_ref().map(|m| m.user.as_str())
+	}
+
 	/// Get the full issue body including blockers section.
 	/// This is what should be synced to Github as the issue body.
 	pub fn body(&self) -> String {
@@ -645,10 +635,7 @@ impl Issue /*{{{1*/ {
 		}
 
 		Ok(Issue {
-			meta: IssueMeta {
-				id: parsed.identity,
-				last_contents_change: None, // Set from Github when syncing
-			},
+			metadata: parsed.metadata,
 			contents: IssueContents {
 				title: parsed.title,
 				labels: parsed.labels,
@@ -716,27 +703,23 @@ impl Issue /*{{{1*/ {
 		// Handle both root format `<!-- @user url -->` and sub format `<!--sub @user url -->`
 		let inner = inner.strip_prefix("sub ").unwrap_or(inner);
 
-		let identity = if inner.is_empty() {
-			// Empty marker `<!--  -->` or `<!--sub -->` means pending
-			IssueIdentity::Pending
-		} else {
-			Self::parse_user_and_link(inner)
-		};
+		// Empty marker `<!--  -->` or `<!--sub -->` means pending (None)
+		let metadata = Self::parse_user_and_link(inner);
 
 		Ok(ParsedTitleLine {
 			title,
-			identity,
+			metadata,
 			close_state,
 			labels,
 		})
 	}
 
-	/// Parse `@user url` format into IssueIdentity.
-	/// Returns Pending if empty or invalid format.
-	fn parse_user_and_link(s: &str) -> IssueIdentity {
+	/// Parse `@user url` format into IssueMeta.
+	/// Returns None if empty or invalid format (meaning pending).
+	fn parse_user_and_link(s: &str) -> Option<IssueMeta> {
 		let s = s.trim();
 		if s.is_empty() {
-			return IssueIdentity::Pending;
+			return None;
 		}
 
 		// Format: `@username https://github.com/...`
@@ -746,11 +729,11 @@ impl Issue /*{{{1*/ {
 			let user = rest[..space_idx].to_string();
 			let url = rest[space_idx + 1..].trim();
 			if let Some(link) = IssueLink::parse(url) {
-				return IssueIdentity::Created { user, link };
+				return Some(IssueMeta { link, user, ts: None });
 			}
 		}
 
-		IssueIdentity::Pending
+		None
 	}
 
 	/// Parse `@user url#issuecomment-id` format into CommentIdentity.
@@ -839,14 +822,14 @@ impl Issue /*{{{1*/ {
 
 		// Title line - root uses `<!-- @user url -->`, children use `<!--sub @user url -->`
 		let checked = self.contents.state.to_checkbox();
-		let identity_part = self.meta.id.encode();
+		let identity_part = self.metadata.as_ref().map(|m| m.encode()).unwrap_or_default();
 		let labels_part = if self.contents.labels.is_empty() {
 			String::new()
 		} else {
 			format!("[{}] ", self.contents.labels.join(", "))
 		};
 		let marker = if depth == 0 { " " } else { "sub " };
-		let is_owned = self.meta.id.user().is_some_and(crate::current_user::is);
+		let is_owned = self.user().is_some_and(crate::current_user::is);
 		out.push_str(&format!("{indent}- [{checked}] {labels_part}{} <!--{marker}{identity_part} -->\n", self.contents.title));
 
 		// Body (first comment) - add extra indent if not owned
@@ -874,7 +857,7 @@ impl Issue /*{{{1*/ {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
 				CommentIdentity::Created { user, id } => {
-					let url = self.meta.id.url_str().unwrap_or("");
+					let url = self.url_str().unwrap_or("");
 					out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 				}
 				CommentIdentity::Pending => {
@@ -913,7 +896,7 @@ impl Issue /*{{{1*/ {
 			if child.contents.state.is_closed() {
 				// Output child title line
 				let child_checked = child.contents.state.to_checkbox();
-				let child_identity_part = child.meta.id.encode();
+				let child_identity_part = child.metadata.as_ref().map(|m| m.encode()).unwrap_or_default();
 				let child_labels_part = if child.contents.labels.is_empty() {
 					String::new()
 				} else {
@@ -954,13 +937,13 @@ impl Issue /*{{{1*/ {
 
 		// Title line (always at root level for filesystem representation)
 		let checked = self.contents.state.to_checkbox();
-		let identity_part = self.meta.id.encode();
+		let identity_part = self.metadata.as_ref().map(|m| m.encode()).unwrap_or_default();
 		let labels_part = if self.contents.labels.is_empty() {
 			String::new()
 		} else {
 			format!("[{}] ", self.contents.labels.join(", "))
 		};
-		let is_owned = self.meta.id.user().is_some_and(crate::current_user::is);
+		let is_owned = self.user().is_some_and(crate::current_user::is);
 		out.push_str(&format!("- [{checked}] {labels_part}{} <!-- {identity_part} -->\n", self.contents.title));
 
 		// Body (first comment) - add extra indent if not owned
@@ -988,7 +971,7 @@ impl Issue /*{{{1*/ {
 					out.push_str(&format!("{content_indent}<!-- new comment -->\n"));
 				}
 				CommentIdentity::Created { user, id } => {
-					let url = self.meta.id.url_str().unwrap_or("");
+					let url = self.url_str().unwrap_or("");
 					out.push_str(&format!("{content_indent}<!-- @{user} {url}#issuecomment-{id} -->\n"));
 				}
 				CommentIdentity::Pending => {

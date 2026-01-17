@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use todo::{Comment, CommentIdentity, Issue, IssueIdentity};
+use todo::{Comment, CommentIdentity, Issue, IssueLink, IssueMeta};
 
 //==============================================================================
 // Location Types
@@ -70,6 +70,7 @@ pub struct IssueDiff {
 
 impl IssueDiff {
 	/// Returns true if there are any changes to sync.
+	#[cfg(test)]
 	pub fn has_changes(&self) -> bool {
 		self.body_changed
 			|| self.state_changed
@@ -94,8 +95,6 @@ pub struct TreeNode<'a> {
 	pub issue: &'a Issue,
 	/// Path from root (empty for root, [0] for first child, [0, 1] for first child's second child)
 	pub path: Vec<usize>,
-	/// Parent issue number (for creating sub-issues)
-	pub parent_number: Option<u64>,
 }
 
 /// Iterator that yields issues in horizontal-first (breadth-first) order.
@@ -113,11 +112,7 @@ impl<'a> HorizontalIter<'a> {
 	/// Create a new horizontal iterator starting from the given issue.
 	pub fn new(root: &'a Issue) -> Self {
 		let mut queue = VecDeque::new();
-		queue.push_back(TreeNode {
-			issue: root,
-			path: vec![],
-			parent_number: None,
-		});
+		queue.push_back(TreeNode { issue: root, path: vec![] });
 		Self { queue }
 	}
 }
@@ -129,15 +124,10 @@ impl<'a> Iterator for HorizontalIter<'a> {
 		let node = self.queue.pop_front()?;
 
 		// Queue all children for later processing
-		let parent_number = node.issue.meta.identity.number();
 		for (i, child) in node.issue.children.iter().enumerate() {
 			let mut child_path = node.path.clone();
 			child_path.push(i);
-			self.queue.push_back(TreeNode {
-				issue: child,
-				path: child_path,
-				parent_number,
-			});
+			self.queue.push_back(TreeNode { issue: child, path: child_path });
 		}
 
 		Some(node)
@@ -150,6 +140,7 @@ pub trait IssueTreeExt {
 	fn iter_horizontal(&self) -> HorizontalIter<'_>;
 
 	/// Get all issues at a specific depth level.
+	#[allow(dead_code)]
 	fn issues_at_level(&self, level: usize) -> Vec<TreeNode<'_>>;
 
 	/// Get the maximum depth of the tree.
@@ -192,7 +183,7 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 			}
 		}
 		for child in &new.children {
-			if child.meta.identity.is_pending() {
+			if child.is_pending() {
 				diff.children_to_create.push(child.clone());
 			}
 		}
@@ -246,11 +237,11 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 	}
 
 	// Compare children
-	let old_children: HashMap<u64, &Issue> = old.children.iter().filter_map(|c| c.meta.identity.number().map(|n| (n, c))).collect();
-	let new_child_numbers: HashSet<u64> = new.children.iter().filter_map(|c| c.meta.identity.number()).collect();
+	let old_children: HashMap<u64, &Issue> = old.children.iter().filter_map(|c| c.number().map(|n| (n, c))).collect();
+	let new_child_numbers: HashSet<u64> = new.children.iter().filter_map(|c| c.number()).collect();
 
 	for child in &new.children {
-		if child.meta.identity.is_pending() {
+		if child.is_pending() {
 			diff.children_to_create.push(child.clone());
 		}
 	}
@@ -265,26 +256,14 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 	diff
 }
 
-/// Match old issue to new issue by URL/number for comparison.
-pub fn find_old_node<'a>(old_root: &'a Issue, path: &[usize]) -> Option<&'a Issue> {
-	if path.is_empty() {
-		return Some(old_root);
-	}
-
-	let mut current = old_root;
-	for &idx in path {
-		current = current.children.get(idx)?;
-	}
-	Some(current)
-}
-
-/// Find an issue in the old tree by its URL/number, regardless of path.
+/// Find an issue in the old tree by its metadata (URL), regardless of path.
 /// This handles cases where children might be reordered.
-pub fn find_old_by_identity<'a>(old_root: &'a Issue, identity: &IssueIdentity) -> Option<&'a Issue> {
-	let target_url = identity.url_str()?;
+/// Returns None if metadata is None (pending) or not found.
+pub fn find_old_by_metadata<'a>(old_root: &'a Issue, metadata: Option<&IssueMeta>) -> Option<&'a Issue> {
+	let target_url = metadata?.url_str();
 
 	for node in old_root.iter_horizontal() {
-		if node.issue.meta.identity.url_str() == Some(target_url) {
+		if node.issue.url_str() == Some(target_url) {
 			return Some(node.issue);
 		}
 	}
@@ -382,13 +361,13 @@ async fn create_pending_issues_hierarchical(new: &mut Issue, _old: &Issue, gh: &
 				// Get parent's issue number
 				let parent_path = &path[..path.len() - 1];
 				let parent = get_node_at_path_mut(new, parent_path).expect("parent must exist");
-				parent.meta.identity.number()
+				parent.number()
 			};
 
 			let node = get_node_at_path_mut(new, &path).expect("node must exist");
 
 			// Skip if not pending
-			if !node.meta.identity.is_pending() {
+			if !node.is_pending() {
 				continue;
 			}
 
@@ -410,11 +389,11 @@ async fn create_pending_issues_hierarchical(new: &mut Issue, _old: &Issue, gh: &
 				gh.update_issue_state(owner, repo, created.number, "closed").await?;
 			}
 
-			// Update the Issue struct with new identity
+			// Update the Issue struct with new metadata
 			let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
-			let link = todo::IssueLink::parse(&url).expect("just constructed valid URL");
+			let link = IssueLink::parse(&url).expect("just constructed valid URL");
 			let user = gh.fetch_authenticated_user().await?;
-			node.meta.identity = todo::IssueIdentity::Created { user, link };
+			node.metadata = Some(IssueMeta { link, user, ts: None });
 
 			changed = true;
 		}
@@ -429,7 +408,7 @@ fn collect_pending_issues_at_level(issue: &Issue, target_level: usize) -> Vec<Ve
 
 	// Helper to recursively collect pending issues
 	fn collect(issue: &Issue, current_path: &[usize], target_level: usize, paths: &mut Vec<Vec<usize>>) {
-		if current_path.len() == target_level && issue.meta.identity.is_pending() {
+		if current_path.len() == target_level && issue.is_pending() {
 			paths.push(current_path.to_vec());
 		}
 
@@ -467,7 +446,7 @@ async fn create_pending_comments_sequential(new: &mut Issue, _old: &Issue, gh: &
 
 	// Process all issues in the tree
 	for node_info in new.clone().iter_horizontal() {
-		let Some(issue_number) = node_info.issue.meta.identity.number() else {
+		let Some(issue_number) = node_info.issue.number() else {
 			continue; // Skip pending issues (already handled)
 		};
 
@@ -478,7 +457,7 @@ async fn create_pending_comments_sequential(new: &mut Issue, _old: &Issue, gh: &
 		for comment in node.contents.comments.iter_mut().skip(1) {
 			if comment.identity.is_pending() && !comment.body.is_empty() {
 				let body_str = comment.body.render();
-				println!("Creating comment on issue #{issue_number}...");
+				println!("Creating new comment on issue #{issue_number}...");
 				gh.create_comment(owner, repo, issue_number, &body_str).await?;
 				// Note: We don't update the comment identity here because we'd need to fetch
 				// the created comment ID, which requires another API call. The next pull will
@@ -500,12 +479,12 @@ async fn sync_existing_content(new: &Issue, old: &Issue, gh: &BoxedGithubClient,
 
 	// Process all issues
 	for node_info in new.iter_horizontal() {
-		let Some(issue_number) = node_info.issue.meta.identity.number() else {
+		let Some(issue_number) = node_info.issue.number() else {
 			continue;
 		};
 
 		// Find corresponding old node
-		let old_node = find_old_by_identity(old, &node_info.issue.meta.identity);
+		let old_node = find_old_by_metadata(old, node_info.issue.metadata.as_ref());
 		let diff = compute_node_diff(node_info.issue, old_node);
 
 		// Update body if changed
@@ -548,12 +527,12 @@ async fn delete_removed_items(new: &Issue, old: &Issue, gh: &BoxedGithubClient, 
 
 	// Process all issues in OLD tree to find deleted comments
 	for old_node_info in old.iter_horizontal() {
-		let Some(issue_number) = old_node_info.issue.meta.identity.number() else {
+		let Some(issue_number) = old_node_info.issue.number() else {
 			continue;
 		};
 
 		// Find corresponding new node
-		let new_node = find_old_by_identity(new, &old_node_info.issue.meta.identity);
+		let new_node = find_old_by_metadata(new, old_node_info.issue.metadata.as_ref());
 		let Some(new_node) = new_node else {
 			// Issue was deleted - we don't delete issues from GitHub
 			// (they might be moved elsewhere or intentionally removed from local)
@@ -607,7 +586,7 @@ fn issues_equal(a: &Issue, b: &Issue) -> bool {
 	if a.contents != b.contents {
 		return false;
 	}
-	if a.meta.identity != b.meta.identity {
+	if a.metadata != b.metadata {
 		return false;
 	}
 
@@ -633,19 +612,14 @@ mod tests {
 	use super::*;
 
 	fn make_issue(title: &str, number: Option<u64>) -> Issue {
-		let identity = match number {
-			Some(n) => IssueIdentity::Created {
-				user: "testuser".to_string(),
-				link: IssueLink::parse(&format!("https://github.com/o/r/issues/{n}")).unwrap(),
-			},
-			None => IssueIdentity::Pending,
-		};
+		let metadata = number.map(|n| IssueMeta {
+			link: IssueLink::parse(&format!("https://github.com/o/r/issues/{n}")).unwrap(),
+			user: "testuser".to_string(),
+			ts: None,
+		});
 
 		Issue {
-			meta: IssueMeta {
-				identity,
-				last_contents_change: None,
-			},
+			metadata,
 			contents: IssueContents {
 				title: title.to_string(),
 				labels: vec![],
@@ -823,62 +797,40 @@ mod tests {
 		let diff = compute_node_diff(&new, Some(&old));
 
 		assert_eq!(diff.children_to_create.len(), 1);
-		assert!(diff.has_changes());
 	}
 
 	#[test]
-	fn test_find_old_node() {
+	fn test_find_old_by_metadata() {
 		let mut root = make_issue("Root", Some(1));
 		let mut child = make_issue("Child", Some(2));
 		child.children.push(make_issue("Grandchild", Some(3)));
 		root.children.push(child);
 
-		// Find root
-		let found = find_old_node(&root, &[]);
-		assert_eq!(found.unwrap().contents.title, "Root");
-
-		// Find child
-		let found = find_old_node(&root, &[0]);
-		assert_eq!(found.unwrap().contents.title, "Child");
-
-		// Find grandchild
-		let found = find_old_node(&root, &[0, 0]);
-		assert_eq!(found.unwrap().contents.title, "Grandchild");
-
-		// Invalid path
-		let found = find_old_node(&root, &[1]);
-		assert!(found.is_none());
-	}
-
-	#[test]
-	fn test_find_old_by_identity() {
-		let mut root = make_issue("Root", Some(1));
-		let mut child = make_issue("Child", Some(2));
-		child.children.push(make_issue("Grandchild", Some(3)));
-		root.children.push(child);
-
-		// Find by identity
-		let child_identity = IssueIdentity::Created {
-			user: "testuser".to_string(),
+		// Find by metadata
+		let child_meta = IssueMeta {
 			link: IssueLink::parse("https://github.com/o/r/issues/2").unwrap(),
+			user: "testuser".to_string(),
+			ts: None,
 		};
-		let found = find_old_by_identity(&root, &child_identity);
+		let found = find_old_by_metadata(&root, Some(&child_meta));
 		assert_eq!(found.unwrap().contents.title, "Child");
 
 		// Find grandchild
-		let grandchild_identity = IssueIdentity::Created {
-			user: "testuser".to_string(),
+		let grandchild_meta = IssueMeta {
 			link: IssueLink::parse("https://github.com/o/r/issues/3").unwrap(),
+			user: "testuser".to_string(),
+			ts: None,
 		};
-		let found = find_old_by_identity(&root, &grandchild_identity);
+		let found = find_old_by_metadata(&root, Some(&grandchild_meta));
 		assert_eq!(found.unwrap().contents.title, "Grandchild");
 
 		// Not found
-		let missing_identity = IssueIdentity::Created {
-			user: "testuser".to_string(),
+		let missing_meta = IssueMeta {
 			link: IssueLink::parse("https://github.com/o/r/issues/999").unwrap(),
+			user: "testuser".to_string(),
+			ts: None,
 		};
-		let found = find_old_by_identity(&root, &missing_identity);
+		let found = find_old_by_metadata(&root, Some(&missing_meta));
 		assert!(found.is_none());
 	}
 }

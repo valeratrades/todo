@@ -4,7 +4,7 @@
 //! - Converting Github API responses to Issue
 
 use jiff::Timestamp;
-use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, IssueMeta, split_blockers};
+use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueLink, IssueMeta, split_blockers};
 
 use crate::github::{GithubComment, GithubIssue};
 
@@ -21,16 +21,13 @@ impl IssueGithubExt for Issue {
 		let close_state = CloseState::from_github(&issue.state, issue.state_reason.as_deref());
 
 		let link = IssueLink::parse(&issue_url).expect("just constructed valid URL");
-		let identity = IssueIdentity::Created {
-			user: issue.user.login.clone(),
-			link,
-		};
+		let user = issue.user.login.clone();
 		let labels: Vec<String> = issue.labels.iter().map(|l| l.name.clone()).collect();
 
 		// Parse timestamp from Github's ISO 8601 format
-		let last_contents_change = issue.updated_at.parse::<Timestamp>().ok();
+		let ts = issue.updated_at.parse::<Timestamp>().ok();
 
-		let meta = IssueMeta { identity, last_contents_change };
+		let metadata = Some(IssueMeta { link, user, ts });
 
 		// Build comments: body is first comment
 		// Split out blockers from body (they're appended during sync)
@@ -61,18 +58,15 @@ impl IssueGithubExt for Issue {
 			.map(|si| {
 				let child_url = format!("https://github.com/{owner}/{repo}/issues/{}", si.number);
 				let child_link = IssueLink::parse(&child_url).expect("just constructed valid URL");
-				let child_identity = IssueIdentity::Created {
-					user: si.user.login.clone(),
-					link: child_link,
-				};
 				let child_close_state = CloseState::from_github(&si.state, si.state_reason.as_deref());
-				let child_timestamp = si.updated_at.parse::<Timestamp>().ok();
+				let child_ts = si.updated_at.parse::<Timestamp>().ok();
 				let child_labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 				Issue {
-					meta: IssueMeta {
-						identity: child_identity,
-						last_contents_change: child_timestamp,
-					},
+					metadata: Some(IssueMeta {
+						link: child_link,
+						user: si.user.login.clone(),
+						ts: child_ts,
+					}),
 					contents: IssueContents {
 						title: si.title.clone(),
 						labels: child_labels,
@@ -89,7 +83,7 @@ impl IssueGithubExt for Issue {
 			.collect();
 
 		Issue {
-			meta,
+			metadata,
 			contents: IssueContents {
 				title: issue.title.clone(),
 				labels,
@@ -140,9 +134,9 @@ mod tests {
 		let result = Issue::from_github(&issue, &comments, &sub_issues, "owner", "repo", "me");
 
 		assert_eq!(result.contents.title, "Test Issue");
-		assert_eq!(result.meta.identity.url_str(), Some("https://github.com/owner/repo/issues/123"));
+		assert_eq!(result.url_str(), Some("https://github.com/owner/repo/issues/123"));
 		assert_eq!(result.contents.state, CloseState::Open);
-		assert_eq!(result.meta.identity.user(), Some("me"));
+		assert_eq!(result.user(), Some("me"));
 		assert_eq!(result.contents.labels, vec!["bug".to_string()]);
 
 		// Body + 1 comment

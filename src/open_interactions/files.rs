@@ -423,8 +423,8 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path) -> Result<()> {
 
 	// Sort children by issue number for consistent ordering
 	issue.children.sort_by(|a, b| {
-		let a_num = a.meta.identity.number().unwrap_or(0);
-		let b_num = b.meta.identity.number().unwrap_or(0);
+		let a_num = a.number().unwrap_or(0);
+		let b_num = b.number().unwrap_or(0);
 		a_num.cmp(&b_num)
 	});
 
@@ -439,7 +439,7 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path) -> Result<()> {
 ///
 /// Returns the path to the root issue file.
 pub fn save_issue_tree(issue: &Issue, owner: &str, repo: &str, ancestors: &[FetchedIssue]) -> Result<PathBuf> {
-	let issue_number = issue.meta.identity.number();
+	let issue_number = issue.number();
 	let title = &issue.contents.title;
 	let closed = issue.contents.state.is_closed();
 	let has_children = !issue.children.is_empty();

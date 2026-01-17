@@ -239,8 +239,12 @@ fn apply_node_content(target: &mut Issue, source: &Issue) {
 	// Copy comments (body is first comment)
 	target.contents.comments = source.contents.comments.clone();
 
-	// Update timestamp
-	target.meta.last_contents_change = source.meta.last_contents_change;
+	// Update timestamp from source metadata
+	if let Some(source_meta) = &source.metadata {
+		if let Some(target_meta) = &mut target.metadata {
+			target_meta.ts = source_meta.ts;
+		}
+	}
 }
 
 /// Handle divergence: both local and remote changed since last sync.
@@ -483,7 +487,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 	//=========================================================================
 	// Pending items (new local sub-issues) are preserved during merge and
 	// created on Github in post-sync. No pre-sync phase needed.
-	let (local_needs_update, changed) = if issue.meta.identity.is_linked() {
+	let (local_needs_update, changed) = if issue.is_linked() {
 		// Normal flow: fetch remote and merge
 		let remote_issue = fetch_full_issue_tree(gh, owner, repo, issue_number).await?;
 
@@ -495,6 +499,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 
 		// Write local file if it needs updating
 		if local_needs_update {
+			println!("Remote changed, local file updated.");
 			save_issue_tree(issue, owner, repo, &[])?;
 		}
 
