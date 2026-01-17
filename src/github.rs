@@ -164,21 +164,60 @@ impl RealGithubClient {
 		})
 	}
 
-	fn auth_header(&self) -> String {
-		format!("token {}", self.github_token)
+	fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+		self.http_client
+			.request(method, url)
+			.header("User-Agent", "Rust Github Client")
+			.header("Authorization", format!("token {}", self.github_token))
+	}
+
+	fn get(&self, url: &str) -> reqwest::RequestBuilder {
+		self.request(reqwest::Method::GET, url)
+	}
+
+	fn post(&self, url: &str) -> reqwest::RequestBuilder {
+		self.request(reqwest::Method::POST, url)
+	}
+
+	fn patch(&self, url: &str) -> reqwest::RequestBuilder {
+		self.request(reqwest::Method::PATCH, url)
+	}
+
+	fn delete(&self, url: &str) -> reqwest::RequestBuilder {
+		self.request(reqwest::Method::DELETE, url)
+	}
+
+	/// Send a PATCH request with JSON body, returning an error on non-success status
+	async fn patch_json(&self, url: &str, json: &serde_json::Value, error_context: &str) -> Result<()> {
+		let res = self.patch(url).json(json).send().await?;
+
+		if !res.status().is_success() {
+			let status = res.status();
+			let body = res.text().await.unwrap_or_default();
+			bail!("{error_context}: {status} - {body}");
+		}
+
+		Ok(())
+	}
+
+	/// Send a POST request with JSON body, returning an error on non-success status
+	async fn post_json(&self, url: &str, json: &serde_json::Value, error_context: &str) -> Result<()> {
+		let res = self.post(url).json(json).send().await?;
+
+		if !res.status().is_success() {
+			let status = res.status();
+			let body = res.text().await.unwrap_or_default();
+			bail!("{error_context}: {status} - {body}");
+		}
+
+		Ok(())
 	}
 }
 
 #[async_trait]
 impl GithubClient for RealGithubClient {
 	async fn fetch_authenticated_user(&self) -> Result<String> {
-		let res = self
-			.http_client
-			.get("https://api.github.com/user")
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let res = self.get("https://api.github.com/user").send().await?;
 
 		if !res.status().is_success() {
 			let status = res.status();
@@ -191,15 +230,8 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn fetch_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<GithubIssue> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
+		let res = self.get(&url).send().await?;
 
 		if !res.status().is_success() {
 			let status = res.status();
@@ -212,15 +244,8 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn fetch_comments(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GithubComment>> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
+		let res = self.get(&url).send().await?;
 
 		if !res.status().is_success() {
 			let status = res.status();
@@ -233,15 +258,8 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn fetch_sub_issues(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<GithubIssue>> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/sub_issues");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/sub_issues");
+		let res = self.get(&url).send().await?;
 
 		if !res.status().is_success() {
 			// Sub-issues API might not be available or issue has no sub-issues
@@ -254,103 +272,28 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn update_issue_body(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-		let res = self
-			.http_client
-			.patch(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.header("Content-Type", "application/json")
-			.json(&serde_json::json!({ "body": body }))
-			.send()
-			.await?;
-
-		if !res.status().is_success() {
-			let status = res.status();
-			let body = res.text().await.unwrap_or_default();
-			bail!("Failed to update issue body: {status} - {body}");
-		}
-
-		Ok(())
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
+		self.patch_json(&url, &serde_json::json!({ "body": body }), "Failed to update issue body").await
 	}
 
 	async fn update_issue_state(&self, owner: &str, repo: &str, issue_number: u64, state: &str) -> Result<()> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-		let res = self
-			.http_client
-			.patch(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.header("Content-Type", "application/json")
-			.json(&serde_json::json!({ "state": state }))
-			.send()
-			.await?;
-
-		if !res.status().is_success() {
-			let status = res.status();
-			let body = res.text().await.unwrap_or_default();
-			bail!("Failed to update issue state: {status} - {body}");
-		}
-
-		Ok(())
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
+		self.patch_json(&url, &serde_json::json!({ "state": state }), "Failed to update issue state").await
 	}
 
 	async fn update_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
-
-		let res = self
-			.http_client
-			.patch(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.header("Content-Type", "application/json")
-			.json(&serde_json::json!({ "body": body }))
-			.send()
-			.await?;
-
-		if !res.status().is_success() {
-			let status = res.status();
-			let body = res.text().await.unwrap_or_default();
-			bail!("Failed to update comment: {status} - {body}");
-		}
-
-		Ok(())
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
+		self.patch_json(&url, &serde_json::json!({ "body": body }), "Failed to update comment").await
 	}
 
 	async fn create_comment(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
-
-		let res = self
-			.http_client
-			.post(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.header("Content-Type", "application/json")
-			.json(&serde_json::json!({ "body": body }))
-			.send()
-			.await?;
-
-		if !res.status().is_success() {
-			let status = res.status();
-			let body = res.text().await.unwrap_or_default();
-			bail!("Failed to create comment: {status} - {body}");
-		}
-
-		Ok(())
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments");
+		self.post_json(&url, &serde_json::json!({ "body": body }), "Failed to create comment").await
 	}
 
 	async fn delete_comment(&self, owner: &str, repo: &str, comment_id: u64) -> Result<()> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
-
-		let res = self
-			.http_client
-			.delete(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}");
+		let res = self.delete(&url).send().await?;
 
 		if !res.status().is_success() {
 			let status = res.status();
@@ -366,15 +309,8 @@ impl GithubClient for RealGithubClient {
 		let current_user = self.fetch_authenticated_user().await?;
 
 		// Check if user is a collaborator with write access
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/collaborators/{current_user}/permission");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/collaborators/{current_user}/permission");
+		let res = self.get(&url).send().await?;
 
 		if !res.status().is_success() {
 			// If we can't check, assume no access
@@ -392,17 +328,8 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn create_issue(&self, owner: &str, repo: &str, title: &str, body: &str) -> Result<CreatedIssue> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues");
-
-		let res = self
-			.http_client
-			.post(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.header("Content-Type", "application/json")
-			.json(&serde_json::json!({ "title": title, "body": body }))
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues");
+		let res = self.post(&url).json(&serde_json::json!({ "title": title, "body": body })).send().await?;
 
 		if !res.status().is_success() {
 			let status = res.status();
@@ -415,39 +342,15 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn add_sub_issue(&self, owner: &str, repo: &str, parent_issue_number: u64, child_issue_id: u64) -> Result<()> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues");
-
-		let res = self
-			.http_client
-			.post(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.header("Content-Type", "application/json")
-			.json(&serde_json::json!({ "sub_issue_id": child_issue_id }))
-			.send()
-			.await?;
-
-		if !res.status().is_success() {
-			let status = res.status();
-			let body = res.text().await.unwrap_or_default();
-			bail!("Failed to add sub-issue: {status} - {body}");
-		}
-
-		Ok(())
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues");
+		self.post_json(&url, &serde_json::json!({ "sub_issue_id": child_issue_id }), "Failed to add sub-issue").await
 	}
 
 	async fn find_issue_by_title(&self, owner: &str, repo: &str, title: &str) -> Result<Option<u64>> {
 		// Search for issues with this title (search in open and closed)
 		let encoded_title = urlencoding::encode(title);
-		let api_url = format!("https://api.github.com/search/issues?q=repo:{owner}/{repo}+in:title+{encoded_title}");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/search/issues?q=repo:{owner}/{repo}+in:title+{encoded_title}");
+		let res = self.get(&url).send().await?;
 
 		if !res.status().is_success() {
 			return Ok(None);
@@ -476,29 +379,14 @@ impl GithubClient for RealGithubClient {
 	}
 
 	async fn issue_exists(&self, owner: &str, repo: &str, issue_number: u64) -> Result<bool> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
-
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}");
+		let res = self.get(&url).send().await?;
 		Ok(res.status().is_success())
 	}
 
 	async fn fetch_parent_issue(&self, owner: &str, repo: &str, issue_number: u64) -> Result<Option<GithubIssue>> {
-		let api_url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/parent");
-
-		let res = self
-			.http_client
-			.get(&api_url)
-			.header("User-Agent", "Rust Github Client")
-			.header("Authorization", self.auth_header())
-			.send()
-			.await?;
+		let url = format!("https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/parent");
+		let res = self.get(&url).send().await?;
 
 		if res.status() == reqwest::StatusCode::NOT_FOUND {
 			// Issue has no parent

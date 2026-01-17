@@ -284,6 +284,28 @@ impl MockGithubClient {
 		self.call_log.lock().unwrap().push(call.to_string());
 	}
 
+	/// Get mutable access to an issue, returning an error if not found
+	fn with_issue_mut<F, R>(&self, owner: &str, repo: &str, issue_number: u64, f: F) -> Result<R>
+	where
+		F: FnOnce(&mut MockIssueData) -> R, {
+		let key = RepoKey::new(owner, repo);
+		let mut issues = self.issues.lock().unwrap();
+		let repo_issues = issues.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {owner}/{repo}"))?;
+		let issue = repo_issues.get_mut(&issue_number).ok_or_else(|| eyre!("Issue not found: #{issue_number}"))?;
+		Ok(f(issue))
+	}
+
+	/// Get mutable access to a comment, returning an error if not found
+	fn with_comment_mut<F, R>(&self, owner: &str, repo: &str, comment_id: u64, f: F) -> Result<R>
+	where
+		F: FnOnce(&mut MockCommentData) -> R, {
+		let key = RepoKey::new(owner, repo);
+		let mut comments = self.comments.lock().unwrap();
+		let repo_comments = comments.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {owner}/{repo}"))?;
+		let comment = repo_comments.get_mut(&comment_id).ok_or_else(|| eyre!("Comment not found: {comment_id}"))?;
+		Ok(f(comment))
+	}
+
 	fn convert_issue_data(&self, data: &MockIssueData) -> GithubIssue {
 		GithubIssue {
 			number: data.number,
@@ -381,48 +403,21 @@ impl GithubClient for MockGithubClient {
 	async fn update_issue_body(&self, owner: &str, repo: &str, issue_number: u64, body: &str) -> Result<()> {
 		tracing::info!(target: "mock_github", owner, repo, issue_number, "update_issue_body");
 		self.log_call(&format!("update_issue_body({owner}, {repo}, {issue_number}, <body>)"));
-
-		let key = RepoKey::new(owner, repo);
-		let mut issues = self.issues.lock().unwrap();
-
-		let repo_issues = issues.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {owner}/{repo}"))?;
-
-		let issue = repo_issues.get_mut(&issue_number).ok_or_else(|| eyre!("Issue not found: #{issue_number}"))?;
-
-		issue.body = body.to_string();
-		Ok(())
+		self.with_issue_mut(owner, repo, issue_number, |issue| issue.body = body.to_string())
 	}
 
 	#[instrument(skip(self), name = "MockGithubClient::update_issue_state")]
 	async fn update_issue_state(&self, owner: &str, repo: &str, issue_number: u64, state: &str) -> Result<()> {
 		tracing::info!(target: "mock_github", owner, repo, issue_number, state, "update_issue_state");
 		self.log_call(&format!("update_issue_state({owner}, {repo}, {issue_number}, {state})"));
-
-		let key = RepoKey::new(owner, repo);
-		let mut issues = self.issues.lock().unwrap();
-
-		let repo_issues = issues.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {owner}/{repo}"))?;
-
-		let issue = repo_issues.get_mut(&issue_number).ok_or_else(|| eyre!("Issue not found: #{issue_number}"))?;
-
-		issue.state = state.to_string();
-		Ok(())
+		self.with_issue_mut(owner, repo, issue_number, |issue| issue.state = state.to_string())
 	}
 
 	#[instrument(skip(self, body), name = "MockGithubClient::update_comment")]
 	async fn update_comment(&self, owner: &str, repo: &str, comment_id: u64, body: &str) -> Result<()> {
 		tracing::info!(target: "mock_github", owner, repo, comment_id, "update_comment");
 		self.log_call(&format!("update_comment({owner}, {repo}, {comment_id}, <body>)"));
-
-		let key = RepoKey::new(owner, repo);
-		let mut comments = self.comments.lock().unwrap();
-
-		let repo_comments = comments.get_mut(&key).ok_or_else(|| eyre!("Repository not found: {owner}/{repo}"))?;
-
-		let comment = repo_comments.get_mut(&comment_id).ok_or_else(|| eyre!("Comment not found: {comment_id}"))?;
-
-		comment.body = body.to_string();
-		Ok(())
+		self.with_comment_mut(owner, repo, comment_id, |comment| comment.body = body.to_string())
 	}
 
 	#[instrument(skip(self, body), name = "MockGithubClient::create_comment")]
