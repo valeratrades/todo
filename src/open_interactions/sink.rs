@@ -26,7 +26,7 @@
 //! - Parallel processing of siblings at each level
 //! - Proper ordering for pending issue creation (parent before children)
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use todo::{Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, LinkedIssueMeta};
 
@@ -245,20 +245,6 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 	diff
 }
 
-/// Find an issue in the old tree by its identity (URL), regardless of path.
-/// This handles cases where children might be reordered.
-/// Returns None if identity is local or not found.
-pub fn find_old_by_identity<'a>(old_root: &'a Issue, identity: &IssueIdentity) -> Option<&'a Issue> {
-	let target_url = identity.url_str()?;
-
-	for node in old_root.iter_horizontal() {
-		if node.issue.url_str() == Some(target_url) {
-			return Some(node.issue);
-		}
-	}
-	None
-}
-
 //==============================================================================
 // Sink Trait
 //==============================================================================
@@ -275,14 +261,14 @@ pub trait Sink<L> {
 	/// Sink this issue (consensus) to the given location, comparing against `old` state.
 	///
 	/// # Arguments
-	/// * `old` - The current state at the target location (from last pull)
+	/// * `old` - The current state at the target location (from last pull), or None if no previous state exists
 	/// * `location` - Where to write
 	///
 	/// # Returns
 	/// * `Ok(true)` if any changes were made
 	/// * `Ok(false)` if already in sync
 	/// * `Err(_)` on failure
-	async fn sink(&mut self, old: &Issue, location: L) -> color_eyre::Result<bool>;
+	async fn sink(&mut self, old: Option<&Issue>, location: L) -> color_eyre::Result<bool>;
 }
 
 //==============================================================================
@@ -301,205 +287,69 @@ pub struct GithubSink<'a> {
 }
 
 impl Sink<GithubSink<'_>> for Issue {
-	async fn sink(&mut self, old: &Issue, location: GithubSink<'_>) -> color_eyre::Result<bool> {
+	async fn sink(&mut self, old: Option<&Issue>, location: GithubSink<'_>) -> color_eyre::Result<bool> {
 		let GithubSink { gh, owner, repo } = location;
 		let mut changed = false;
 
-		// Phase 1: Create all pending issues level by level (must happen first for deterministic ordering)
-		// We need to create issues before we can compare children, as pending issues need URLs
-		changed |= create_pending_issues_hierarchical(self, old, gh, owner, repo).await?;
-
-		// Phase 2: Create all pending comments SEQUENTIALLY (to preserve order)
-		// This must happen after pending issues are created
-		changed |= create_pending_comments_sequential(self, old, gh, owner, repo).await?;
-
-		// Phase 3: Now we can sync the rest (body, state, existing comments) in parallel per level
-		changed |= sync_existing_content(self, old, gh, owner, repo).await?;
-
-		// Phase 4: Delete items that exist in old but not in new
-		changed |= delete_removed_items(self, old, gh, owner, repo).await?;
-
-		Ok(changed)
-	}
-}
-
-/// Create all pending issues hierarchically (level by level).
-///
-/// This function walks the tree level-by-level and creates pending issues.
-/// After creation, it updates the local Issue with the new identity so that
-/// subsequent iterations can see the correct URLs for deterministic ordering.
-async fn create_pending_issues_hierarchical(new: &mut Issue, _old: &Issue, gh: &BoxedGithubClient, owner: &str, repo: &str) -> Result<bool> {
-	let mut changed = false;
-	let max_depth = new.max_depth();
-
-	for level in 0..=max_depth {
-		// Collect indices of pending children at this level
-		let pending_at_level = collect_pending_issues_at_level(new, level);
-
-		if pending_at_level.is_empty() {
-			continue;
-		}
-
-		// Create each pending issue at this level
-		// NOTE: We do this sequentially because creation order matters for deterministic numbering
-		for path in pending_at_level {
-			let parent_number = if path.is_empty() {
-				// Root issue is pending
-				None
-			} else {
-				// Get parent's issue number
-				let parent_path = &path[..path.len() - 1];
-				let parent = get_node_at_path_mut(new, parent_path).expect("parent must exist");
-				parent.number()
-			};
-
-			let node = get_node_at_path_mut(new, &path).expect("node must exist");
-
-			// Skip if not pending
-			if !node.is_local() {
-				continue;
-			}
-
-			let title = &node.contents.title;
-			let body = node.body();
-			let closed = node.contents.state.is_closed();
+		// If this is a pending (local) issue, create it first
+		if self.is_local() {
+			let title = &self.contents.title;
+			let body = self.body();
+			let closed = self.contents.state.is_closed();
 
 			println!("Creating issue: {title}");
 			let created = gh.create_issue(owner, repo, title, &body).await?;
 			println!("Created issue #{}: {}", created.number, created.html_url);
-
-			// Link to parent if sub-issue
-			if let Some(parent_num) = parent_number {
-				gh.add_sub_issue(owner, repo, parent_num, created.id).await?;
-			}
 
 			// Close if needed
 			if closed {
 				gh.update_issue_state(owner, repo, created.number, "closed").await?;
 			}
 
-			// Update the Issue identity with the newly created issue info
+			// Update identity
 			let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
 			let link = IssueLink::parse(&url).expect("just constructed valid URL");
 			let user = gh.fetch_authenticated_user().await?;
-			// Get lineage from the old identity if it was local
-			let lineage = match &node.identity {
-				IssueIdentity::Local(_) => vec![], // Local issues don't have lineage
-				IssueIdentity::Linked(linked) => linked.lineage.clone(),
-			};
-			node.identity = IssueIdentity::Linked(LinkedIssueMeta { user, link, ts: None, lineage });
-
+			self.identity = IssueIdentity::Linked(LinkedIssueMeta {
+				user,
+				link,
+				ts: None,
+				lineage: vec![],
+			});
 			changed = true;
 		}
-	}
 
-	Ok(changed)
-}
+		let issue_number = self.number().expect("issue must have number after creation");
 
-/// Collect paths to all pending issues at a specific level.
-fn collect_pending_issues_at_level(issue: &Issue, target_level: usize) -> Vec<Vec<usize>> {
-	let mut paths = Vec::new();
+		// Sync content against old (if we have old state)
+		let diff = compute_node_diff(self, old);
 
-	// Helper to recursively collect pending issues
-	fn collect(issue: &Issue, current_path: &[usize], target_level: usize, paths: &mut Vec<Vec<usize>>) {
-		if current_path.len() == target_level && issue.is_local() {
-			paths.push(current_path.to_vec());
-		}
-
-		if current_path.len() < target_level {
-			for (i, child) in issue.children.iter().enumerate() {
-				let mut child_path = current_path.to_vec();
-				child_path.push(i);
-				collect(child, &child_path, target_level, paths);
-			}
-		}
-	}
-
-	collect(issue, &[], target_level, &mut paths);
-	paths
-}
-
-/// Get a mutable reference to a node at a given path.
-fn get_node_at_path_mut<'a>(issue: &'a mut Issue, path: &[usize]) -> Option<&'a mut Issue> {
-	if path.is_empty() {
-		return Some(issue);
-	}
-	let mut current = issue;
-	for &idx in path {
-		current = current.children.get_mut(idx)?;
-	}
-	Some(current)
-}
-
-/// Create pending comments sequentially to preserve order.
-///
-/// Comments must be created one by one because GitHub assigns comment IDs
-/// in creation order, and we need deterministic ordering.
-async fn create_pending_comments_sequential(new: &mut Issue, _old: &Issue, gh: &BoxedGithubClient, owner: &str, repo: &str) -> Result<bool> {
-	let mut changed = false;
-
-	// Process all issues in the tree
-	for node_info in new.clone().iter_horizontal() {
-		let Some(issue_number) = node_info.issue.number() else {
-			continue; // Skip pending issues (already handled)
-		};
-
-		// Get mutable reference to this node
-		let node = get_node_at_path_mut(new, &node_info.path).expect("node must exist");
-
-		// Find pending comments and create them sequentially
-		for comment in node.contents.comments.iter_mut().skip(1) {
-			if comment.identity.is_pending() && !comment.body.is_empty() {
-				let body_str = comment.body.render();
-				println!("Creating new comment on issue #{issue_number}...");
-				gh.create_comment(owner, repo, issue_number, &body_str).await?;
-				// Note: We don't update the comment identity here because we'd need to fetch
-				// the created comment ID, which requires another API call. The next pull will
-				// sync this properly.
-				changed = true;
-			}
-		}
-	}
-
-	Ok(changed)
-}
-
-/// Sync existing content (body, state, existing comments).
-///
-/// This can run operations in parallel since the order doesn't matter
-/// for updates to existing content.
-async fn sync_existing_content(new: &Issue, old: &Issue, gh: &BoxedGithubClient, owner: &str, repo: &str) -> Result<bool> {
-	let mut changed = false;
-
-	// Process all issues
-	for node_info in new.iter_horizontal() {
-		let Some(issue_number) = node_info.issue.number() else {
-			continue;
-		};
-
-		// Find corresponding old node
-		let old_node = find_old_by_identity(old, &node_info.issue.identity);
-		let diff = compute_node_diff(node_info.issue, old_node);
-
-		// Update body if changed
 		if diff.body_changed {
-			let body = node_info.issue.body();
+			let body = self.body();
 			println!("Updating issue #{issue_number} body...");
 			gh.update_issue_body(owner, repo, issue_number, &body).await?;
 			changed = true;
 		}
 
-		// Update state if changed
 		if diff.state_changed {
-			let state = node_info.issue.contents.state.to_github_state();
+			let state = self.contents.state.to_github_state();
 			println!("Updating issue #{issue_number} state to {state}...");
 			gh.update_issue_state(owner, repo, issue_number, state).await?;
 			changed = true;
 		}
 
+		// Create pending comments sequentially (order matters)
+		for comment in self.contents.comments.iter_mut().skip(1) {
+			if comment.identity.is_pending() && !comment.body.is_empty() {
+				let body_str = comment.body.render();
+				println!("Creating new comment on issue #{issue_number}...");
+				gh.create_comment(owner, repo, issue_number, &body_str).await?;
+				changed = true;
+			}
+		}
+
 		// Update existing comments
 		for (comment_id, comment) in &diff.comments_to_update {
-			// Only update comments owned by current user
 			if let CommentIdentity::Created { user, .. } = &comment.identity {
 				if !todo::current_user::is(user) {
 					continue;
@@ -510,44 +360,34 @@ async fn sync_existing_content(new: &Issue, old: &Issue, gh: &BoxedGithubClient,
 			gh.update_comment(owner, repo, *comment_id, &body_str).await?;
 			changed = true;
 		}
-	}
 
-	Ok(changed)
-}
+		// Delete removed comments
+		for comment_id in &diff.comments_to_delete {
+			println!("Deleting comment {comment_id} from issue #{issue_number}...");
+			gh.delete_comment(owner, repo, *comment_id).await?;
+			changed = true;
+		}
 
-/// Delete items that exist in old but not in new.
-async fn delete_removed_items(new: &Issue, old: &Issue, gh: &BoxedGithubClient, owner: &str, repo: &str) -> Result<bool> {
-	let mut changed = false;
+		// Recursively sink children
+		// Match children by position when we have old, otherwise sink with None
+		for (i, child) in self.children.iter_mut().enumerate() {
+			let old_child = old.and_then(|o| o.children.get(i));
 
-	// Process all issues in OLD tree to find deleted comments
-	for old_node_info in old.iter_horizontal() {
-		let Some(issue_number) = old_node_info.issue.number() else {
-			continue;
-		};
+			// If child is pending, it needs to be linked to parent after creation
+			let was_pending = child.is_local();
 
-		// Find corresponding new node
-		let new_node = find_old_by_identity(new, &old_node_info.issue.identity);
-		let Some(new_node) = new_node else {
-			// Issue was deleted - we don't delete issues from GitHub
-			// (they might be moved elsewhere or intentionally removed from local)
-			continue;
-		};
+			let child_sink = GithubSink { gh, owner, repo };
+			changed |= Box::pin(child.sink(old_child, child_sink)).await?;
 
-		// Find comments to delete
-		let new_comment_ids: HashSet<u64> = new_node.contents.comments.iter().filter_map(|c| c.identity.id()).collect();
-
-		for comment in old_node_info.issue.contents.comments.iter().skip(1) {
-			if let Some(id) = comment.identity.id() {
-				if !new_comment_ids.contains(&id) {
-					println!("Deleting comment {id} from issue #{issue_number}...");
-					gh.delete_comment(owner, repo, id).await?;
-					changed = true;
-				}
+			// Link newly created child to parent
+			if was_pending {
+				let child_id = gh.fetch_issue(owner, repo, child.number().unwrap()).await?.id;
+				gh.add_sub_issue(owner, repo, issue_number, child_id).await?;
 			}
 		}
-	}
 
-	Ok(changed)
+		Ok(changed)
+	}
 }
 
 #[cfg(test)]
@@ -746,43 +586,5 @@ mod tests {
 		let diff = compute_node_diff(&new, Some(&old));
 
 		assert_eq!(diff.children_to_create.len(), 1);
-	}
-
-	#[test]
-	fn test_find_old_by_identity() {
-		let mut root = make_issue("Root", Some(1));
-		let mut child = make_issue("Child", Some(2));
-		child.children.push(make_issue("Grandchild", Some(3)));
-		root.children.push(child);
-
-		// Find by identity
-		let child_identity = IssueIdentity::Linked(LinkedIssueMeta {
-			user: "testuser".to_string(),
-			link: IssueLink::parse("https://github.com/o/r/issues/2").unwrap(),
-			ts: None,
-			lineage: vec![],
-		});
-		let found = find_old_by_identity(&root, &child_identity);
-		assert_eq!(found.unwrap().contents.title, "Child");
-
-		// Find grandchild
-		let grandchild_identity = IssueIdentity::Linked(LinkedIssueMeta {
-			user: "testuser".to_string(),
-			link: IssueLink::parse("https://github.com/o/r/issues/3").unwrap(),
-			ts: None,
-			lineage: vec![],
-		});
-		let found = find_old_by_identity(&root, &grandchild_identity);
-		assert_eq!(found.unwrap().contents.title, "Grandchild");
-
-		// Not found
-		let missing_identity = IssueIdentity::Linked(LinkedIssueMeta {
-			user: "testuser".to_string(),
-			link: IssueLink::parse("https://github.com/o/r/issues/999").unwrap(),
-			ts: None,
-			lineage: vec![],
-		});
-		let found = find_old_by_identity(&root, &missing_identity);
-		assert!(found.is_none());
 	}
 }

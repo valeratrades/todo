@@ -516,7 +516,7 @@ impl Sink<&Path> for Issue {
 	/// Each node is written to its own file using `serialize_filesystem`.
 	/// If the issue has children, it uses directory format with `__main__.md`.
 	/// Children are written as siblings in the directory.
-	async fn sink(&mut self, old: &Issue, path: &Path) -> color_eyre::Result<bool> {
+	async fn sink(&mut self, old: Option<&Issue>, path: &Path) -> color_eyre::Result<bool> {
 		// Validate: error if path ends in .md but not __main__.md and both file and directory exist
 		if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
 			if file_name.ends_with(".md") && !file_name.starts_with(MAIN_ISSUE_FILENAME) {
@@ -531,7 +531,7 @@ impl Sink<&Path> for Issue {
 		}
 
 		let (owner, repo) = extract_owner_repo_from_path(path)?;
-		let has_changes = self != old;
+		let has_changes = old.map(|o| self != o).unwrap_or(true);
 
 		if has_changes {
 			save_issue_tree(self, &owner, &repo, &[])?;

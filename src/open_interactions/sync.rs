@@ -510,15 +510,14 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 		// Push differences to GitHub using Sink trait
 		// Compare merged state against REMOTE (not consensus) to know what to push
 		let github_sink = GithubSink { gh, owner, repo };
-		let changed = issue.sink(&remote_issue, github_sink).await?;
+		let changed = issue.sink(Some(&remote_issue), github_sink).await?;
 
 		(local_needs_update, changed)
 	} else {
-		// Issue was just created - sink against an empty issue
+		// Issue was just created - sink with no old state
 		// (everything is "new" relative to GitHub)
-		let empty_issue = Issue::empty_local("");
 		let github_sink = GithubSink { gh, owner, repo };
-		let changed = issue.sink(&empty_issue, github_sink).await?;
+		let changed = issue.sink(None, github_sink).await?;
 		(false, changed)
 	};
 

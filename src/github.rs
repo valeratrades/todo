@@ -9,6 +9,7 @@ use crate::config::LiveSettings;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubIssue {
+	pub id: u64,
 	pub number: u64,
 	pub title: String,
 	pub body: Option<String>,

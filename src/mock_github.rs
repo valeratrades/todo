@@ -308,6 +308,7 @@ impl MockGithubClient {
 
 	fn convert_issue_data(&self, data: &MockIssueData) -> GithubIssue {
 		GithubIssue {
+			id: data.number * 1000, // Mock ID based on number
 			number: data.number,
 			title: data.title.clone(),
 			body: if data.body.is_empty() { None } else { Some(data.body.clone()) },
