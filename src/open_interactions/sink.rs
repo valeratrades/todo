@@ -7,24 +7,17 @@
 //! ## Design Overview
 //!
 //! The `Sink<L>` trait takes:
-//! - `old`: The state of the source we're writing to (preserved after pulling)
+//! - `old`: The state of the source we're writing to (preserved after pulling), or None for new issues
 //! - `location`: Where to write (e.g., GitHub coordinates or filesystem path)
 //!
-//! The trait is called on `consensus` - the merged state we want to push.
+//! The trait is called on the issue we want to push.
 //!
 //! ## Ordering Constraints
 //!
-//! 1. **Pending issues must be created before** comparing children, as they
-//!    need URLs/IDs for deterministic ordering
+//! 1. **Pending issues are created** before syncing their content
 //! 2. **Pending comments must be created sequentially** (one by one) to
 //!    preserve creation order on GitHub
-//! 3. **Other operations can run in parallel** per level
-//!
-//! ## Horizontal-First Iteration
-//!
-//! The tree is processed level by level (breadth-first), which allows:
-//! - Parallel processing of siblings at each level
-//! - Proper ordering for pending issue creation (parent before children)
+//! 3. **Children are processed recursively** after the parent is synced
 
 use std::collections::{HashMap, HashSet};
 
@@ -70,83 +63,6 @@ impl IssueDiff {
 			|| !self.comments_to_delete.is_empty()
 			|| !self.children_to_create.is_empty()
 			|| !self.children_to_delete.is_empty()
-	}
-}
-
-//==============================================================================
-// Horizontal-First Tree Iterator
-//==============================================================================
-
-/// An item in the horizontal iteration, containing the issue and its path.
-#[derive(Clone, Debug)]
-pub struct TreeNode<'a> {
-	/// The issue at this position
-	pub issue: &'a Issue,
-	/// Path from root (empty for root, [0] for first child, [0, 1] for first child's second child)
-	pub path: Vec<usize>,
-}
-
-/// Iterator that yields issues in horizontal-first (breadth-first) order.
-///
-/// This is crucial for proper sync ordering:
-/// - Level 0: Root issue
-/// - Level 1: All direct children of root
-/// - Level 2: All grandchildren
-/// - etc.
-pub struct HorizontalIter<'a> {
-	queue: VecDeque<TreeNode<'a>>,
-}
-
-impl<'a> HorizontalIter<'a> {
-	/// Create a new horizontal iterator starting from the given issue.
-	pub fn new(root: &'a Issue) -> Self {
-		let mut queue = VecDeque::new();
-		queue.push_back(TreeNode { issue: root, path: vec![] });
-		Self { queue }
-	}
-}
-
-impl<'a> Iterator for HorizontalIter<'a> {
-	type Item = TreeNode<'a>;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		let node = self.queue.pop_front()?;
-
-		// Queue all children for later processing
-		for (i, child) in node.issue.children.iter().enumerate() {
-			let mut child_path = node.path.clone();
-			child_path.push(i);
-			self.queue.push_back(TreeNode { issue: child, path: child_path });
-		}
-
-		Some(node)
-	}
-}
-
-/// Extension trait for Issue to get horizontal iteration.
-pub trait IssueTreeExt {
-	/// Iterate over the issue tree in horizontal-first (breadth-first) order.
-	fn iter_horizontal(&self) -> HorizontalIter<'_>;
-
-	/// Get all issues at a specific depth level.
-	#[allow(dead_code)]
-	fn issues_at_level(&self, level: usize) -> Vec<TreeNode<'_>>;
-
-	/// Get the maximum depth of the tree.
-	fn max_depth(&self) -> usize;
-}
-
-impl IssueTreeExt for Issue {
-	fn iter_horizontal(&self) -> HorizontalIter<'_> {
-		HorizontalIter::new(self)
-	}
-
-	fn issues_at_level(&self, target_level: usize) -> Vec<TreeNode<'_>> {
-		self.iter_horizontal().filter(|node| node.path.len() == target_level).collect()
-	}
-
-	fn max_depth(&self) -> usize {
-		self.iter_horizontal().map(|node| node.path.len()).max().unwrap_or(0)
 	}
 }
 
@@ -274,8 +190,6 @@ pub trait Sink<L> {
 //==============================================================================
 // GitHub Sink Implementation
 //==============================================================================
-
-use v_utils::prelude::*;
 
 use crate::github::BoxedGithubClient;
 
@@ -415,98 +329,6 @@ mod tests {
 			},
 			children: vec![],
 		}
-	}
-
-	#[test]
-	fn test_horizontal_iter_single_node() {
-		let issue = make_issue("Root", Some(1));
-		let nodes: Vec<_> = issue.iter_horizontal().collect();
-
-		assert_eq!(nodes.len(), 1);
-		assert!(nodes[0].path.is_empty());
-		assert_eq!(nodes[0].issue.contents.title, "Root");
-	}
-
-	#[test]
-	fn test_horizontal_iter_with_children() {
-		let mut root = make_issue("Root", Some(1));
-		root.children.push(make_issue("Child1", Some(2)));
-		root.children.push(make_issue("Child2", Some(3)));
-
-		let nodes: Vec<_> = root.iter_horizontal().collect();
-
-		assert_eq!(nodes.len(), 3);
-		// Level 0: Root
-		assert!(nodes[0].path.is_empty());
-		// Level 1: Children (in order)
-		assert_eq!(nodes[1].path, vec![0]);
-		assert_eq!(nodes[2].path, vec![1]);
-	}
-
-	#[test]
-	fn test_horizontal_iter_nested() {
-		let mut root = make_issue("Root", Some(1));
-		let mut child1 = make_issue("Child1", Some(2));
-		child1.children.push(make_issue("Grandchild1", Some(4)));
-		child1.children.push(make_issue("Grandchild2", Some(5)));
-		root.children.push(child1);
-		root.children.push(make_issue("Child2", Some(3)));
-
-		let nodes: Vec<_> = root.iter_horizontal().collect();
-
-		// Should be breadth-first: Root, Child1, Child2, Grandchild1, Grandchild2
-		assert_eq!(nodes.len(), 5);
-		assert_eq!(nodes[0].issue.contents.title, "Root");
-		assert_eq!(nodes[1].issue.contents.title, "Child1");
-		assert_eq!(nodes[2].issue.contents.title, "Child2");
-		assert_eq!(nodes[3].issue.contents.title, "Grandchild1");
-		assert_eq!(nodes[4].issue.contents.title, "Grandchild2");
-
-		// Check paths
-		assert!(nodes[0].path.is_empty());
-		assert_eq!(nodes[1].path, vec![0]);
-		assert_eq!(nodes[2].path, vec![1]);
-		assert_eq!(nodes[3].path, vec![0, 0]);
-		assert_eq!(nodes[4].path, vec![0, 1]);
-	}
-
-	#[test]
-	fn test_issues_at_level() {
-		let mut root = make_issue("Root", Some(1));
-		let mut child1 = make_issue("Child1", Some(2));
-		child1.children.push(make_issue("Grandchild1", Some(4)));
-		root.children.push(child1);
-		root.children.push(make_issue("Child2", Some(3)));
-
-		// Level 0: Root only
-		let level0 = root.issues_at_level(0);
-		assert_eq!(level0.len(), 1);
-		assert_eq!(level0[0].issue.contents.title, "Root");
-
-		// Level 1: Child1, Child2
-		let level1 = root.issues_at_level(1);
-		assert_eq!(level1.len(), 2);
-
-		// Level 2: Grandchild1
-		let level2 = root.issues_at_level(2);
-		assert_eq!(level2.len(), 1);
-		assert_eq!(level2[0].issue.contents.title, "Grandchild1");
-	}
-
-	#[test]
-	fn test_max_depth() {
-		let issue = make_issue("Root", Some(1));
-		assert_eq!(issue.max_depth(), 0);
-
-		let mut root = make_issue("Root", Some(1));
-		root.children.push(make_issue("Child", Some(2)));
-		assert_eq!(root.max_depth(), 1);
-
-		let mut deep_root = make_issue("Root", Some(1));
-		let mut child = make_issue("Child", Some(2));
-		child.children.push(make_issue("Grandchild", Some(3)));
-		deep_root.children.push(child);
-		assert_eq!(deep_root.max_depth(), 2);
 	}
 
 	#[test]

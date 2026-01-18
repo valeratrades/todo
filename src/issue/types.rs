@@ -1327,6 +1327,60 @@ impl Issue /*{{{1*/ {
 }
 //,}}}1
 
+//==============================================================================
+// Index by issue number
+//==============================================================================
+
+// PERF: Linear search through children for each index operation.
+// We sacrifice some performance for determinism - the tree structure
+// is navigated by issue numbers rather than positional indices.
+
+impl std::ops::Index<u64> for Issue {
+	type Output = Issue;
+
+	/// Index into children by issue number.
+	/// Panics if no child with that number exists.
+	fn index(&self, issue_number: u64) -> &Self::Output {
+		self.children
+			.iter()
+			.find(|child| child.number() == Some(issue_number))
+			.unwrap_or_else(|| panic!("no child with issue number {issue_number}"))
+	}
+}
+
+impl std::ops::IndexMut<u64> for Issue {
+	/// Index into children by issue number (mutable).
+	/// Panics if no child with that number exists.
+	fn index_mut(&mut self, issue_number: u64) -> &mut Self::Output {
+		self.children
+			.iter_mut()
+			.find(|child| child.number() == Some(issue_number))
+			.unwrap_or_else(|| panic!("no child with issue number {issue_number}"))
+	}
+}
+
+impl Issue {
+	/// Get a reference to a descendant by lineage (chain of issue numbers).
+	/// Returns None if the path doesn't exist.
+	pub fn get(&self, lineage: &[u64]) -> Option<&Issue> {
+		let mut current = self;
+		for &num in lineage {
+			current = current.children.iter().find(|c| c.number() == Some(num))?;
+		}
+		Some(current)
+	}
+
+	/// Get a mutable reference to a descendant by lineage.
+	/// Returns None if the path doesn't exist.
+	pub fn get_mut(&mut self, lineage: &[u64]) -> Option<&mut Issue> {
+		let mut current = self;
+		for &num in lineage {
+			current = current.children.iter_mut().find(|c| c.number() == Some(num))?;
+		}
+		Some(current)
+	}
+}
+
 pub trait LazyIssue<S> {
 	async fn identity(&mut self, source: S) -> IssueIdentity;
 	async fn contents(&mut self, source: S) -> IssueContents;
