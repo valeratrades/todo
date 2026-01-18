@@ -83,7 +83,7 @@ impl SyncOptions {
 
 use std::path::Path;
 
-use todo::{CloseState, FetchedIssue, Issue};
+use todo::{CloseState, FetchedIssue, Issue, IssueIdentity};
 use v_utils::prelude::*;
 
 use super::{
@@ -129,7 +129,7 @@ async fn apply_merge_mode(
 				// handle_divergence bails on conflict, so if we reach here it means merge succeeded
 				// Re-read the merged file
 				let merged_content = std::fs::read_to_string(issue_file_path)?;
-				let merged = Issue::parse(&merged_content, issue_file_path)?;
+				let merged = Issue::parse_virtual(&merged_content, issue_file_path)?;
 				Ok((merged, false, true)) // File already written by merge, push to remote
 			} else {
 				// No conflicts, use resolution results
@@ -239,11 +239,9 @@ fn apply_node_content(target: &mut Issue, source: &Issue) {
 	// Copy comments (body is first comment)
 	target.contents.comments = source.contents.comments.clone();
 
-	// Update timestamp from source metadata
-	if let Some(source_meta) = &source.metadata {
-		if let Some(target_meta) = &mut target.metadata {
-			target_meta.ts = source_meta.ts;
-		}
+	// Update timestamp from source identity (if both are linked)
+	if let (IssueIdentity::Linked(target_linked), IssueIdentity::Linked(source_linked)) = (&mut target.identity, &source.identity) {
+		target_linked.ts = source_linked.ts;
 	}
 }
 
@@ -439,7 +437,7 @@ impl Modifier {
 
 				// Read edited content and re-parse
 				let content = std::fs::read_to_string(issue_file_path)?;
-				*issue = Issue::parse(&content, issue_file_path)?;
+				*issue = Issue::parse_virtual(&content, issue_file_path)?;
 
 				Ok(ModifyResult { output: None, file_modified })
 			}
@@ -518,7 +516,7 @@ async fn sync_issue_to_github_inner(gh: &BoxedGithubClient, issue_file_path: &Pa
 	} else {
 		// Issue was just created - sink against an empty issue
 		// (everything is "new" relative to GitHub)
-		let empty_issue = Issue::default();
+		let empty_issue = Issue::empty_local("");
 		let github_sink = GithubSink { gh, owner, repo };
 		let changed = issue.sink(&empty_issue, github_sink).await?;
 		(false, changed)

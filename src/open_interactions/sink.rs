@@ -28,18 +28,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use todo::{Comment, CommentIdentity, Issue, IssueLink, IssueMeta};
-
-//==============================================================================
-// Location Types
-//==============================================================================
-
-/// Filesystem location for sinking issues.
-#[derive(Clone, Debug)]
-pub struct FilesystemLocation<'a> {
-	pub owner: &'a str,
-	pub repo: &'a str,
-}
+use todo::{Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, LinkedIssueMeta};
 
 //==============================================================================
 // Diff Results
@@ -183,7 +172,7 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 			}
 		}
 		for child in &new.children {
-			if child.is_pending() {
+			if child.is_local() {
 				diff.children_to_create.push(child.clone());
 			}
 		}
@@ -241,7 +230,7 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 	let new_child_numbers: HashSet<u64> = new.children.iter().filter_map(|c| c.number()).collect();
 
 	for child in &new.children {
-		if child.is_pending() {
+		if child.is_local() {
 			diff.children_to_create.push(child.clone());
 		}
 	}
@@ -256,11 +245,11 @@ pub fn compute_node_diff(new: &Issue, old: Option<&Issue>) -> IssueDiff {
 	diff
 }
 
-/// Find an issue in the old tree by its metadata (URL), regardless of path.
+/// Find an issue in the old tree by its identity (URL), regardless of path.
 /// This handles cases where children might be reordered.
-/// Returns None if metadata is None (pending) or not found.
-pub fn find_old_by_metadata<'a>(old_root: &'a Issue, metadata: Option<&IssueMeta>) -> Option<&'a Issue> {
-	let target_url = metadata?.url_str();
+/// Returns None if identity is local or not found.
+pub fn find_old_by_identity<'a>(old_root: &'a Issue, identity: &IssueIdentity) -> Option<&'a Issue> {
+	let target_url = identity.url_str()?;
 
 	for node in old_root.iter_horizontal() {
 		if node.issue.url_str() == Some(target_url) {
@@ -280,7 +269,7 @@ pub fn find_old_by_metadata<'a>(old_root: &'a Issue, metadata: Option<&IssueMeta
 /// to allow different implementations for different destinations.
 ///
 /// # Type Parameter
-/// - `L`: The location type (e.g., `GithubLocation`, `FilesystemLocation`)
+/// - `L`: The location type (e.g., `GithubSink`, `&Path`)
 #[allow(async_fn_in_trait)]
 pub trait Sink<L> {
 	/// Sink this issue (consensus) to the given location, comparing against `old` state.
@@ -367,7 +356,7 @@ async fn create_pending_issues_hierarchical(new: &mut Issue, _old: &Issue, gh: &
 			let node = get_node_at_path_mut(new, &path).expect("node must exist");
 
 			// Skip if not pending
-			if !node.is_pending() {
+			if !node.is_local() {
 				continue;
 			}
 
@@ -389,11 +378,16 @@ async fn create_pending_issues_hierarchical(new: &mut Issue, _old: &Issue, gh: &
 				gh.update_issue_state(owner, repo, created.number, "closed").await?;
 			}
 
-			// Update the Issue struct with new metadata
+			// Update the Issue identity with the newly created issue info
 			let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
 			let link = IssueLink::parse(&url).expect("just constructed valid URL");
 			let user = gh.fetch_authenticated_user().await?;
-			node.metadata = Some(IssueMeta { link, user, ts: None });
+			// Get lineage from the old identity if it was local
+			let lineage = match &node.identity {
+				IssueIdentity::Local(_) => vec![], // Local issues don't have lineage
+				IssueIdentity::Linked(linked) => linked.lineage.clone(),
+			};
+			node.identity = IssueIdentity::Linked(LinkedIssueMeta { user, link, ts: None, lineage });
 
 			changed = true;
 		}
@@ -408,7 +402,7 @@ fn collect_pending_issues_at_level(issue: &Issue, target_level: usize) -> Vec<Ve
 
 	// Helper to recursively collect pending issues
 	fn collect(issue: &Issue, current_path: &[usize], target_level: usize, paths: &mut Vec<Vec<usize>>) {
-		if current_path.len() == target_level && issue.is_pending() {
+		if current_path.len() == target_level && issue.is_local() {
 			paths.push(current_path.to_vec());
 		}
 
@@ -484,7 +478,7 @@ async fn sync_existing_content(new: &Issue, old: &Issue, gh: &BoxedGithubClient,
 		};
 
 		// Find corresponding old node
-		let old_node = find_old_by_metadata(old, node_info.issue.metadata.as_ref());
+		let old_node = find_old_by_identity(old, &node_info.issue.identity);
 		let diff = compute_node_diff(node_info.issue, old_node);
 
 		// Update body if changed
@@ -532,7 +526,7 @@ async fn delete_removed_items(new: &Issue, old: &Issue, gh: &BoxedGithubClient, 
 		};
 
 		// Find corresponding new node
-		let new_node = find_old_by_metadata(new, old_node_info.issue.metadata.as_ref());
+		let new_node = find_old_by_identity(new, &old_node_info.issue.identity);
 		let Some(new_node) = new_node else {
 			// Issue was deleted - we don't delete issues from GitHub
 			// (they might be moved elsewhere or intentionally removed from local)
@@ -556,70 +550,25 @@ async fn delete_removed_items(new: &Issue, old: &Issue, gh: &BoxedGithubClient, 
 	Ok(changed)
 }
 
-//==============================================================================
-// Filesystem Sink Implementation
-//==============================================================================
-
-use super::files::save_issue_tree;
-
-impl Sink<FilesystemLocation<'_>> for Issue {
-	async fn sink(&mut self, old: &Issue, location: FilesystemLocation<'_>) -> color_eyre::Result<bool> {
-		let FilesystemLocation { owner, repo } = location;
-
-		// For filesystem, we simply check if anything changed and save if so
-		// The save_issue_tree function handles creating directories and files
-
-		// Check if there are any differences
-		let has_changes = !issues_equal(self, old);
-
-		if has_changes {
-			save_issue_tree(self, owner, repo, &[])?;
-		}
-
-		Ok(has_changes)
-	}
-}
-
-/// Deep equality check for issues (including children).
-fn issues_equal(a: &Issue, b: &Issue) -> bool {
-	// Check node content
-	if a.contents != b.contents {
-		return false;
-	}
-	if a.metadata != b.metadata {
-		return false;
-	}
-
-	// Check children count
-	if a.children.len() != b.children.len() {
-		return false;
-	}
-
-	// Recursively check children
-	for (child_a, child_b) in a.children.iter().zip(b.children.iter()) {
-		if !issues_equal(child_a, child_b) {
-			return false;
-		}
-	}
-
-	true
-}
-
 #[cfg(test)]
 mod tests {
-	use todo::{BlockerSequence, CloseState, IssueContents, IssueLink, IssueMeta};
+	use todo::{BlockerSequence, CloseState, IssueContents, IssueLink, LocalIssueMeta};
 
 	use super::*;
 
 	fn make_issue(title: &str, number: Option<u64>) -> Issue {
-		let metadata = number.map(|n| IssueMeta {
-			link: IssueLink::parse(&format!("https://github.com/o/r/issues/{n}")).unwrap(),
-			user: "testuser".to_string(),
-			ts: None,
-		});
+		let identity = match number {
+			Some(n) => IssueIdentity::Linked(LinkedIssueMeta {
+				user: "testuser".to_string(),
+				link: IssueLink::parse(&format!("https://github.com/o/r/issues/{n}")).unwrap(),
+				ts: None,
+				lineage: vec![],
+			}),
+			None => IssueIdentity::Local(LocalIssueMeta { path: "test".into() }),
+		};
 
 		Issue {
-			metadata,
+			identity,
 			contents: IssueContents {
 				title: title.to_string(),
 				labels: vec![],
@@ -800,37 +749,40 @@ mod tests {
 	}
 
 	#[test]
-	fn test_find_old_by_metadata() {
+	fn test_find_old_by_identity() {
 		let mut root = make_issue("Root", Some(1));
 		let mut child = make_issue("Child", Some(2));
 		child.children.push(make_issue("Grandchild", Some(3)));
 		root.children.push(child);
 
-		// Find by metadata
-		let child_meta = IssueMeta {
-			link: IssueLink::parse("https://github.com/o/r/issues/2").unwrap(),
+		// Find by identity
+		let child_identity = IssueIdentity::Linked(LinkedIssueMeta {
 			user: "testuser".to_string(),
+			link: IssueLink::parse("https://github.com/o/r/issues/2").unwrap(),
 			ts: None,
-		};
-		let found = find_old_by_metadata(&root, Some(&child_meta));
+			lineage: vec![],
+		});
+		let found = find_old_by_identity(&root, &child_identity);
 		assert_eq!(found.unwrap().contents.title, "Child");
 
 		// Find grandchild
-		let grandchild_meta = IssueMeta {
-			link: IssueLink::parse("https://github.com/o/r/issues/3").unwrap(),
+		let grandchild_identity = IssueIdentity::Linked(LinkedIssueMeta {
 			user: "testuser".to_string(),
+			link: IssueLink::parse("https://github.com/o/r/issues/3").unwrap(),
 			ts: None,
-		};
-		let found = find_old_by_metadata(&root, Some(&grandchild_meta));
+			lineage: vec![],
+		});
+		let found = find_old_by_identity(&root, &grandchild_identity);
 		assert_eq!(found.unwrap().contents.title, "Grandchild");
 
 		// Not found
-		let missing_meta = IssueMeta {
-			link: IssueLink::parse("https://github.com/o/r/issues/999").unwrap(),
+		let missing_identity = IssueIdentity::Linked(LinkedIssueMeta {
 			user: "testuser".to_string(),
+			link: IssueLink::parse("https://github.com/o/r/issues/999").unwrap(),
 			ts: None,
-		};
-		let found = find_old_by_metadata(&root, Some(&missing_meta));
+			lineage: vec![],
+		});
+		let found = find_old_by_identity(&root, &missing_identity);
 		assert!(found.is_none());
 	}
 }

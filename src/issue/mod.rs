@@ -18,7 +18,7 @@ mod marker;
 pub use marker::Marker;
 
 mod types;
-pub use types::{CloseState, Comment, CommentIdentity, FetchedIssue, Issue, IssueContents, IssueLink, IssueMeta};
+pub use types::{Ancestry, CloseState, Comment, CommentIdentity, FetchedIssue, Issue, IssueContents, IssueIdentity, IssueLink, LinkedIssueMeta, LocalIssueMeta};
 
 mod util;
 pub use util::{is_blockers_marker, normalize_issue_indentation};

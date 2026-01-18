@@ -2,62 +2,61 @@
 
 use std::path::PathBuf;
 
-use todo::{CloseState, FetchedIssue, Issue};
+use todo::{Ancestry, CloseState, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
 use super::{
-	files::{find_issue_file, get_issue_dir_path, get_issue_file_path, get_main_file_path},
+	files::{build_ancestry_path, find_issue_file, get_issue_dir_path, get_issue_file_path, get_main_file_path},
 	github_sync::IssueGithubExt,
 };
 use crate::github::{BoxedGithubClient, GithubIssue};
 
-/// Traverse up the parent chain to find the root issue and build the ancestry path.
-/// Returns a list of ancestors from root to the immediate parent (not including the target issue).
-async fn find_ancestry_chain(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<FetchedIssue>> {
-	let mut ancestry = Vec::new();
+/// Fetch the lineage (parent issue numbers) for an issue from GitHub.
+///
+/// Traverses up the parent chain to find the root issue.
+/// Returns issue numbers from root to immediate parent (not including the target issue).
+pub async fn fetch_lineage(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64) -> Result<Vec<u64>> {
+	let mut lineage = Vec::new();
 	let mut current_issue_number = issue_number;
 
 	while let Some(parent) = gh.fetch_parent_issue(owner, repo, current_issue_number).await? {
-		// Found a parent, add to the chain
-		let fetched = FetchedIssue::from_parts(owner, repo, parent.number, &parent.title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for parent #{}", parent.number))?;
-		ancestry.push(fetched);
+		lineage.push(parent.number);
 		current_issue_number = parent.number;
 	}
 
 	// Reverse so it goes from root to immediate parent
-	ancestry.reverse();
-	Ok(ancestry)
+	lineage.reverse();
+	Ok(lineage)
 }
 
 /// Fetch an issue and all its sub-issues recursively, writing them to XDG_DATA.
-/// If the issue is a sub-issue, first traverses up to find the root and stores
-/// the entire hierarchy from root down.
+///
+/// For sub-issues: first fetches the lineage from GitHub, validates that all parent
+/// issues exist locally, then fetches only the requested issue and its descendants.
+/// Returns an error if any parent issue is not found locally.
+///
 /// Returns the path to the requested issue file.
 pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &str, issue_number: u64, ancestors: Option<Vec<FetchedIssue>>) -> Result<PathBuf> {
 	// If we already have ancestor info, this is a recursive call - use it directly
 	let ancestors = match ancestors {
 		Some(a) => a,
 		None => {
-			// First, check if this issue has any parents (is a sub-issue)
-			let ancestry = find_ancestry_chain(gh, owner, repo, issue_number).await?;
+			// First, fetch the lineage from GitHub to know where this issue belongs
+			let lineage = fetch_lineage(gh, owner, repo, issue_number).await?;
 
-			if !ancestry.is_empty() {
-				// This is a sub-issue - fetch from the root down
-				println!("Issue #{issue_number} is a sub-issue. Fetching from root issue #{}...", ancestry[0].number());
+			if !lineage.is_empty() {
+				// This is a sub-issue - validate parents exist locally and build FetchedIssue chain
+				println!("Issue #{issue_number} is a sub-issue with lineage: {lineage:?}");
 
-				// Fetch the entire tree starting from root
-				let root_number = ancestry[0].number();
-				store_issue_tree(gh, owner, repo, root_number, vec![]).await?;
-
-				// Now find and return the path to the originally requested issue
-				let issue = gh.fetch_issue(owner, repo, issue_number).await?;
-				let issue_file_path =
-					find_issue_file(owner, repo, Some(issue_number), &issue.title, &ancestry).ok_or_else(|| eyre!("Failed to find issue file after fetching. This is a bug."))?;
-
-				return Ok(issue_file_path);
+				let ancestry = Ancestry {
+					owner: owner.to_string(),
+					repo: repo.to_string(),
+					lineage,
+				};
+				build_ancestry_path(&ancestry)?
+			} else {
+				vec![]
 			}
-
-			vec![]
 		}
 	};
 

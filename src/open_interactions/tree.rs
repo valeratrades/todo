@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueLink, IssueMeta};
+use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, LinkedIssueMeta};
 use v_utils::prelude::*;
 
 use super::github_sync::IssueGithubExt;
@@ -92,6 +92,11 @@ fn fetch_children_recursive<'a>(
 			}
 
 			// Build sub-issue children, filtering out duplicates
+			// Child lineage extends with parent's issue number
+			let child_lineage = match &child.identity {
+				IssueIdentity::Linked(linked) => linked.child_lineage(),
+				IssueIdentity::Local(_) => unreachable!("we're parsing from Github, - all nodes are `Linked` by definition"),
+			};
 			child.children = sub_issues
 				.iter()
 				.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
@@ -102,10 +107,11 @@ fn fetch_children_recursive<'a>(
 					let ts = si.updated_at.parse::<Timestamp>().ok();
 					let labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 					Issue {
-						metadata: Some(IssueMeta {
-							link,
+						identity: IssueIdentity::Linked(LinkedIssueMeta {
 							user: si.user.login.clone(),
+							link,
 							ts,
+							lineage: child_lineage.clone(),
 						}),
 						contents: IssueContents {
 							title: si.title.clone(),
@@ -160,8 +166,8 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 			return NodeResolution::NoChange;
 		}
 		// Different content with no consensus - try timestamps, else conflict
-		let local_ts = local.metadata.as_ref().and_then(|m| m.ts);
-		let remote_ts = remote.metadata.as_ref().and_then(|m| m.ts);
+		let local_ts = local.ts();
+		let remote_ts = remote.ts();
 		return match (local_ts, remote_ts) {
 			(Some(l), Some(r)) if l != r => NodeResolution::AutoResolved { take_local: l > r },
 			_ => NodeResolution::Conflict,
@@ -181,8 +187,8 @@ pub fn compare_node(local: &Issue, consensus: Option<&Issue>, remote: &Issue) ->
 		(false, true) => NodeResolution::RemoteOnly,
 		(true, true) => {
 			// Both changed - try to auto-resolve using timestamps
-			let local_ts = local.metadata.as_ref().and_then(|m| m.ts);
-			let remote_ts = remote.metadata.as_ref().and_then(|m| m.ts);
+			let local_ts = local.ts();
+			let remote_ts = remote.ts();
 			match (local_ts, remote_ts) {
 				(Some(l), Some(r)) if l != r => NodeResolution::AutoResolved { take_local: l > r },
 				_ => {
@@ -370,11 +376,9 @@ fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 	resolved.contents.comments.truncate(1);
 	resolved.contents.comments.extend(remote.contents.comments.iter().skip(1).cloned());
 
-	// Update timestamp from remote metadata
-	if let Some(remote_meta) = &remote.metadata {
-		if let Some(resolved_meta) = &mut resolved.metadata {
-			resolved_meta.ts = remote_meta.ts;
-		}
+	// Update timestamp from remote identity (if both are linked)
+	if let (IssueIdentity::Linked(resolved_linked), IssueIdentity::Linked(remote_linked)) = (&mut resolved.identity, &remote.identity) {
+		resolved_linked.ts = remote_linked.ts;
 	}
 }
 
@@ -387,10 +391,11 @@ mod tests {
 
 	fn make_issue(body: &str, timestamp: Option<i64>) -> Issue {
 		Issue {
-			metadata: Some(IssueMeta {
-				link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
+			identity: IssueIdentity::Linked(LinkedIssueMeta {
 				user: "testuser".to_string(),
+				link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
 				ts: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
+				lineage: vec![],
 			}),
 			contents: IssueContents {
 				title: "Test".to_string(),
@@ -471,10 +476,11 @@ mod tests {
 
 	fn make_issue_with_url(body: &str, timestamp: Option<i64>, url: &str) -> Issue {
 		Issue {
-			metadata: Some(IssueMeta {
-				link: IssueLink::parse(url).unwrap(),
+			identity: IssueIdentity::Linked(LinkedIssueMeta {
 				user: "testuser".to_string(),
+				link: IssueLink::parse(url).unwrap(),
 				ts: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
+				lineage: vec![],
 			}),
 			contents: IssueContents {
 				title: "Test".to_string(),

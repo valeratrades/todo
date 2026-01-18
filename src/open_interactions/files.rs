@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use todo::{FetchedIssue, Issue};
+use todo::{Ancestry, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
 // Extension type removed - all files are markdown (.md)
@@ -78,6 +78,79 @@ pub fn get_issue_file_path(owner: &str, repo: &str, issue_number: Option<u64>, t
 /// Structure: issues/{owner}/{repo}/
 pub fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
 	issues_dir().join(owner).join(repo)
+}
+
+/// Build a chain of FetchedIssue by traversing the filesystem for an ancestry.
+///
+/// Goes through each issue number in the lineage and finds the corresponding
+/// directory on disk (format: `{number}_-_*`), extracting titles from directory names.
+///
+/// Returns an error if any parent directory in the lineage doesn't exist locally.
+pub fn build_ancestry_path(ancestry: &Ancestry) -> Result<Vec<FetchedIssue>> {
+	let mut path = get_project_dir(&ancestry.owner, &ancestry.repo);
+
+	if !path.exists() {
+		bail!("Project directory does not exist: {}", path.display());
+	}
+
+	let mut result = Vec::with_capacity(ancestry.lineage.len());
+
+	for &issue_number in &ancestry.lineage {
+		let dir =
+			find_issue_dir_by_number(&path, issue_number).ok_or_else(|| eyre!("Parent issue #{issue_number} not found locally in {}. Fetch the parent issue first.", path.display()))?;
+
+		// Extract title from directory name
+		let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+		let title = extract_title_from_dir_name(dir_name, issue_number);
+
+		let fetched = FetchedIssue::from_parts(&ancestry.owner, &ancestry.repo, issue_number, &title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for #{issue_number}"))?;
+		result.push(fetched);
+
+		path = dir;
+	}
+
+	Ok(result)
+}
+
+/// Find an issue directory by its number prefix.
+///
+/// Looks for a directory matching `{number}_-_*` or just `{number}` in the given path.
+/// Returns the full path to the directory if found.
+fn find_issue_dir_by_number(parent: &Path, issue_number: u64) -> Option<PathBuf> {
+	let entries = std::fs::read_dir(parent).ok()?;
+
+	let prefix_with_sep = format!("{issue_number}_-_");
+	let exact_match = format!("{issue_number}");
+
+	for entry in entries.flatten() {
+		let path = entry.path();
+		if !path.is_dir() {
+			continue;
+		}
+
+		let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+			continue;
+		};
+
+		// Match either `{number}_-_*` or exactly `{number}`
+		if name.starts_with(&prefix_with_sep) || name == exact_match {
+			return Some(path);
+		}
+	}
+
+	None
+}
+
+/// Extract title from directory name.
+/// Format: `{number}_-_{title}` returns `{title}` (with underscores as spaces),
+/// just `{number}` returns empty string.
+fn extract_title_from_dir_name(dir_name: &str, issue_number: u64) -> String {
+	let prefix = format!("{issue_number}_-_");
+	if let Some(title) = dir_name.strip_prefix(&prefix) {
+		title.replace('_', " ")
+	} else {
+		String::new()
+	}
 }
 
 /// Get the directory name for an issue (used when it has sub-issues).
@@ -429,6 +502,43 @@ fn load_children_from_dir(issue: &mut Issue, dir: &Path) -> Result<()> {
 	});
 
 	Ok(())
+}
+
+//==============================================================================
+// Filesystem Sink Implementation
+//==============================================================================
+
+use super::sink::Sink;
+
+impl Sink<&Path> for Issue {
+	/// Save an issue tree to the filesystem.
+	///
+	/// Each node is written to its own file using `serialize_filesystem`.
+	/// If the issue has children, it uses directory format with `__main__.md`.
+	/// Children are written as siblings in the directory.
+	async fn sink(&mut self, old: &Issue, path: &Path) -> color_eyre::Result<bool> {
+		// Validate: error if path ends in .md but not __main__.md and both file and directory exist
+		if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+			if file_name.ends_with(".md") && !file_name.starts_with(MAIN_ISSUE_FILENAME) {
+				let base_name = file_name.strip_suffix(".md.bak").or_else(|| file_name.strip_suffix(".md"));
+				if let (Some(base), Some(parent)) = (base_name, path.parent()) {
+					let potential_dir = parent.join(base);
+					if path.exists() && potential_dir.is_dir() {
+						bail!("Conflict: both file '{}' and directory '{}' exist for the same issue", path.display(), potential_dir.display());
+					}
+				}
+			}
+		}
+
+		let (owner, repo) = extract_owner_repo_from_path(path)?;
+		let has_changes = self != old;
+
+		if has_changes {
+			save_issue_tree(self, &owner, &repo, &[])?;
+		}
+
+		Ok(has_changes)
+	}
 }
 
 /// Save an issue tree to the filesystem.

@@ -4,7 +4,7 @@
 //! - Converting Github API responses to Issue
 
 use jiff::Timestamp;
-use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueLink, IssueMeta, split_blockers};
+use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, LinkedIssueMeta, split_blockers};
 
 use crate::github::{GithubComment, GithubIssue};
 
@@ -27,7 +27,8 @@ impl IssueGithubExt for Issue {
 		// Parse timestamp from Github's ISO 8601 format
 		let ts = issue.updated_at.parse::<Timestamp>().ok();
 
-		let metadata = Some(IssueMeta { link, user, ts });
+		// Build identity with root lineage (empty)
+		let identity = IssueIdentity::Linked(LinkedIssueMeta { user, link, ts, lineage: vec![] });
 
 		// Build comments: body is first comment
 		// Split out blockers from body (they're appended during sync)
@@ -50,8 +51,10 @@ impl IssueGithubExt for Issue {
 			});
 		}
 
-		// Build children from sub-issues (shallow - just metadata)
+		// Build children from sub-issues (shallow - just identity)
 		// Filter out duplicates - they shouldn't appear in local representation
+		// Child lineage includes parent's issue number
+		let child_lineage = vec![issue.number];
 		let children: Vec<Issue> = sub_issues
 			.iter()
 			.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
@@ -62,10 +65,11 @@ impl IssueGithubExt for Issue {
 				let child_ts = si.updated_at.parse::<Timestamp>().ok();
 				let child_labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 				Issue {
-					metadata: Some(IssueMeta {
-						link: child_link,
+					identity: IssueIdentity::Linked(LinkedIssueMeta {
 						user: si.user.login.clone(),
+						link: child_link,
 						ts: child_ts,
+						lineage: child_lineage.clone(),
 					}),
 					contents: IssueContents {
 						title: si.title.clone(),
@@ -83,7 +87,7 @@ impl IssueGithubExt for Issue {
 			.collect();
 
 		Issue {
-			metadata,
+			identity,
 			contents: IssueContents {
 				title: issue.title.clone(),
 				labels,

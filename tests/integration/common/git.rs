@@ -301,8 +301,8 @@ impl TestContext {
 
 /// Extract owner, repo, number from an Issue's identity, with defaults.
 fn extract_issue_coords(issue: &Issue) -> (String, String, u64) {
-	if let Some(meta) = &issue.metadata {
-		(meta.link.owner().to_string(), meta.link.repo().to_string(), meta.number())
+	if let Some(link) = issue.identity.link() {
+		(link.owner().to_string(), link.repo().to_string(), link.number())
 	} else {
 		(DEFAULT_OWNER.to_string(), DEFAULT_REPO.to_string(), DEFAULT_NUMBER)
 	}
@@ -401,7 +401,7 @@ mod tests {
 	use super::*;
 
 	fn parse(content: &str) -> Issue {
-		Issue::parse(content, Path::new("test.md")).expect("failed to parse test issue")
+		Issue::parse_virtual(content, Path::new("test.md")).expect("failed to parse test issue")
 	}
 
 	#[test]

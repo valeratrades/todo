@@ -84,7 +84,7 @@ pub fn read_committed_content(file_path: &Path) -> GitTrackingStatus {
 pub fn load_consensus_issue(file_path: &Path) -> Option<Issue> {
 	match read_committed_content(file_path) {
 		GitTrackingStatus::Tracked(content) => {
-			let issue = Issue::parse(&content, file_path).unwrap_or_else(|e| {
+			let issue = Issue::parse_virtual(&content, file_path).unwrap_or_else(|e| {
 				panic!(
 					"BUG: Failed to parse committed consensus issue.\n\
 					 File: {}\n\
