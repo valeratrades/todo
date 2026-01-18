@@ -4,7 +4,7 @@
 //! - Converting Github API responses to Issue
 
 use jiff::Timestamp;
-use todo::{BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, LinkedIssueMeta, split_blockers};
+use todo::{Ancestry, BlockerSequence, CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, split_blockers};
 
 use crate::github::{GithubComment, GithubIssue};
 
@@ -27,8 +27,9 @@ impl IssueGithubExt for Issue {
 		// Parse timestamp from Github's ISO 8601 format
 		let ts = issue.updated_at.parse::<Timestamp>().ok();
 
-		// Build identity with root lineage (empty)
-		let identity = IssueIdentity::Linked(LinkedIssueMeta { user, link, ts, lineage: vec![] });
+		// Build identity with root ancestry (empty lineage)
+		let ancestry = Ancestry::root(owner, repo);
+		let identity = IssueIdentity::linked(ancestry, user, link, ts);
 
 		// Build comments: body is first comment
 		// Split out blockers from body (they're appended during sync)
@@ -53,8 +54,8 @@ impl IssueGithubExt for Issue {
 
 		// Build children from sub-issues (shallow - just identity)
 		// Filter out duplicates - they shouldn't appear in local representation
-		// Child lineage includes parent's issue number
-		let child_lineage = vec![issue.number];
+		// Child ancestry includes parent's issue number in lineage
+		let child_ancestry = ancestry.child(issue.number);
 		let children: Vec<Issue> = sub_issues
 			.iter()
 			.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
@@ -65,12 +66,7 @@ impl IssueGithubExt for Issue {
 				let child_ts = si.updated_at.parse::<Timestamp>().ok();
 				let child_labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 				Issue {
-					identity: IssueIdentity::Linked(LinkedIssueMeta {
-						user: si.user.login.clone(),
-						link: child_link,
-						ts: child_ts,
-						lineage: child_lineage.clone(),
-					}),
+					identity: IssueIdentity::linked(child_ancestry, si.user.login.clone(), child_link, child_ts),
 					contents: IssueContents {
 						title: si.title.clone(),
 						labels: child_labels,
@@ -108,6 +104,7 @@ mod tests {
 	#[test]
 	fn test_from_github() {
 		let issue = GithubIssue {
+			id: 1000,
 			number: 123,
 			title: "Test Issue".to_string(),
 			body: Some("Issue body".to_string()),
@@ -125,6 +122,7 @@ mod tests {
 		}];
 
 		let sub_issues = vec![GithubIssue {
+			id: 1001,
 			number: 124,
 			title: "Sub Issue".to_string(),
 			body: Some("Sub body".to_string()),
@@ -161,6 +159,7 @@ mod tests {
 	fn test_partial_eq() {
 		let make_issue = |body: &str, state: &str| -> Issue {
 			let gh_issue = GithubIssue {
+				id: 100,
 				number: 1,
 				title: "Test".to_string(),
 				body: Some(body.to_string()),

@@ -635,7 +635,7 @@ mod tests {
 
 		// Fetch sub-issues
 		let sub_issues = client.fetch_sub_issues("owner", "repo", 1).await.unwrap();
-		assert_debug_snapshot!(format!("{sub_issues:?}"), @r#""[GithubIssue { number: 2, title: \"Child Issue\", body: None, labels: [], user: GithubUser { login: \"testuser\" }, state: \"open\", state_reason: None, updated_at: \"2024-01-15T12:00:00Z\" }]""#);
+		assert_debug_snapshot!(format!("{sub_issues:?}"), @r#""[GithubIssue { id: 2000, number: 2, title: \"Child Issue\", body: None, labels: [], user: GithubUser { login: \"testuser\" }, state: \"open\", state_reason: None, updated_at: \"2024-01-15T12:00:00Z\" }]""#);
 	}
 
 	#[tokio::test]

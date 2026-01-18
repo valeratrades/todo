@@ -83,7 +83,7 @@ impl SyncOptions {
 
 use std::path::Path;
 
-use todo::{CloseState, FetchedIssue, Issue, IssueIdentity};
+use todo::{CloseState, FetchedIssue, Issue};
 use v_utils::prelude::*;
 
 use super::{
@@ -240,7 +240,7 @@ fn apply_node_content(target: &mut Issue, source: &Issue) {
 	target.contents.comments = source.contents.comments.clone();
 
 	// Update timestamp from source identity (if both are linked)
-	if let (IssueIdentity::Linked(target_linked), IssueIdentity::Linked(source_linked)) = (&mut target.identity, &source.identity) {
+	if let (Some(target_linked), Some(source_linked)) = (&mut target.identity.linked, &source.identity.linked) {
 		target_linked.ts = source_linked.ts;
 	}
 }

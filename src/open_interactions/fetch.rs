@@ -48,11 +48,7 @@ pub async fn fetch_and_store_issue(gh: &BoxedGithubClient, owner: &str, repo: &s
 				// This is a sub-issue - validate parents exist locally and build FetchedIssue chain
 				println!("Issue #{issue_number} is a sub-issue with lineage: {lineage:?}");
 
-				let ancestry = Ancestry {
-					owner: owner.to_string(),
-					repo: repo.to_string(),
-					lineage,
-				};
+				let ancestry = Ancestry::with_lineage(owner, repo, &lineage);
 				build_ancestry_path(&ancestry)?
 			} else {
 				vec![]

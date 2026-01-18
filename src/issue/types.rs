@@ -2,6 +2,7 @@
 //!
 //! This module contains the pure Issue type with parsing and serialization.
 
+use arrayvec::ArrayString;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -264,7 +265,7 @@ impl CloseState /*{{{1*/ {
 //,}}}1
 
 /// Metadata for an issue linked to Github.
-/// Ancestry is derived from the link (owner/repo from URL, lineage stored separately).
+/// Lineage is stored separately in `Ancestry`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkedIssueMeta {
 	/// User who created the issue
@@ -274,9 +275,6 @@ pub struct LinkedIssueMeta {
 	/// Timestamp of last content change (body/comments, not children).
 	/// Used for sync conflict resolution. None if unknown.
 	pub ts: Option<Timestamp>,
-	/// Chain of parent issue numbers from root to immediate parent.
-	/// Empty for root issues. (owner/repo derived from link)
-	pub lineage: Vec<u64>,
 }
 
 impl LinkedIssueMeta {
@@ -294,79 +292,49 @@ impl LinkedIssueMeta {
 	pub fn number(&self) -> u64 {
 		self.link.number()
 	}
-
-	/// Build ancestry from link and lineage.
-	pub fn ancestry(&self) -> Ancestry {
-		Ancestry {
-			owner: self.owner().to_string(),
-			repo: self.repo().to_string(),
-			lineage: self.lineage.clone(),
-		}
-	}
-
-	/// Create a child's lineage by appending this issue's number.
-	pub fn child_lineage(&self) -> Vec<u64> {
-		let mut lineage = self.lineage.clone();
-		lineage.push(self.number());
-		lineage
-	}
 }
 
-/// Metadata for a local-only issue (not yet on Github).
+/// Identity of an issue - always has ancestry, optionally linked to Github.
 #[derive(Clone, Debug, PartialEq)]
-pub struct LocalIssueMeta {
-	/// Local path to the issue file (relative to issues dir)
-	pub path: std::path::PathBuf,
-}
-
-impl std::fmt::Display for LocalIssueMeta {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "{}", self.path.display())
-	}
-}
-
-/// Identity of an issue - either linked to Github or local only.
-#[derive(Clone, Debug, PartialEq)]
-pub enum IssueIdentity {
-	/// Issue exists on Github - ancestors derived from link
-	Linked(LinkedIssueMeta),
-	/// Issue is local only - ancestors stored explicitly
-	Local(LocalIssueMeta),
+pub struct IssueIdentity {
+	/// Where in the tree this issue lives (owner/repo/lineage)
+	pub ancestry: Ancestry,
+	/// Github metadata if the issue is linked. None for local-only issues.
+	pub linked: Option<LinkedIssueMeta>,
 }
 
 impl IssueIdentity {
+	/// Create a new linked issue identity.
+	pub fn linked(ancestry: Ancestry, user: String, link: IssueLink, ts: Option<Timestamp>) -> Self {
+		Self {
+			ancestry,
+			linked: Some(LinkedIssueMeta { user, link, ts }),
+		}
+	}
+
+	/// Create a new local-only issue identity.
+	pub fn local(ancestry: Ancestry) -> Self {
+		Self { ancestry, linked: None }
+	}
+
 	/// Check if this issue is linked to Github.
 	pub fn is_linked(&self) -> bool {
-		matches!(self, Self::Linked(_))
+		self.linked.is_some()
 	}
 
 	/// Check if this issue is local only (pending creation).
 	pub fn is_local(&self) -> bool {
-		matches!(self, Self::Local(_))
+		self.linked.is_none()
 	}
 
 	/// Get the linked metadata if linked.
 	pub fn as_linked(&self) -> Option<&LinkedIssueMeta> {
-		match self {
-			Self::Linked(meta) => Some(meta),
-			Self::Local(_) => None,
-		}
-	}
-
-	/// Get the local metadata if local.
-	pub fn as_local(&self) -> Option<&LocalIssueMeta> {
-		match self {
-			Self::Local(meta) => Some(meta),
-			Self::Linked(_) => None,
-		}
+		self.linked.as_ref()
 	}
 
 	/// Get the issue link if linked.
 	pub fn link(&self) -> Option<&IssueLink> {
-		match self {
-			Self::Linked(meta) => Some(&meta.link),
-			Self::Local(_) => None,
-		}
+		self.linked.as_ref().map(|m| &m.link)
 	}
 
 	/// Get the issue number if linked.
@@ -381,93 +349,116 @@ impl IssueIdentity {
 
 	/// Get the user who created this issue if linked.
 	pub fn user(&self) -> Option<&str> {
-		match self {
-			Self::Linked(meta) => Some(&meta.user),
-			Self::Local(_) => None,
-		}
+		self.linked.as_ref().map(|m| m.user.as_str())
 	}
 
 	/// Get the timestamp if available.
 	pub fn ts(&self) -> Option<Timestamp> {
-		match self {
-			Self::Linked(meta) => meta.ts,
-			Self::Local(_) => None,
-		}
+		self.linked.as_ref().and_then(|m| m.ts)
 	}
 
-	/// Get ancestry - only available for linked issues.
-	pub fn ancestry(&self) -> Option<Ancestry> {
-		match self {
-			Self::Linked(meta) => Some(meta.ancestry()),
-			Self::Local(_) => None,
-		}
+	/// Get ancestry (always available).
+	pub fn ancestry(&self) -> &Ancestry {
+		&self.ancestry
 	}
 
-	/// Get owner - only available for linked issues.
-	pub fn owner(&self) -> Option<&str> {
-		match self {
-			Self::Linked(meta) => Some(meta.owner()),
-			Self::Local(_) => None,
-		}
+	/// Get owner (always available via ancestry).
+	pub fn owner(&self) -> &str {
+		self.ancestry.owner()
 	}
 
-	/// Get repo - only available for linked issues.
-	pub fn repo(&self) -> Option<&str> {
-		match self {
-			Self::Linked(meta) => Some(meta.repo()),
-			Self::Local(_) => None,
-		}
+	/// Get repo (always available via ancestry).
+	pub fn repo(&self) -> &str {
+		self.ancestry.repo()
 	}
 
-	/// Get local path - only available for local issues.
-	pub fn local_path(&self) -> Option<&std::path::Path> {
-		match self {
-			Self::Local(meta) => Some(&meta.path),
-			Self::Linked(_) => None,
-		}
+	/// Create a child's ancestry by appending this issue's number.
+	/// Returns None if this issue is not linked (has no number to append).
+	pub fn child_ancestry(&self) -> Option<Ancestry> {
+		self.number().map(|n| self.ancestry.child(n))
 	}
 
-	/// Encode for serialization: `@user url` for linked, `local:path` for local.
+	/// Encode for serialization: `@user url` for linked, `local:` for local.
 	pub fn encode(&self) -> String {
-		match self {
-			Self::Linked(meta) => format!("@{} {}", meta.user, meta.link.as_str()),
-			Self::Local(meta) => format!("local:{}", meta.path.display()),
+		match &self.linked {
+			Some(meta) => format!("@{} {}", meta.user, meta.link.as_str()),
+			None => "local:".to_string(),
 		}
 	}
 }
 
+/// Maximum nesting depth for issues (8 levels should be plenty).
+const MAX_LINEAGE_DEPTH: usize = 8;
+
 /// Ancestry information for an issue - where it lives in the filesystem.
 /// This is always defined, even for pending issues.
-#[derive(Clone, Debug, PartialEq)]
+/// Uses fixed-size storage to be `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ancestry {
-	/// Repository owner
-	pub owner: String,
-	/// Repository name
-	pub repo: String,
+	/// Repository owner (fixed max length; following Github spec)
+	owner: ArrayString<39>,
+	/// Repository name (fixed max length; following Github spec)
+	repo: ArrayString<100>,
 	/// Chain of parent issue numbers from root to immediate parent.
-	/// Empty for root issues.
-	pub lineage: Vec<u64>,
+	/// Empty for root issues. Uses fixed array with length tracking.
+	lineage_arr: [u64; MAX_LINEAGE_DEPTH],
+	lineage_len: u8,
 }
 
 impl Ancestry {
 	/// Create ancestry for a root issue.
-	pub fn root(owner: impl Into<String>, repo: impl Into<String>) -> Self {
+	/// Panics if owner or repo exceed MAX_NAME_LEN.
+	pub fn root(owner: &str, repo: &str) -> Self {
 		Self {
-			owner: owner.into(),
-			repo: repo.into(),
-			lineage: vec![],
+			owner: ArrayString::from(owner).expect("owner name too long"),
+			repo: ArrayString::from(repo).expect("repo name too long"),
+			lineage_arr: [0; MAX_LINEAGE_DEPTH],
+			lineage_len: 0,
+		}
+	}
+
+	/// Create ancestry with a pre-existing lineage.
+	/// Panics if [owner](Ancestry::owner)/[repo](Ancestry::repo) str are too large or lineage exceeds [MAX_LINEAGE_DEPTH].
+	pub fn with_lineage(owner: &str, repo: &str, lineage: &[u64]) -> Self {
+		assert!(lineage.len() <= MAX_LINEAGE_DEPTH, "Issue nesting too deep (max {MAX_LINEAGE_DEPTH} levels)");
+		let mut lineage_arr = [0; MAX_LINEAGE_DEPTH];
+		lineage_arr[..lineage.len()].copy_from_slice(lineage);
+		Self {
+			owner: ArrayString::from(owner).expect("owner name too long"),
+			repo: ArrayString::from(repo).expect("repo name too long"),
+			lineage_arr,
+			lineage_len: lineage.len() as u8,
 		}
 	}
 
 	/// Create ancestry for a child issue.
+	/// Panics if lineage would exceed MAX_LINEAGE_DEPTH.
 	pub fn child(&self, parent_number: u64) -> Self {
-		let mut lineage = self.lineage.clone();
-		lineage.push(parent_number);
+		let new_len = self.lineage_len as usize + 1;
+		assert!(new_len <= MAX_LINEAGE_DEPTH, "Issue nesting too deep (max {MAX_LINEAGE_DEPTH} levels)");
+		let mut new_arr = self.lineage_arr;
+		new_arr[self.lineage_len as usize] = parent_number;
 		Self {
-			owner: self.owner.clone(),
-			repo: self.repo.clone(),
-			lineage,
+			owner: self.owner,
+			repo: self.repo,
+			lineage_arr: new_arr,
+			lineage_len: new_len as u8,
 		}
+	}
+
+	/// Get the lineage as a slice.
+	pub fn lineage(&self) -> &[u64] {
+		&self.lineage_arr[..self.lineage_len as usize]
+	}
+
+	/// Get the owner.
+	pub fn owner(&self) -> &str {
+		self.owner.as_str()
+	}
+
+	/// Get the repo.
+	pub fn repo(&self) -> &str {
+		self.repo.as_str()
 	}
 }
 
@@ -491,11 +482,11 @@ pub struct IssueContents {
 }
 
 /// Parsed identity info from title line (internal helper)
-enum ParsedIdentityInfo {
-	/// Linked to Github: `@user url`
-	Linked { user: String, link: IssueLink },
-	/// Local issue: `local:path`
-	Local { path: String },
+/// Parsed identity info - only present if the issue is linked to Github.
+/// Local issues just have `<!--local:-->` marker with no additional info.
+struct ParsedIdentityInfo {
+	user: String,
+	link: IssueLink,
 }
 
 /// Parsed title line components (internal helper)
@@ -523,11 +514,11 @@ impl Issue /*{{{1*/ {
 		self.identity.is_local()
 	}
 
-	/// Create an empty local issue with the given path.
+	/// Create an empty local issue with the given ancestry.
 	/// Used for comparison when an issue doesn't exist yet.
-	pub fn empty_local(path: impl Into<std::path::PathBuf>) -> Self {
+	pub fn empty_local(ancestry: Ancestry) -> Self {
 		Self {
-			identity: IssueIdentity::Local(LocalIssueMeta { path: path.into() }),
+			identity: IssueIdentity::local(ancestry),
 			contents: IssueContents::default(),
 			children: vec![],
 		}
@@ -558,8 +549,8 @@ impl Issue /*{{{1*/ {
 		self.identity.ts()
 	}
 
-	/// Get ancestry - only available for linked issues.
-	pub fn ancestry(&self) -> Option<Ancestry> {
+	/// Get ancestry (always available).
+	pub fn ancestry(&self) -> &Ancestry {
 		self.identity.ancestry()
 	}
 
@@ -571,20 +562,27 @@ impl Issue /*{{{1*/ {
 	}
 
 	/// Parse virtual representation (markdown with full tree) into an Issue.
-	/// This parses content only - ancestry/lineage is derived from the link info in the content.
-	/// For local issues without links, a default ancestry is used.
+	/// This parses content only - ancestry is derived from the link info in the content.
+	/// For local issues without links, a placeholder ancestry is used.
 	pub fn parse_virtual(content: &str, path: &std::path::Path) -> Result<Self, ParseError> {
 		let ctx = ParseContext::new(content.to_string(), path.display().to_string());
 
 		let normalized = normalize_issue_indentation(content);
 		let mut lines = normalized.lines().peekable();
 
-		Self::parse_virtual_at_depth(&mut lines, 0, 1, &ctx, vec![])
+		// Start with no parent ancestry - it will be inferred from the parsed link
+		Self::parse_virtual_at_depth(&mut lines, 0, 1, &ctx, None)
 	}
 
 	/// Parse virtual representation at given nesting depth.
-	/// `parent_lineage` is the chain of parent issue numbers leading to this issue.
-	fn parse_virtual_at_depth(lines: &mut std::iter::Peekable<std::str::Lines>, depth: usize, line_num: usize, ctx: &ParseContext, parent_lineage: Vec<u64>) -> Result<Self, ParseError> {
+	/// `parent_ancestry` is the ancestry of the parent issue (if any) - used to derive child ancestry.
+	fn parse_virtual_at_depth(
+		lines: &mut std::iter::Peekable<std::str::Lines>,
+		depth: usize,
+		line_num: usize,
+		ctx: &ParseContext,
+		parent_ancestry: Option<&Ancestry>,
+	) -> Result<Self, ParseError> {
 		let indent = "\t".repeat(depth);
 		let child_indent = "\t".repeat(depth + 1);
 
@@ -811,18 +809,20 @@ impl Issue /*{{{1*/ {
 				}
 
 				// Recursively parse the child
-				// Child lineage extends parent's lineage with parent's issue number (if linked)
-				let child_lineage = match &parsed.identity_info {
-					Some(ParsedIdentityInfo::Linked { link, .. }) => {
-						let mut lineage = parent_lineage.clone();
-						lineage.push(link.number());
-						lineage
+				// Build child's parent ancestry from this issue's identity info
+				let child_parent_ancestry = match &parsed.identity_info {
+					Some(info) => {
+						// Parent is linked - child ancestry extends from it
+						let base_ancestry = parent_ancestry
+							.map(|a| a.child(info.link.number()))
+							.unwrap_or_else(|| Ancestry::root(info.link.owner(), info.link.repo()).child(info.link.number()));
+						Some(base_ancestry)
 					}
-					_ => parent_lineage.clone(), // Local parent - can't extend lineage
+					None => parent_ancestry.copied(), // Local parent - pass through parent ancestry (Copy)
 				};
 				let child_content = child_lines.join("\n");
 				let mut child_lines_iter = child_content.lines().peekable();
-				let child = Self::parse_virtual_at_depth(&mut child_lines_iter, 0, current_line, ctx, child_lineage)?;
+				let child = Self::parse_virtual_at_depth(&mut child_lines_iter, 0, current_line, ctx, child_parent_ancestry.as_ref())?;
 				children.push(child);
 				continue;
 			}
@@ -853,17 +853,15 @@ impl Issue /*{{{1*/ {
 
 		// Build identity from identity_info
 		let identity = match parsed.identity_info {
-			Some(ParsedIdentityInfo::Linked { user, link }) => IssueIdentity::Linked(LinkedIssueMeta {
-				user,
-				link,
-				ts: None,
-				lineage: parent_lineage,
-			}),
-			Some(ParsedIdentityInfo::Local { path }) => IssueIdentity::Local(LocalIssueMeta { path: path.into() }),
+			Some(ParsedIdentityInfo { user, link }) => {
+				// Build ancestry: use parent_ancestry's lineage if available, else empty
+				let ancestry = parent_ancestry.copied().unwrap_or_else(|| Ancestry::root(link.owner(), link.repo()));
+				IssueIdentity::linked(ancestry, user, link, None)
+			}
 			None => {
-				// No identity info - this shouldn't happen in well-formed content
-				// For now, create a placeholder local identity
-				IssueIdentity::Local(LocalIssueMeta { path: "unknown".into() })
+				// Local issue - ancestry comes from parent or is a placeholder
+				let ancestry = parent_ancestry.copied().unwrap_or_else(|| Ancestry::root("unknown", "unknown"));
+				IssueIdentity::local(ancestry)
 			}
 		};
 
@@ -948,17 +946,17 @@ impl Issue /*{{{1*/ {
 	}
 
 	/// Parse identity info from the HTML comment content.
-	/// Formats: `@user url` for linked, `local:path` for local.
-	/// Returns None if empty or unrecognized format.
+	/// Formats: `@user url` for linked, `local:` for local.
+	/// Returns None if empty, local, or unrecognized format.
 	fn parse_identity_info(s: &str) -> Option<ParsedIdentityInfo> {
 		let s = s.trim();
 		if s.is_empty() {
 			return None;
 		}
 
-		// Local format: `local:path/to/issue`
-		if let Some(path) = s.strip_prefix("local:") {
-			return Some(ParsedIdentityInfo::Local { path: path.to_string() });
+		// Local format: `local:` - returns None (no linked identity)
+		if s.starts_with("local:") {
+			return None;
 		}
 
 		// Linked format: `@username https://github.com/...`
@@ -968,7 +966,7 @@ impl Issue /*{{{1*/ {
 			let user = rest[..space_idx].to_string();
 			let url = rest[space_idx + 1..].trim();
 			if let Some(link) = IssueLink::parse(url) {
-				return Some(ParsedIdentityInfo::Linked { user, link });
+				return Some(ParsedIdentityInfo { user, link });
 			}
 		}
 

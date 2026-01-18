@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use jiff::Timestamp;
-use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink, LinkedIssueMeta};
+use todo::{CloseState, Comment, CommentIdentity, Issue, IssueContents, IssueIdentity, IssueLink};
 use v_utils::prelude::*;
 
 use super::github_sync::IssueGithubExt;
@@ -92,11 +92,8 @@ fn fetch_children_recursive<'a>(
 			}
 
 			// Build sub-issue children, filtering out duplicates
-			// Child lineage extends with parent's issue number
-			let child_lineage = match &child.identity {
-				IssueIdentity::Linked(linked) => linked.child_lineage(),
-				IssueIdentity::Local(_) => unreachable!("we're parsing from Github, - all nodes are `Linked` by definition"),
-			};
+			// Child ancestry extends from parent's ancestry + parent's issue number
+			let child_ancestry = child.identity.child_ancestry().expect("we're parsing from Github - all nodes are `Linked` by definition");
 			child.children = sub_issues
 				.iter()
 				.filter(|si| !CloseState::is_duplicate_reason(si.state_reason.as_deref()))
@@ -107,12 +104,7 @@ fn fetch_children_recursive<'a>(
 					let ts = si.updated_at.parse::<Timestamp>().ok();
 					let labels: Vec<String> = si.labels.iter().map(|l| l.name.clone()).collect();
 					Issue {
-						identity: IssueIdentity::Linked(LinkedIssueMeta {
-							user: si.user.login.clone(),
-							link,
-							ts,
-							lineage: child_lineage.clone(),
-						}),
+						identity: IssueIdentity::linked(child_ancestry, si.user.login.clone(), link, ts),
 						contents: IssueContents {
 							title: si.title.clone(),
 							labels,
@@ -377,7 +369,7 @@ fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 	resolved.contents.comments.extend(remote.contents.comments.iter().skip(1).cloned());
 
 	// Update timestamp from remote identity (if both are linked)
-	if let (IssueIdentity::Linked(resolved_linked), IssueIdentity::Linked(remote_linked)) = (&mut resolved.identity, &remote.identity) {
+	if let (Some(resolved_linked), Some(remote_linked)) = (&mut resolved.identity.linked, &remote.identity.linked) {
 		resolved_linked.ts = remote_linked.ts;
 	}
 }
@@ -385,18 +377,16 @@ fn apply_remote_node_content(resolved: &mut Issue, remote: &Issue) {
 #[cfg(test)]
 mod tests {
 	use insta::assert_snapshot;
-	use todo::BlockerSequence;
+	use todo::{Ancestry, BlockerSequence};
 
 	use super::*;
 
 	fn make_issue(body: &str, timestamp: Option<i64>) -> Issue {
+		let ancestry = Ancestry::root("o", "r");
+		let link = IssueLink::parse("https://github.com/o/r/issues/1").unwrap();
+		let ts = timestamp.map(|ts| Timestamp::from_second(ts).unwrap());
 		Issue {
-			identity: IssueIdentity::Linked(LinkedIssueMeta {
-				user: "testuser".to_string(),
-				link: IssueLink::parse("https://github.com/o/r/issues/1").unwrap(),
-				ts: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
-				lineage: vec![],
-			}),
+			identity: IssueIdentity::linked(ancestry, "testuser".to_string(), link, ts),
 			contents: IssueContents {
 				title: "Test".to_string(),
 				labels: vec![],
@@ -475,13 +465,11 @@ mod tests {
 	}
 
 	fn make_issue_with_url(body: &str, timestamp: Option<i64>, url: &str) -> Issue {
+		let link = IssueLink::parse(url).unwrap();
+		let ancestry = Ancestry::root(link.owner(), link.repo());
+		let ts = timestamp.map(|ts| Timestamp::from_second(ts).unwrap());
 		Issue {
-			identity: IssueIdentity::Linked(LinkedIssueMeta {
-				user: "testuser".to_string(),
-				link: IssueLink::parse(url).unwrap(),
-				ts: timestamp.map(|ts| Timestamp::from_second(ts).unwrap()),
-				lineage: vec![],
-			}),
+			identity: IssueIdentity::linked(ancestry, "testuser".to_string(), link, ts),
 			contents: IssueContents {
 				title: "Test".to_string(),
 				labels: vec![],

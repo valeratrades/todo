@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use todo::{Comment, CommentIdentity, Issue, IssueIdentity, IssueLink, LinkedIssueMeta};
+use todo::{Comment, CommentIdentity, Issue, IssueIdentity, IssueLink};
 
 //==============================================================================
 // Diff Results
@@ -306,16 +306,11 @@ impl Sink<GithubSink<'_>> for Issue {
 				gh.update_issue_state(owner, repo, created.number, "closed").await?;
 			}
 
-			// Update identity
+			// Update identity - keep same ancestry, just add linking info
 			let url = format!("https://github.com/{owner}/{repo}/issues/{}", created.number);
 			let link = IssueLink::parse(&url).expect("just constructed valid URL");
 			let user = gh.fetch_authenticated_user().await?;
-			self.identity = IssueIdentity::Linked(LinkedIssueMeta {
-				user,
-				link,
-				ts: None,
-				lineage: vec![],
-			});
+			self.identity = IssueIdentity::linked(self.identity.ancestry, user, link, None);
 			changed = true;
 		}
 
@@ -392,19 +387,18 @@ impl Sink<GithubSink<'_>> for Issue {
 
 #[cfg(test)]
 mod tests {
-	use todo::{BlockerSequence, CloseState, IssueContents, IssueLink, LocalIssueMeta};
+	use todo::{Ancestry, BlockerSequence, CloseState, IssueContents, IssueLink};
 
 	use super::*;
 
 	fn make_issue(title: &str, number: Option<u64>) -> Issue {
+		let ancestry = Ancestry::root("o", "r");
 		let identity = match number {
-			Some(n) => IssueIdentity::Linked(LinkedIssueMeta {
-				user: "testuser".to_string(),
-				link: IssueLink::parse(&format!("https://github.com/o/r/issues/{n}")).unwrap(),
-				ts: None,
-				lineage: vec![],
-			}),
-			None => IssueIdentity::Local(LocalIssueMeta { path: "test".into() }),
+			Some(n) => {
+				let link = IssueLink::parse(&format!("https://github.com/o/r/issues/{n}")).unwrap();
+				IssueIdentity::linked(ancestry, "testuser".to_string(), link, None)
+			}
+			None => IssueIdentity::local(ancestry),
 		};
 
 		Issue {

@@ -87,15 +87,15 @@ pub fn get_project_dir(owner: &str, repo: &str) -> PathBuf {
 ///
 /// Returns an error if any parent directory in the lineage doesn't exist locally.
 pub fn build_ancestry_path(ancestry: &Ancestry) -> Result<Vec<FetchedIssue>> {
-	let mut path = get_project_dir(&ancestry.owner, &ancestry.repo);
+	let mut path = get_project_dir(ancestry.owner(), ancestry.repo());
 
 	if !path.exists() {
 		bail!("Project directory does not exist: {}", path.display());
 	}
 
-	let mut result = Vec::with_capacity(ancestry.lineage.len());
+	let mut result = Vec::with_capacity(ancestry.lineage().len());
 
-	for &issue_number in &ancestry.lineage {
+	for &issue_number in ancestry.lineage() {
 		let dir =
 			find_issue_dir_by_number(&path, issue_number).ok_or_else(|| eyre!("Parent issue #{issue_number} not found locally in {}. Fetch the parent issue first.", path.display()))?;
 
@@ -103,7 +103,7 @@ pub fn build_ancestry_path(ancestry: &Ancestry) -> Result<Vec<FetchedIssue>> {
 		let dir_name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
 		let title = extract_title_from_dir_name(dir_name, issue_number);
 
-		let fetched = FetchedIssue::from_parts(&ancestry.owner, &ancestry.repo, issue_number, &title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for #{issue_number}"))?;
+		let fetched = FetchedIssue::from_parts(ancestry.owner(), ancestry.repo(), issue_number, &title).ok_or_else(|| eyre!("Failed to construct FetchedIssue for #{issue_number}"))?;
 		result.push(fetched);
 
 		path = dir;
